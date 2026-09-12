@@ -65,27 +65,44 @@ async function createPayment(request, env) {
   );
 }
 
+const SETTINGS_DEFAULTS = {
+  amountPerBonCents: 100,
+  fietstochtCents: 800,
+  wandeltochtCents: 600,
+};
+
 async function getSettings(env) {
-  const stored = await env.SETTINGS.get('amountPerBonCents');
-  const amountPerBonCents = stored ? Number(stored) : 100;
-  return json({ amountPerBonCents });
+  const keys = Object.keys(SETTINGS_DEFAULTS);
+  const stored = await Promise.all(keys.map((key) => env.SETTINGS.get(key)));
+
+  const settings = {};
+  keys.forEach((key, i) => {
+    settings[key] = stored[i] ? Number(stored[i]) : SETTINGS_DEFAULTS[key];
+  });
+
+  return json(settings);
 }
 
 async function updateSettings(request, env) {
   const body = await request.json().catch(() => ({}));
-  const { password, amountPerBonCents } = body;
+  const { password } = body;
 
   if (!env.SETTINGS_PASSWORD || password !== env.SETTINGS_PASSWORD) {
     return json({ error: 'Onjuist wachtwoord' }, 401);
   }
 
-  const cents = Number(amountPerBonCents);
-  if (!Number.isInteger(cents) || cents < 1) {
-    return json({ error: 'Ongeldig bedrag per bon' }, 400);
+  const keys = Object.keys(SETTINGS_DEFAULTS);
+  const cents = {};
+  for (const key of keys) {
+    const value = Number(body[key]);
+    if (!Number.isInteger(value) || value < 1) {
+      return json({ error: `Ongeldig bedrag voor ${key}` }, 400);
+    }
+    cents[key] = value;
   }
 
-  await env.SETTINGS.put('amountPerBonCents', String(cents));
-  return json({ amountPerBonCents: cents });
+  await Promise.all(keys.map((key) => env.SETTINGS.put(key, String(cents[key]))));
+  return json(cents);
 }
 
 async function getPayment(paymentId, env) {
