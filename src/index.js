@@ -308,6 +308,81 @@ export class SumupChargeCoordinator {
   }
 }
 
+// --- Transaction log ---
+// Recorded by the webapp on every successful payment (cash/sumup/bancontact),
+// replacing what used to be per-device localStorage — that meant the
+// transactions/reporting page only ever showed what happened on that one
+// browser. D1 gives every device the same shared, queryable log.
+
+const TRANSACTION_METHODS = new Set(['cash', 'sumup', 'bancontact']);
+
+async function createTransaction(request, env) {
+  const body = await request.json().catch(() => ({}));
+  const amountCents = Number(body.amountCents);
+  const method = String(body.method || '');
+
+  if (!Number.isInteger(amountCents) || amountCents < 0) {
+    return json({ error: 'amountCents (integer) is required' }, 400);
+  }
+  if (!TRANSACTION_METHODS.has(method)) {
+    return json({ error: 'method must be cash, sumup or bancontact' }, 400);
+  }
+
+  const id = crypto.randomUUID();
+  const completedAt = body.completedAt ? String(body.completedAt) : new Date().toISOString();
+
+  await env.DB.prepare(
+    `INSERT INTO transactions
+      (id, amount_cents, description, method, items, slot_id, device_id, device_name, user_name, user_email, completed_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  )
+    .bind(
+      id,
+      amountCents,
+      body.description ? String(body.description).slice(0, 200) : '',
+      method,
+      JSON.stringify(body.items || {}),
+      body.slotId ? String(body.slotId) : null,
+      body.deviceId ? String(body.deviceId) : null,
+      body.deviceName ? String(body.deviceName) : null,
+      body.userName ? String(body.userName) : null,
+      body.userEmail ? String(body.userEmail) : null,
+      completedAt
+    )
+    .run();
+
+  return json({ id, completedAt }, 201);
+}
+
+function rowToTransaction(row) {
+  let items = {};
+  try {
+    items = row.items ? JSON.parse(row.items) : {};
+  } catch {
+    items = {};
+  }
+  return {
+    id: row.id,
+    amountCents: row.amount_cents,
+    description: row.description || '',
+    method: row.method,
+    items,
+    slotId: row.slot_id,
+    deviceId: row.device_id,
+    deviceName: row.device_name,
+    userName: row.user_name,
+    userEmail: row.user_email,
+    completedAt: row.completed_at,
+  };
+}
+
+async function listTransactions(env) {
+  const { results } = await env.DB.prepare(
+    'SELECT * FROM transactions ORDER BY completed_at DESC LIMIT 5000'
+  ).all();
+  return json((results || []).map(rowToTransaction));
+}
+
 async function getPayment(paymentId, env) {
   const baseUrl = BASE_URLS[env.BANCONTACT_ENVIRONMENT];
 
@@ -384,6 +459,14 @@ export default {
       const sumupStatusMatch = url.pathname.match(/^\/sumup\/status\/([^/]+)$/);
       if (request.method === 'GET' && sumupStatusMatch) {
         return await getSumupStatus(sumupStatusMatch[1], env);
+      }
+
+      if (request.method === 'POST' && url.pathname === '/transactions') {
+        return await createTransaction(request, env);
+      }
+
+      if (request.method === 'GET' && url.pathname === '/transactions') {
+        return await listTransactions(env);
       }
 
       return json({ error: 'Not found' }, 404);

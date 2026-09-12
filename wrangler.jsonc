@@ -13,16 +13,32 @@
 			"id": "1a77d762d41f4fefb159050422ff86eb"
 		}
 	],
+	"d1_databases": [
+		
+		{
+			"binding": "DB",
+			"database_name": "questo-transactions",
+			"database_id": "e89eefb2-b515-4e44-976f-73b9d0de6558"
+		}
+	],
 	"durable_objects": {
 		"bindings": [
-			{ "name": "SUMUP_COORDINATOR", "class_name": "SumupChargeCoordinator" }
+			{
+				"name": "SUMUP_COORDINATOR",
+				"class_name": "SumupChargeCoordinator"
+			}
 		]
 	},
 	"migrations": [
 		// new_sqlite_classes (not new_classes): Durable Objects on the Workers
 		// Free plan require the SQLite storage backend. Same storage.get/put/
 		// list/delete API we already use, so no code changes needed.
-		{ "tag": "v1", "new_sqlite_classes": ["SumupChargeCoordinator"] }
+		{
+			"tag": "v1",
+			"new_sqlite_classes": [
+				"SumupChargeCoordinator"
+			]
+		}
 	],
 	"ratelimits": [
 		{
