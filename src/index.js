@@ -83,7 +83,18 @@ async function getSettings(env) {
   return json(settings);
 }
 
+async function checkRateLimit(request, env) {
+  if (!env.AUTH_RATE_LIMITER) return true;
+  const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+  const { success } = await env.AUTH_RATE_LIMITER.limit({ key: ip });
+  return success;
+}
+
 async function updateSettings(request, env) {
+  if (!(await checkRateLimit(request, env))) {
+    return json({ error: 'Te veel pogingen, probeer over een minuut opnieuw.' }, 429);
+  }
+
   const body = await request.json().catch(() => ({}));
   const { password } = body;
 
@@ -106,6 +117,10 @@ async function updateSettings(request, env) {
 }
 
 async function verifyPassword(request, env) {
+  if (!(await checkRateLimit(request, env))) {
+    return json({ error: 'Te veel pogingen, probeer over een minuut opnieuw.' }, 429);
+  }
+
   const body = await request.json().catch(() => ({}));
   if (!env.SETTINGS_PASSWORD || body.password !== env.SETTINGS_PASSWORD) {
     return json({ error: 'Onjuist wachtwoord' }, 401);
