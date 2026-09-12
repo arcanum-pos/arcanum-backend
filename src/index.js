@@ -130,6 +130,98 @@ async function verifyPassword(request, env) {
   return json({ ok: true });
 }
 
+// --- SumUp bridge ---
+// /sumup/charge and /sumup/status/:id are called by the webapp (via the BFF,
+// same trust model as /payments). /sumup/pending and /sumup/result are called
+// directly by the iOS bridge app over the internet — it can't sit behind the
+// BFF's Auth0 session, so those two require a shared-secret bearer token.
+
+const SUMUP_CHARGE_TTL_SECONDS = 300; // abandoned charges clean themselves up after 5 min
+
+function requireBridgeToken(request, env) {
+  const auth = request.headers.get('Authorization') || '';
+  const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+  return Boolean(env.SUMUP_BRIDGE_TOKEN) && token === env.SUMUP_BRIDGE_TOKEN;
+}
+
+async function createSumupCharge(request, env) {
+  const body = await request.json().catch(() => ({}));
+  const amountCents = Number(body.amount);
+
+  if (!Number.isInteger(amountCents) || amountCents < 1) {
+    return json({ error: 'amount (in cents, integer) is required' }, 400);
+  }
+
+  const chargeId = crypto.randomUUID();
+  const record = {
+    status: 'pending',
+    amountCents,
+    description: body.description ? String(body.description).slice(0, 140) : '',
+    createdAt: Date.now(),
+  };
+
+  await env.SUMUP_CHARGES.put(chargeId, JSON.stringify(record), { expirationTtl: SUMUP_CHARGE_TTL_SECONDS });
+  return json({ chargeId }, 201);
+}
+
+async function getSumupPending(request, env) {
+  if (!requireBridgeToken(request, env)) {
+    return json({ error: 'Unauthorized' }, 401);
+  }
+
+  const list = await env.SUMUP_CHARGES.list();
+  for (const key of list.keys) {
+    const raw = await env.SUMUP_CHARGES.get(key.name);
+    if (!raw) continue;
+
+    const record = JSON.parse(raw);
+    if (record.status !== 'pending') continue;
+
+    record.status = 'claimed';
+    record.claimedAt = Date.now();
+    await env.SUMUP_CHARGES.put(key.name, JSON.stringify(record), { expirationTtl: SUMUP_CHARGE_TTL_SECONDS });
+
+    return json({ chargeId: key.name, amountCents: record.amountCents, description: record.description });
+  }
+
+  return json({ chargeId: null });
+}
+
+async function postSumupResult(request, env) {
+  if (!requireBridgeToken(request, env)) {
+    return json({ error: 'Unauthorized' }, 401);
+  }
+
+  const body = await request.json().catch(() => ({}));
+  const { chargeId, success, transactionCode, errorMessage } = body;
+  if (!chargeId) return json({ error: 'chargeId is required' }, 400);
+
+  const raw = await env.SUMUP_CHARGES.get(chargeId);
+  if (!raw) return json({ error: 'Unknown chargeId' }, 404);
+
+  const record = JSON.parse(raw);
+  record.status = success ? 'succeeded' : 'failed';
+  record.transactionCode = transactionCode ? String(transactionCode) : null;
+  record.errorMessage = errorMessage ? String(errorMessage).slice(0, 200) : null;
+  record.resolvedAt = Date.now();
+
+  await env.SUMUP_CHARGES.put(chargeId, JSON.stringify(record), { expirationTtl: SUMUP_CHARGE_TTL_SECONDS });
+  return json({ ok: true });
+}
+
+async function getSumupStatus(chargeId, env) {
+  const raw = await env.SUMUP_CHARGES.get(chargeId);
+  if (!raw) return json({ error: 'Unknown chargeId' }, 404);
+
+  const record = JSON.parse(raw);
+  return json({
+    status: record.status,
+    amountCents: record.amountCents,
+    transactionCode: record.transactionCode || null,
+    errorMessage: record.errorMessage || null,
+  });
+}
+
 async function getPayment(paymentId, env) {
   const baseUrl = BASE_URLS[env.BANCONTACT_ENVIRONMENT];
 
@@ -189,6 +281,23 @@ export default {
 
       if (request.method === 'POST' && url.pathname === '/verify-password') {
         return await verifyPassword(request, env);
+      }
+
+      if (request.method === 'POST' && url.pathname === '/sumup/charge') {
+        return await createSumupCharge(request, env);
+      }
+
+      if (request.method === 'GET' && url.pathname === '/sumup/pending') {
+        return await getSumupPending(request, env);
+      }
+
+      if (request.method === 'POST' && url.pathname === '/sumup/result') {
+        return await postSumupResult(request, env);
+      }
+
+      const sumupStatusMatch = url.pathname.match(/^\/sumup\/status\/([^/]+)$/);
+      if (request.method === 'GET' && sumupStatusMatch) {
+        return await getSumupStatus(sumupStatusMatch[1], env);
       }
 
       return json({ error: 'Not found' }, 404);
