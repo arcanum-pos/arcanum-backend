@@ -67,8 +67,10 @@ async function createPayment(request, env) {
 
 const SETTINGS_DEFAULTS = {
   amountPerBonCents: 100,
-  fietstochtCents: 800,
-  wandeltochtCents: 600,
+  fietstochtMemberCents: 600,
+  fietstochtNonMemberCents: 800,
+  wandeltochtMemberCents: 400,
+  wandeltochtNonMemberCents: 600,
 };
 
 async function getSettings(env) {
