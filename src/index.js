@@ -105,6 +105,14 @@ async function updateSettings(request, env) {
   return json(cents);
 }
 
+async function verifyPassword(request, env) {
+  const body = await request.json().catch(() => ({}));
+  if (!env.SETTINGS_PASSWORD || body.password !== env.SETTINGS_PASSWORD) {
+    return json({ error: 'Onjuist wachtwoord' }, 401);
+  }
+  return json({ ok: true });
+}
+
 async function getPayment(paymentId, env) {
   const baseUrl = BASE_URLS[env.BANCONTACT_ENVIRONMENT];
 
@@ -160,6 +168,10 @@ export default {
 
       if (request.method === 'POST' && url.pathname === '/settings') {
         return await updateSettings(request, env);
+      }
+
+      if (request.method === 'POST' && url.pathname === '/verify-password') {
+        return await verifyPassword(request, env);
       }
 
       return json({ error: 'Not found' }, 404);
