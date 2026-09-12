@@ -11,12 +11,15 @@
 		{
 			"binding": "SETTINGS",
 			"id": "1a77d762d41f4fefb159050422ff86eb"
-		},
-		{
-			// Create with: npx wrangler kv namespace create SUMUP_CHARGES
-			"binding": "SUMUP_CHARGES",
-			"id": "0278a590b8a9497eb3cbd2e2ce905cb5"
 		}
+	],
+	"durable_objects": {
+		"bindings": [
+			{ "name": "SUMUP_COORDINATOR", "class_name": "SumupChargeCoordinator" }
+		]
+	},
+	"migrations": [
+		{ "tag": "v1", "new_classes": ["SumupChargeCoordinator"] }
 	],
 	"ratelimits": [
 		{
