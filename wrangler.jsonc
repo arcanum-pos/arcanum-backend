@@ -1,0 +1,19 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "questo-bancontact-worker",
+  "main": "src/index.js",
+  "compatibility_date": "2026-09-11",
+  "vars": {
+    "BANCONTACT_ENVIRONMENT": "prod",
+    "AUTH_SCHEME": "Bearer"
+  },
+  "kv_namespaces": [
+    {
+      "binding": "SETTINGS",
+      "id": "1a77d762d41f4fefb159050422ff86eb"
+    }
+  ],
+  "observability": {
+    "enabled": true
+  }
+}
