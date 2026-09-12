@@ -19,7 +19,10 @@
 		]
 	},
 	"migrations": [
-		{ "tag": "v1", "new_classes": ["SumupChargeCoordinator"] }
+		// new_sqlite_classes (not new_classes): Durable Objects on the Workers
+		// Free plan require the SQLite storage backend. Same storage.get/put/
+		// list/delete API we already use, so no code changes needed.
+		{ "tag": "v1", "new_sqlite_classes": ["SumupChargeCoordinator"] }
 	],
 	"ratelimits": [
 		{
