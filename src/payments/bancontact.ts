@@ -118,6 +118,10 @@ export async function createPayment(request: Request, env: Env): Promise<Respons
     userName: request.headers.get('X-User-Name') || null,
     userEmail: request.headers.get('X-User-Email') || null,
     providerRef: data.paymentId || null,
+    // Stored so a linked CFD — same-device or a genuinely separate one —
+    // can render the actual QR code from the payment_updated push, not
+    // just the plain "please pay" text cash/sumup get. See getSumupStatus.
+    providerData: { qrCodeUrl: data._links?.qrcode?.href || null, deeplinkUrl: data._links?.deeplink?.href || null },
     expiresAt: data.expiresAt || null,
   });
 

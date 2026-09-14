@@ -202,5 +202,8 @@ export async function getSumupStatus(chargeId: string, env: Env): Promise<Respon
     transactionCode: charge.transactionCode,
     errorMessage: charge.errorMessage,
     method: charge.method,
+    // Only ever set for bancontact — see createPayment in bancontact.ts.
+    qrCodeUrl: (charge.providerData as { qrCodeUrl?: string | null }).qrCodeUrl || null,
+    expiresAt: charge.expiresAt,
   });
 }
