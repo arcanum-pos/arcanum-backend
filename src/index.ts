@@ -13,7 +13,7 @@ import type { Env } from './env';
 export type { Env };
 
 import { json, CORS_HEADERS } from './http';
-import { BASE_URLS, createPayment, getPayment } from './payments/bancontact';
+import { createPayment, getPayment } from './payments/bancontact';
 import {
   createSumupCharge,
   getSumupPending,
@@ -33,13 +33,6 @@ export { SumupChargeCoordinator };
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    if (!BASE_URLS[env.BANCONTACT_ENVIRONMENT]) {
-      return json({ error: 'Worker misconfigured: BANCONTACT_ENVIRONMENT must be "preprod" or "prod"' }, 500);
-    }
-    if (!env.API_KEY) {
-      return json({ error: 'Worker misconfigured: API_KEY secret is not set' }, 500);
-    }
-
     if (request.method === 'OPTIONS') {
       return new Response(null, { headers: CORS_HEADERS });
     }
@@ -53,7 +46,7 @@ export default {
 
       const match = url.pathname.match(/^\/payments\/([^/]+)$/);
       if (request.method === 'GET' && match) {
-        return await getPayment(match[1], env);
+        return await getPayment(match[1], url.searchParams.get('org_id'), env);
       }
 
       if (request.method === 'GET' && url.pathname === '/settings') {

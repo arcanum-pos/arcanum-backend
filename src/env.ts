@@ -1,7 +1,5 @@
 export interface Env {
-  BANCONTACT_ENVIRONMENT: 'preprod' | 'prod';
   AUTH_SCHEME?: string;
-  API_KEY: string;
   SETTINGS: KVNamespace;
   AUTH_RATE_LIMITER?: RateLimit;
   SETTINGS_PASSWORD?: string;
