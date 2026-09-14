@@ -3,6 +3,9 @@ export type MembershipStatus = 'pending' | 'active';
 
 export interface CallerIdentity {
   sub: string;
+  // Which issuer authenticated this sub — see idp-resolution.ts and the
+  // migration note on memberships.issuer for why this matters.
+  issuer: string;
   email: string;
   name: string;
 }
@@ -22,6 +25,7 @@ export interface MembershipRow {
   id: string;
   org_id: string;
   user_sub: string | null;
+  issuer: string | null;
   invited_email: string;
   role: OrgRole;
   status: MembershipStatus;
@@ -36,6 +40,11 @@ export interface IdentityProviderRow {
   client_id: string | null;
   client_secret_ciphertext: string | null;
   client_secret_iv: string | null;
+  authorization_endpoint: string | null;
+  token_endpoint: string | null;
+  userinfo_endpoint: string | null;
+  device_authorization_endpoint: string | null;
+  end_session_endpoint: string | null;
   updated_at: string;
 }
 

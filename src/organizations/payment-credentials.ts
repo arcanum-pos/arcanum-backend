@@ -20,7 +20,7 @@ export async function listPaymentCredentials(request: Request, env: Env, orgId: 
   const caller = extractCaller(request);
   if (!caller) return json({ error: 'Unauthorized' }, 401);
 
-  const membership = await requireOrgRole(env, orgId, caller.sub, ['admin']);
+  const membership = await requireOrgRole(env, orgId, caller, ['admin']);
   if (!membership) return json({ error: 'Forbidden' }, 403);
 
   const { results } = await env.DB.prepare('SELECT provider, updated_at FROM payment_provider_credentials WHERE org_id = ?')
@@ -37,7 +37,7 @@ export async function setPaymentCredential(request: Request, env: Env, orgId: st
   const caller = extractCaller(request);
   if (!caller) return json({ error: 'Unauthorized' }, 401);
 
-  const membership = await requireOrgRole(env, orgId, caller.sub, ['admin']);
+  const membership = await requireOrgRole(env, orgId, caller, ['admin']);
   if (!membership) return json({ error: 'Forbidden' }, 403);
 
   const config = await request.json().catch(() => null);

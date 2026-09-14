@@ -1,22 +1,39 @@
 import type { Env } from '../env';
 import { json } from '../http';
 import { extractCaller, requireOrgRole } from './auth';
+import { resolveConfiguredIssuerUrl } from './idp-resolution';
 import type { MembershipRow, OrgRole } from './types';
 
 const VALID_ROLES = new Set<OrgRole>(['admin', 'cashier']);
 
-// Invitations are keyed by email because the invited person's Auth0 `sub`
-// isn't known until they first log in. Called at the top of any
-// caller-scoped organizations endpoint (see organizations.ts's listMyOrgs) so
-// a pending invite becomes a real, active membership the moment its owner
-// shows up — no separate "accept invite" click needed.
-export async function reconcilePendingInvites(env: Env, sub: string, email: string): Promise<void> {
+// Invitations are keyed by email because the invited person's sub isn't
+// known until they first log in. Called at the top of any caller-scoped
+// organizations endpoint (see organizations.ts's listMyOrgs) so a pending
+// invite becomes a real, active membership the moment its owner shows up —
+// no separate "accept invite" click needed.
+//
+// `issuer` is checked per-row against that row's *own org's* configured
+// issuer (falling back to the platform default) before activating it — an
+// org can only ever bring its own identity provider for itself, so without
+// this check, org B's fully-attacker-controlled IdP could assert an `email`
+// claim matching a pending invite for org A and hijack it.
+export async function reconcilePendingInvites(env: Env, sub: string, email: string, issuer: string): Promise<void> {
   if (!email) return;
-  await env.DB.prepare(
-    "UPDATE memberships SET user_sub = ?, status = 'active', accepted_at = ? WHERE invited_email = ? AND status = 'pending'"
+
+  const { results: pending } = await env.DB.prepare(
+    "SELECT * FROM memberships WHERE invited_email = ? AND status = 'pending'"
   )
-    .bind(sub, new Date().toISOString(), email)
-    .run();
+    .bind(email)
+    .all<MembershipRow>();
+
+  for (const row of pending || []) {
+    const expectedIssuer = await resolveConfiguredIssuerUrl(env, row.org_id);
+    if (expectedIssuer && expectedIssuer !== issuer) continue;
+
+    await env.DB.prepare("UPDATE memberships SET user_sub = ?, issuer = ?, status = 'active', accepted_at = ? WHERE id = ?")
+      .bind(sub, issuer, new Date().toISOString(), row.id)
+      .run();
+  }
 }
 
 function rowToMember(row: MembershipRow) {
@@ -37,7 +54,7 @@ export async function listMembers(request: Request, env: Env, orgId: string): Pr
   const caller = extractCaller(request);
   if (!caller) return json({ error: 'Unauthorized' }, 401);
 
-  const membership = await requireOrgRole(env, orgId, caller.sub, ['admin', 'cashier']);
+  const membership = await requireOrgRole(env, orgId, caller, ['admin', 'cashier']);
   if (!membership) return json({ error: 'Forbidden' }, 403);
 
   const { results } = await env.DB.prepare('SELECT * FROM memberships WHERE org_id = ? ORDER BY invited_at').bind(orgId).all<MembershipRow>();
@@ -48,7 +65,7 @@ export async function inviteMember(request: Request, env: Env, orgId: string): P
   const caller = extractCaller(request);
   if (!caller) return json({ error: 'Unauthorized' }, 401);
 
-  const membership = await requireOrgRole(env, orgId, caller.sub, ['admin']);
+  const membership = await requireOrgRole(env, orgId, caller, ['admin']);
   if (!membership) return json({ error: 'Forbidden' }, 403);
 
   const body = (await request.json().catch(() => ({}))) as { email?: string; role?: string };
@@ -76,7 +93,7 @@ export async function updateMemberRole(request: Request, env: Env, orgId: string
   const caller = extractCaller(request);
   if (!caller) return json({ error: 'Unauthorized' }, 401);
 
-  const membership = await requireOrgRole(env, orgId, caller.sub, ['admin']);
+  const membership = await requireOrgRole(env, orgId, caller, ['admin']);
   if (!membership) return json({ error: 'Forbidden' }, 403);
 
   const body = (await request.json().catch(() => ({}))) as { role?: string };
@@ -108,7 +125,7 @@ export async function removeMember(request: Request, env: Env, orgId: string, me
   const caller = extractCaller(request);
   if (!caller) return json({ error: 'Unauthorized' }, 401);
 
-  const membership = await requireOrgRole(env, orgId, caller.sub, ['admin']);
+  const membership = await requireOrgRole(env, orgId, caller, ['admin']);
   if (!membership) return json({ error: 'Forbidden' }, 403);
 
   const target = await env.DB.prepare('SELECT * FROM memberships WHERE id = ? AND org_id = ?').bind(membershipId, orgId).first<MembershipRow>();

@@ -1,7 +1,7 @@
 import type { Env } from '../env';
 import { createOrganization, listMyOrganizations, listMyMemberships, getOrganization, updateBranding } from './organizations';
 import { listMembers, inviteMember, updateMemberRole, removeMember } from './members';
-import { getIdentityProvider, setIdentityProvider } from './identity-providers';
+import { getIdentityProvider, setIdentityProvider, handleResolveIdentityProviderForAuth } from './identity-providers';
 import { listPaymentCredentials, setPaymentCredential } from './payment-credentials';
 
 // Handles every /organizations/* path. Returns null for anything it doesn't
@@ -43,6 +43,15 @@ export async function dispatchOrganizationsRoute(request: Request, env: Env, pat
     if (request.method === 'PATCH') return updateMemberRole(request, env, memberMatch[1], memberMatch[2]);
     if (request.method === 'DELETE') return removeMember(request, env, memberMatch[1], memberMatch[2]);
     return null;
+  }
+
+  // Pre-authentication lookup for questo-bff to drive a login — gated by
+  // INTERNAL_API_KEY, not caller identity (see identity-providers.ts's
+  // comment on handleResolveIdentityProviderForAuth for why that matters).
+  // Checked before the plain /identity-provider match below.
+  const idpResolveMatch = pathname.match(/^\/organizations\/([^/]+)\/identity-provider\/resolve$/);
+  if (idpResolveMatch && request.method === 'GET') {
+    return handleResolveIdentityProviderForAuth(request, env, idpResolveMatch[1]);
   }
 
   const idpMatch = pathname.match(/^\/organizations\/([^/]+)\/identity-provider$/);

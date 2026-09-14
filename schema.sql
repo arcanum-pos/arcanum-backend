@@ -46,6 +46,12 @@ CREATE TABLE IF NOT EXISTS memberships (
   id TEXT PRIMARY KEY,
   org_id TEXT NOT NULL REFERENCES organizations(id),
   user_sub TEXT,
+  -- Which issuer authenticated this user_sub — a bare sub is only unique
+  -- within the issuer that minted it, and once an org can bring its own IdP,
+  -- trusting a bare sub platform-wide (e.g. listMyOrganizations/
+  -- listMyMemberships, which query across every org) is a cross-tenant
+  -- impersonation path. NULL only for rows predating multi-issuer support.
+  issuer TEXT,
   invited_email TEXT NOT NULL,
   role TEXT NOT NULL, -- 'admin' | 'cashier'
   status TEXT NOT NULL, -- 'pending' | 'active'
@@ -55,6 +61,7 @@ CREATE TABLE IF NOT EXISTS memberships (
 
 CREATE INDEX IF NOT EXISTS idx_memberships_org ON memberships(org_id);
 CREATE INDEX IF NOT EXISTS idx_memberships_user_sub ON memberships(user_sub);
+CREATE INDEX IF NOT EXISTS idx_memberships_issuer_sub ON memberships(issuer, user_sub);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_memberships_org_email ON memberships(org_id, invited_email);
 
 CREATE TABLE IF NOT EXISTS identity_providers (
@@ -64,6 +71,15 @@ CREATE TABLE IF NOT EXISTS identity_providers (
   client_id TEXT,
   client_secret_ciphertext TEXT,
   client_secret_iv TEXT,
+  -- Resolved once from issuer_url's /.well-known/openid-configuration at
+  -- admin-save time (see worker/src/organizations/idp-resolution.ts) — never
+  -- re-fetched at login time, so a login never depends on a live discovery
+  -- fetch to an arbitrary org-run identity provider.
+  authorization_endpoint TEXT,
+  token_endpoint TEXT,
+  userinfo_endpoint TEXT,
+  device_authorization_endpoint TEXT,
+  end_session_endpoint TEXT,
   updated_at TEXT NOT NULL
 );
 

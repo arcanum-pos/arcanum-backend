@@ -36,8 +36,8 @@ export async function createOrganization(request: Request, env: Env): Promise<Re
     // Creator becomes the organization's first admin automatically — already
     // "active" (not "pending") since we already know their sub.
     env.DB.prepare(
-      'INSERT INTO memberships (id, org_id, user_sub, invited_email, role, status, invited_at, accepted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-    ).bind(crypto.randomUUID(), orgId, caller.sub, caller.email, 'admin', 'active', now, now),
+      'INSERT INTO memberships (id, org_id, user_sub, issuer, invited_email, role, status, invited_at, accepted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    ).bind(crypto.randomUUID(), orgId, caller.sub, caller.issuer, caller.email, 'admin', 'active', now, now),
   ]);
 
   const row = await env.DB.prepare('SELECT * FROM organizations WHERE id = ?').bind(orgId).first<OrganizationRow>();
@@ -52,15 +52,15 @@ export async function listMyOrganizations(request: Request, env: Env): Promise<R
   const caller = extractCaller(request);
   if (!caller) return json({ error: 'Unauthorized' }, 401);
 
-  await reconcilePendingInvites(env, caller.sub, caller.email);
+  await reconcilePendingInvites(env, caller.sub, caller.email, caller.issuer);
 
   const { results } = await env.DB.prepare(
     `SELECT o.* FROM organizations o
      JOIN memberships m ON m.org_id = o.id
-     WHERE m.user_sub = ? AND m.role = 'admin' AND m.status = 'active'
+     WHERE m.issuer = ? AND m.user_sub = ? AND m.role = 'admin' AND m.status = 'active'
      ORDER BY o.created_at`
   )
-    .bind(caller.sub)
+    .bind(caller.issuer, caller.sub)
     .all<OrganizationRow>();
 
   return json((results || []).map(rowToOrganization));
@@ -74,15 +74,15 @@ export async function listMyMemberships(request: Request, env: Env): Promise<Res
   const caller = extractCaller(request);
   if (!caller) return json({ error: 'Unauthorized' }, 401);
 
-  await reconcilePendingInvites(env, caller.sub, caller.email);
+  await reconcilePendingInvites(env, caller.sub, caller.email, caller.issuer);
 
   const { results } = await env.DB.prepare(
     `SELECT o.id as org_id, o.name as org_name, m.role FROM organizations o
      JOIN memberships m ON m.org_id = o.id
-     WHERE m.user_sub = ? AND m.status = 'active'
+     WHERE m.issuer = ? AND m.user_sub = ? AND m.status = 'active'
      ORDER BY o.created_at`
   )
-    .bind(caller.sub)
+    .bind(caller.issuer, caller.sub)
     .all<{ org_id: string; org_name: string; role: string }>();
 
   return json((results || []).map((r) => ({ orgId: r.org_id, orgName: r.org_name, role: r.role })));
@@ -92,7 +92,7 @@ export async function getOrganization(request: Request, env: Env, orgId: string)
   const caller = extractCaller(request);
   if (!caller) return json({ error: 'Unauthorized' }, 401);
 
-  const membership = await requireOrgRole(env, orgId, caller.sub, ['admin', 'cashier']);
+  const membership = await requireOrgRole(env, orgId, caller, ['admin', 'cashier']);
   if (!membership) return json({ error: 'Forbidden' }, 403);
 
   const row = await env.DB.prepare('SELECT * FROM organizations WHERE id = ?').bind(orgId).first<OrganizationRow>();
@@ -104,7 +104,7 @@ export async function updateBranding(request: Request, env: Env, orgId: string):
   const caller = extractCaller(request);
   if (!caller) return json({ error: 'Unauthorized' }, 401);
 
-  const membership = await requireOrgRole(env, orgId, caller.sub, ['admin']);
+  const membership = await requireOrgRole(env, orgId, caller, ['admin']);
   if (!membership) return json({ error: 'Forbidden' }, 403);
 
   const body = (await request.json().catch(() => ({}))) as { name?: string; logoUrl?: string; theme?: string };
