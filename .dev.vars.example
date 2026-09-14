@@ -1,1 +1,10 @@
 API_KEY=your-api-key-from-bancontact-api-manager
+
+# Shared secret for server-to-server calls to questo-devicehub's
+# /devices/broadcast — must match the same secret set on that Worker.
+INTERNAL_API_KEY=change-me-to-a-long-random-value
+
+# Platform-wide key-encryption-key wrapping each organization's own data key
+# (envelope encryption — see src/organizations/crypto.ts).
+ENCRYPTION_KEY=change-me-to-a-long-random-value
+

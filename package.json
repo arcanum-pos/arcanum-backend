@@ -4,9 +4,12 @@
   "private": true,
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy"
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc"
   },
   "devDependencies": {
-    "wrangler": "^4.0.0"
+    "@cloudflare/workers-types": "^5.20260911.1",
+    "typescript": "^5.9.3",
+    "wrangler": "^4.131.1"
   }
 }
