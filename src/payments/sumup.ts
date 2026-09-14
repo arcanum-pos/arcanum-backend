@@ -101,6 +101,17 @@ export async function createSumupCharge(request: Request, env: Env): Promise<Res
     await dispatchToReader(env, charge, String(body.readerId));
   }
 
+  // Unconditional — not just on a successful reader dispatch. This is what
+  // actually makes expireStaleCharges' time-out backstop apply to every
+  // charge: the DO's alarm only ever runs if something arms it, and a cash
+  // charge, or a sumup charge that never dispatches (no reader selected, or
+  // the dispatch call fails before setChargeProviderRef), previously had
+  // nothing that ever poked it — meaning no backstop at all, contradicting
+  // the "nothing stays pending forever" guarantee. Cheap and idempotent
+  // (ensureChargePolling no-ops if an alarm is already scheduled), so no
+  // reason to gate it.
+  await ensureChargePolling(env);
+
   if (posTerminalId) {
     await broadcastPaymentEvent(env, posTerminalId, 'payment_updated', { payment_id: charge.id, method });
   }
