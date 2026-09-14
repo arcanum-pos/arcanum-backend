@@ -110,7 +110,11 @@ export interface CreateChargeFields {
 }
 
 export async function createCharge(env: Env, fields: CreateChargeFields): Promise<ChargeRecord> {
-  const id = fields.id || crypto.randomUUID();
+  // Hyphens stripped — Bancontact's `reference` field (its id is often this
+  // one, see bancontact.ts) has a hard 35-char limit, one short of a
+  // canonical UUID's 36. Stripped everywhere for consistency, not just
+  // where it's currently required.
+  const id = fields.id || crypto.randomUUID().replace(/-/g, '');
   const createdAt = new Date().toISOString();
 
   await env.DB.prepare(

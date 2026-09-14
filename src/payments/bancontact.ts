@@ -77,7 +77,9 @@ export async function createPayment(request: Request, env: Env): Promise<Respons
   // Generated up front — Bancontact needs it as `reference` in the create
   // call itself (their callback echoes it back unchanged, which is how we
   // correlate an incoming callback to this charge with no lookup needed).
-  const chargeId = crypto.randomUUID();
+  // Hyphens stripped: Bancontact's `reference` field has a hard 35-char
+  // limit, one short of a canonical UUID's 36.
+  const chargeId = crypto.randomUUID().replace(/-/g, '');
   const posTerminalId = body.posTerminalId ? String(body.posTerminalId) : null;
   const description = body.description ? String(body.description).slice(0, 140) : '';
 
