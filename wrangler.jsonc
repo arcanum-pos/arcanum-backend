@@ -3,6 +3,18 @@
 	"name": "questo-bancontact-worker",
 	"main": "src/index.ts",
 	"compatibility_date": "2026-09-11",
+	// Not directly publicly reachable — only questo-bff calls this Worker (via
+	// the BANCONTACT_SERVICE service binding, which works regardless of this
+	// setting). The iOS SumUp bridge used to depend on the workers.dev URL
+	// directly (bearer-token gated); now retired. Explicit here so it doesn't
+	// silently come back on a future deploy — that's the actual bug this is
+	// fixing: workers_dev defaults to true when unset, so a same-day dashboard
+	// toggle-off would otherwise be clobbered by the next `wrangler deploy`.
+	"workers_dev": false,
+	"dev": {
+		"port": 8789,
+		"inspector_port": 9889
+	},
 	"vars": {
 		"AUTH_SCHEME": "Bearer"
 	},
