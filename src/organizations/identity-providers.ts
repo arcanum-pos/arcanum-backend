@@ -238,8 +238,9 @@ export async function resolveIdentityProviderForAuth(env: Env, orgId: string): P
   };
 }
 
-// Gated by INTERNAL_API_KEY (the same shared-secret pattern questo-devicehub
-// already uses for its own internal routes), NOT by caller identity — there
+// Gated by BFF_INTERNAL_KEY (the same shared-secret pattern questo-devicehub
+// uses for its own internal routes, just a separate, independently
+// rotatable secret from INTERNAL_API_KEY), NOT by caller identity — there
 // is deliberately no logged-in user yet at this point in the login flow.
 // This is NOT optional: `worker` having no public ingress only blocks
 // *direct* internet access — questo-bff's own generic `/api/organizations/*`
@@ -251,7 +252,7 @@ export async function resolveIdentityProviderForAuth(env: Env, orgId: string): P
 function hasValidInternalKey(request: Request, env: Env): boolean {
   const auth = request.headers.get('Authorization') || '';
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
-  return Boolean(env.INTERNAL_API_KEY) && token === env.INTERNAL_API_KEY;
+  return Boolean(env.BFF_INTERNAL_KEY) && token === env.BFF_INTERNAL_KEY;
 }
 
 // HTTP wrapper for resolveIdentityProviderForAuth — see router.ts for the

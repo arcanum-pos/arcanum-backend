@@ -7,6 +7,12 @@ export interface Env {
   DB: D1Database;
   // questo-devicehub (separate Worker) — see devicehub-client.ts.
   INTERNAL_API_KEY: string;
+  // questo-bff's calls to this Worker's own internal-only
+  // /organizations/:orgId/identity-provider/resolve route — see
+  // organizations/identity-providers.ts. Deliberately a separate secret
+  // from INTERNAL_API_KEY above (a different pairwise relationship,
+  // independently rotatable) — not the same value.
+  BFF_INTERNAL_KEY: string;
   DEVICEHUB_SERVICE: Fetcher;
   DEVICEHUB_LOCAL_URL?: string;
   // Platform-wide key-encryption-key — wraps each organization's own data

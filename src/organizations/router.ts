@@ -46,7 +46,7 @@ export async function dispatchOrganizationsRoute(request: Request, env: Env, pat
   }
 
   // Pre-authentication lookup for questo-bff to drive a login — gated by
-  // INTERNAL_API_KEY, not caller identity (see identity-providers.ts's
+  // BFF_INTERNAL_KEY, not caller identity (see identity-providers.ts's
   // comment on handleResolveIdentityProviderForAuth for why that matters).
   // Checked before the plain /identity-provider match below.
   const idpResolveMatch = pathname.match(/^\/organizations\/([^/]+)\/identity-provider\/resolve$/);
