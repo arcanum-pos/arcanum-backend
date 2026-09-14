@@ -78,3 +78,51 @@ CREATE TABLE IF NOT EXISTS payment_provider_credentials (
   updated_at TEXT NOT NULL,
   PRIMARY KEY (org_id, provider)
 );
+
+-- Unified in-flight payment tracking — cash, SumUp, and Bancontact all share
+-- this one table now (previously: SumUp used a Durable Object, Bancontact
+-- tracked nothing server-side at all, the browser polled Bancontact's API
+-- directly). Every method resolves the same way: a provider callback
+-- (primary) or the ChargePoller DO's periodic fallback sweep (poll +
+-- time-out backstop), both funnelling through resolveCharge() in
+-- payments/charges.ts. org_id is required from day one — no pre-org-scoping
+-- legacy rows exist for this table.
+CREATE TABLE IF NOT EXISTS charges (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  method TEXT NOT NULL, -- 'cash' | 'sumup' | 'bancontact'
+  status TEXT NOT NULL, -- 'pending' | 'succeeded' | 'failed'
+  -- Raw provider status string (e.g. Bancontact's AUTHORIZED/IDENTIFIED/...),
+  -- display-only — `status` above is what business logic/the poller act on.
+  provider_status TEXT,
+  amount_cents INTEGER NOT NULL,
+  description TEXT,
+  pos_terminal_id TEXT,
+  items TEXT, -- JSON
+  slot_id TEXT,
+  device_id TEXT,
+  device_name TEXT,
+  user_name TEXT,
+  user_email TEXT,
+  created_at TEXT NOT NULL,
+  resolved_at TEXT,
+  transaction_code TEXT,
+  error_message TEXT,
+  -- The provider's own id for this charge (SumUp reader checkout_id,
+  -- Bancontact paymentId) — used by the poller to ask the provider for
+  -- status. Not used to correlate an incoming callback for either provider:
+  -- SumUp's callback URL embeds our own id+token directly, Bancontact's
+  -- payload echoes back `reference`, which we set to our own id.
+  provider_ref TEXT,
+  -- Whatever's provider-specific and doesn't warrant its own column (SumUp's
+  -- target readerId + a random per-charge callback token; nothing yet for
+  -- Bancontact) — JSON, so a future provider doesn't need a migration.
+  provider_data TEXT,
+  -- Provider-supplied expiry when known (Bancontact's expiresAt); NULL means
+  -- "use the platform default" in the poller's time-out backstop.
+  expires_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_charges_org ON charges(org_id);
+CREATE INDEX IF NOT EXISTS idx_charges_status ON charges(status);
+CREATE INDEX IF NOT EXISTS idx_charges_method_provider_ref ON charges(method, provider_ref);

@@ -3,8 +3,7 @@ export interface Env {
   SETTINGS: KVNamespace;
   AUTH_RATE_LIMITER?: RateLimit;
   SETTINGS_PASSWORD?: string;
-  SUMUP_BRIDGE_TOKEN?: string;
-  SUMUP_COORDINATOR: DurableObjectNamespace;
+  CHARGE_POLLER: DurableObjectNamespace;
   DB: D1Database;
   // questo-devicehub (separate Worker) — see devicehub-client.ts.
   INTERNAL_API_KEY: string;
@@ -13,4 +12,8 @@ export interface Env {
   // Platform-wide key-encryption-key — wraps each organization's own data
   // key (envelope encryption). See organizations/crypto.ts.
   ENCRYPTION_KEY: string;
+  // This Worker's own publicly reachable base URL, reached through the BFF
+  // — used to build the callbackUrl/return_url handed to Bancontact/SumUp
+  // at charge creation (see payments/bancontact.ts, payments/sumup.ts).
+  PUBLIC_BASE_URL: string;
 }

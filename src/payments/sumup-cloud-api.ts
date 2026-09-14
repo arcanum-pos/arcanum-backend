@@ -66,6 +66,7 @@ export async function createSumupReaderCheckout(params: {
   amountCents: number;
   currency: string;
   description: string;
+  returnUrl: string;
 }): Promise<SumupReaderCheckout> {
   const response = await sumupFetch(
     `/v0.1/merchants/${encodeURIComponent(params.merchantCode)}/readers/${encodeURIComponent(params.readerId)}/checkout`,
@@ -75,10 +76,7 @@ export async function createSumupReaderCheckout(params: {
       body: JSON.stringify({
         total_amount: { currency: params.currency, minor_unit: 2, value: params.amountCents },
         description: params.description || undefined,
-        // No return_url yet — this backend isn't reachable from the internet
-        // during local testing, so results are polled instead (see the DO's
-        // alarm() in sumup.ts). A return_url can be added once webhooks are
-        // viable, same as the planned Bancontact Pro callback.
+        return_url: params.returnUrl,
       }),
     }
   );

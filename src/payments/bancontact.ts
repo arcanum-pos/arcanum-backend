@@ -1,22 +1,31 @@
-// Bancontact: a thin proxy to Bancontact's own v3 API. No local tracking —
-// the webapp polls this directly and records its own transaction once it
-// sees SUCCEEDED (see transactions.ts's createTransaction). Unlike SumUp/
-// cash, this domain doesn't need a Durable Object: Bancontact's API is
-// itself the source of truth, we're not coordinating between two callers.
+// Bancontact: creates a payment via Bancontact's v3 API and tracks it in
+// the shared `charges` table (see charges.ts) — same mechanism SumUp uses.
+// Resolution is callback-driven (postBancontactCallback below); the
+// ChargePoller DO (payments/poller.ts) is only a fallback for a missed
+// callback, not the primary path. Previously this was a stateless proxy —
+// the browser polled Bancontact's API directly every 2s; that's gone, the
+// backend now owns tracking and pushes payment_updated the same way SumUp
+// already does.
 //
 // Credentials (API key + environment) are per-organization, configured in
-// the admin portal and stored encrypted in payment_provider_credentials —
-// not a worker-wide secret. There's no local record of which org created a
-// given paymentId (stateless proxy, see above), so both createPayment and
-// getPayment need orgId supplied on every call, not just at creation.
+// the admin portal and stored encrypted in payment_provider_credentials.
 import type { Env } from '../env';
 import { json } from '../http';
+import { broadcastPaymentEvent } from '../devicehub-client';
 import { getDecryptedPaymentCredential } from '../organizations/payment-credentials';
+import { verifyBancontactCallback } from './bancontact-jws';
+import { createCharge, getCharge, resolveCharge, updateChargeProviderStatus } from './charges';
+import { ensureChargePolling } from './charge-poller-client';
 
 export const BASE_URLS: Record<string, string> = {
   preprod: 'https://merchant.api.preprod.bancontact.net',
   prod: 'https://merchant.api.bancontact.net',
 };
+
+// Bancontact's own terminal statuses (see webapp/src/lib/paymentLabels.ts's
+// TERMINAL_BANCONTACT_STATUSES — kept in sync manually, small enough not to
+// warrant sharing a single source of truth across the worker/webapp split).
+const TERMINAL_STATUSES = new Set(['SUCCEEDED', 'FAILED', 'AUTHORIZATION_FAILED', 'CANCELLED', 'EXPIRED', 'VOIDED']);
 
 interface BancontactCredential {
   apiKey: string;
@@ -43,8 +52,12 @@ export async function createPayment(request: Request, env: Env): Promise<Respons
   const body = (await request.json().catch(() => ({}))) as {
     amount?: number;
     description?: string;
-    reference?: string;
     orgId?: string;
+    posTerminalId?: string;
+    items?: Record<string, unknown>;
+    slotId?: string;
+    deviceId?: string;
+    deviceName?: string;
   };
   const amountCents = Number(body.amount);
 
@@ -54,16 +67,28 @@ export async function createPayment(request: Request, env: Env): Promise<Respons
   if (!body.orgId) {
     return json({ error: 'orgId is required' }, 400);
   }
+  const orgId = String(body.orgId);
 
-  const credential = await resolveCredential(env, String(body.orgId));
+  const credential = await resolveCredential(env, orgId);
   if (!credential) {
     return json({ error: 'Bancontact niet geconfigureerd voor deze organisatie' }, 400);
   }
 
+  // Generated up front — Bancontact needs it as `reference` in the create
+  // call itself (their callback echoes it back unchanged, which is how we
+  // correlate an incoming callback to this charge with no lookup needed).
+  const chargeId = crypto.randomUUID();
+  const posTerminalId = body.posTerminalId ? String(body.posTerminalId) : null;
+  const description = body.description ? String(body.description).slice(0, 140) : '';
+
   const baseUrl = BASE_URLS[credential.environment];
-  const payload: Record<string, unknown> = { amount: amountCents, currency: 'EUR' };
-  if (body.description) payload.description = String(body.description).slice(0, 140);
-  if (body.reference) payload.reference = String(body.reference).slice(0, 35);
+  const payload = {
+    amount: amountCents,
+    currency: 'EUR',
+    description: description || undefined,
+    reference: chargeId,
+    callbackUrl: `${env.PUBLIC_BASE_URL}/api/callback/bancontact`,
+  };
 
   const response = await fetch(`${baseUrl}/v3/payments`, {
     method: 'POST',
@@ -77,9 +102,32 @@ export async function createPayment(request: Request, env: Env): Promise<Respons
     return json({ error: 'Bancontact API error', details: data }, response.status);
   }
 
+  const charge = await createCharge(env, {
+    id: chargeId,
+    orgId,
+    method: 'bancontact',
+    amountCents,
+    description,
+    posTerminalId,
+    items: body.items || {},
+    slotId: body.slotId ? String(body.slotId) : null,
+    deviceId: body.deviceId ? String(body.deviceId) : null,
+    deviceName: body.deviceName ? String(body.deviceName) : null,
+    userName: request.headers.get('X-User-Name') || null,
+    userEmail: request.headers.get('X-User-Email') || null,
+    providerRef: data.paymentId || null,
+    expiresAt: data.expiresAt || null,
+  });
+
+  await ensureChargePolling(env); // fallback sweep in case the callback above never arrives
+
+  if (posTerminalId) {
+    await broadcastPaymentEvent(env, posTerminalId, 'payment_updated', { payment_id: charge.id, method: 'bancontact' });
+  }
+
   return json(
     {
-      paymentId: data.paymentId,
+      chargeId: charge.id,
       status: data.status,
       createdAt: data.createdAt,
       expiresAt: data.expiresAt,
@@ -87,41 +135,80 @@ export async function createPayment(request: Request, env: Env): Promise<Respons
       currency: data.currency,
       qrCodeUrl: data._links?.qrcode?.href,
       deeplinkUrl: data._links?.deeplink?.href,
-      selfUrl: data._links?.self?.href,
     },
     201
   );
 }
 
-export async function getPayment(paymentId: string, orgId: string | null, env: Env): Promise<Response> {
-  if (!orgId) {
-    return json({ error: 'org_id is required' }, 400);
+// Called by Bancontact itself. No session — authorized by the JWS signature
+// in the `Signature` header (see bancontact-jws.ts), verified against the
+// org's own environment (preprod/prod) once the charge (and so the org)
+// it's about is known.
+export async function postBancontactCallback(request: Request, env: Env): Promise<Response> {
+  const signature = request.headers.get('Signature');
+  const rawBody = await request.text();
+  if (!signature) return json({ error: 'Missing signature' }, 401);
+
+  let payload: {
+    reference?: string;
+    status?: string;
+    failureReason?: string;
+  };
+  try {
+    payload = JSON.parse(rawBody);
+  } catch {
+    return json({ error: 'Invalid payload' }, 400);
   }
 
-  const credential = await resolveCredential(env, orgId);
-  if (!credential) {
-    return json({ error: 'Bancontact niet geconfigureerd voor deze organisatie' }, 400);
+  const chargeId = payload.reference;
+  if (!chargeId) return json({ error: 'Missing reference' }, 400);
+
+  const charge = await getCharge(env, chargeId);
+  if (!charge || charge.method !== 'bancontact') return json({ error: 'Unknown charge' }, 404);
+
+  const credential = await resolveCredential(env, charge.orgId);
+  if (!credential) return json({ error: 'Bancontact niet geconfigureerd' }, 400);
+
+  const verified = await verifyBancontactCallback(signature, rawBody, credential.environment);
+  if (!verified) return json({ error: 'Invalid signature' }, 401);
+
+  const status = payload.status || '';
+  if (!TERMINAL_STATUSES.has(status)) {
+    // Intermediate state (IDENTIFIED/AUTHORIZED/PENDING_MERCHANT_ACKNOWLEDGEMENT/...)
+    // — reflect it for the UI (same rich labels the old direct-polling flow
+    // showed) without resolving the charge yet.
+    await updateChargeProviderStatus(env, chargeId, status);
+    return json({});
   }
+
+  await resolveCharge(env, chargeId, {
+    success: status === 'SUCCEEDED',
+    providerStatus: status,
+  });
+
+  return json({});
+}
+
+export interface BancontactStatus {
+  status: string;
+  failureReason?: string | null;
+}
+
+// Used only by ChargePoller's fallback sweep — the primary resolution path
+// is postBancontactCallback above.
+export async function getBancontactPaymentStatus(env: Env, orgId: string, paymentId: string): Promise<BancontactStatus | null> {
+  const credential = await resolveCredential(env, orgId);
+  if (!credential) return null;
 
   const baseUrl = BASE_URLS[credential.environment];
-
   const response = await fetch(`${baseUrl}/v3/payments/${paymentId}`, {
     method: 'GET',
     headers: bancontactHeaders(env, credential.apiKey),
   });
+  if (!response.ok) return null;
 
-  const data = (await response.json().catch(() => ({}))) as Record<string, any>;
-
-  if (!response.ok) {
-    return json({ error: 'Bancontact API error', details: data }, response.status);
-  }
-
-  return json({
-    paymentId: data.paymentId,
-    status: data.status,
-    succeededAt: data.succeededAt,
-    expireAt: data.expireAt,
-    amount: data.amount,
-    currency: data.currency,
-  });
+  const data = (await response.json().catch(() => ({}))) as { status?: string };
+  return data.status ? { status: data.status } : null;
 }
+
+export { TERMINAL_STATUSES as BANCONTACT_TERMINAL_STATUSES };

@@ -16,7 +16,8 @@
 		"inspector_port": 9889
 	},
 	"vars": {
-		"AUTH_SCHEME": "Bearer"
+		"AUTH_SCHEME": "Bearer",
+		"PUBLIC_BASE_URL": "https://elewijtsepijl.esvvzw.be"
 	},
 	"services": [
 		{
@@ -41,8 +42,8 @@
 	"durable_objects": {
 		"bindings": [
 			{
-				"name": "SUMUP_COORDINATOR",
-				"class_name": "SumupChargeCoordinator"
+				"name": "CHARGE_POLLER",
+				"class_name": "ChargePoller"
 			}
 		]
 	},
@@ -54,6 +55,20 @@
 			"tag": "v1",
 			"new_sqlite_classes": [
 				"SumupChargeCoordinator"
+			]
+		},
+		// SumupChargeCoordinator was the iOS SumUp Air bridge's polling-queue
+		// entry point (retired — a specific Solo reader is targeted directly
+		// now). Renamed rather than deleted+recreated: it now holds no charge
+		// data of its own (that moved to D1's `charges` table), just a
+		// fallback poll alarm.
+		{
+			"tag": "v2",
+			"renamed_classes": [
+				{
+					"from": "SumupChargeCoordinator",
+					"to": "ChargePoller"
+				}
 			]
 		}
 	],

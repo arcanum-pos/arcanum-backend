@@ -1,5 +1,7 @@
 // Thin router — the actual domains live in their own modules:
 //   payments/bancontact.ts, payments/sumup.ts   — payment processing
+//   payments/charges.ts                          — shared in-flight payment tracking
+//   payments/poller.ts                           — ChargePoller DO, fallback for missed callbacks
 //   settings.ts                                  — pricing config + password gate
 //   transactions.ts                              — the shared D1 sales ledger
 //   devicehub-client.ts                          — outbound calls to questo-devicehub
@@ -13,23 +15,16 @@ import type { Env } from './env';
 export type { Env };
 
 import { json, CORS_HEADERS } from './http';
-import { createPayment, getPayment } from './payments/bancontact';
-import {
-  createSumupCharge,
-  getSumupPending,
-  postSumupResult,
-  confirmChargeFromPos,
-  getSumupStatus,
-  listSumupReadersForOrg,
-  SumupChargeCoordinator,
-} from './payments/sumup';
+import { createPayment, postBancontactCallback } from './payments/bancontact';
+import { createSumupCharge, postSumupCallback, confirmChargeFromPos, getSumupStatus, listSumupReadersForOrg } from './payments/sumup';
+import { ChargePoller } from './payments/poller';
 import { getSettings, updateSettings, verifyPassword } from './settings';
 import { createTransaction, listTransactions } from './transactions';
 import { dispatchOrganizationsRoute } from './organizations/router';
 
 // Durable Object classes must be a named export of the Worker's main entry
-// file — re-exported here since it actually lives in payments/sumup.ts.
-export { SumupChargeCoordinator };
+// file — re-exported here since it actually lives in payments/poller.ts.
+export { ChargePoller };
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -42,11 +37,6 @@ export default {
     try {
       if (request.method === 'POST' && url.pathname === '/payments') {
         return await createPayment(request, env);
-      }
-
-      const match = url.pathname.match(/^\/payments\/([^/]+)$/);
-      if (request.method === 'GET' && match) {
-        return await getPayment(match[1], url.searchParams.get('org_id'), env);
       }
 
       if (request.method === 'GET' && url.pathname === '/settings') {
@@ -65,14 +55,6 @@ export default {
         return await createSumupCharge(request, env);
       }
 
-      if (request.method === 'GET' && url.pathname === '/sumup/pending') {
-        return await getSumupPending(request, env);
-      }
-
-      if (request.method === 'POST' && url.pathname === '/sumup/result') {
-        return await postSumupResult(request, env);
-      }
-
       if (request.method === 'POST' && url.pathname === '/sumup/confirm') {
         return await confirmChargeFromPos(request, env);
       }
@@ -84,6 +66,21 @@ export default {
 
       if (request.method === 'GET' && url.pathname === '/sumup/readers') {
         return await listSumupReadersForOrg(request, env);
+      }
+
+      // Payment-provider webhook callbacks — reached via the BFF's
+      // unauthenticated /api/callback/* passthrough (see questo-bff's
+      // router.ts), never called directly by a browser. Each verifies its
+      // own authenticity (SumUp: a per-charge token embedded in the URL;
+      // Bancontact: a JWS signature) rather than relying on this being
+      // unauthenticated-by-design at the BFF layer alone.
+      const sumupCallbackMatch = url.pathname.match(/^\/callback\/sumup\/([^/]+)\/([^/]+)$/);
+      if (request.method === 'POST' && sumupCallbackMatch) {
+        return await postSumupCallback(request, env, sumupCallbackMatch[1], sumupCallbackMatch[2]);
+      }
+
+      if (request.method === 'POST' && url.pathname === '/callback/bancontact') {
+        return await postBancontactCallback(request, env);
       }
 
       if (request.method === 'POST' && url.pathname === '/transactions') {
