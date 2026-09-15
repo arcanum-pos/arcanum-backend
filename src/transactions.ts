@@ -22,6 +22,10 @@ interface TransactionFields {
   userName?: string | null;
   userEmail?: string | null;
   orgId: string;
+  // Nothing sets this yet — needs the kassa to know which event is active,
+  // a later step. Accepted here already so that step is just "start
+  // sending eventId", not another migration.
+  eventId?: string | null;
   completedAt?: string;
 }
 
@@ -31,8 +35,8 @@ async function insertTransaction(env: Env, fields: TransactionFields): Promise<{
 
   await env.DB.prepare(
     `INSERT INTO transactions
-      (id, amount_cents, description, method, items, slot_id, device_id, device_name, user_name, user_email, org_id, completed_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      (id, amount_cents, description, method, items, slot_id, device_id, device_name, user_name, user_email, org_id, event_id, completed_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       id,
@@ -46,6 +50,7 @@ async function insertTransaction(env: Env, fields: TransactionFields): Promise<{
       fields.userName ? String(fields.userName) : null,
       fields.userEmail ? String(fields.userEmail) : null,
       fields.orgId,
+      fields.eventId ? String(fields.eventId) : null,
       completedAt
     )
     .run();
@@ -123,6 +128,7 @@ interface TransactionRow {
   user_name: string | null;
   user_email: string | null;
   org_id: string | null;
+  event_id: string | null;
   completed_at: string;
 }
 
@@ -145,18 +151,24 @@ function rowToTransaction(row: TransactionRow) {
     userName: row.user_name,
     userEmail: row.user_email,
     orgId: row.org_id,
+    eventId: row.event_id,
     completedAt: row.completed_at,
   };
 }
 
 export async function listTransactions(request: Request, env: Env): Promise<Response> {
-  const orgId = new URL(request.url).searchParams.get('orgId');
+  const params = new URL(request.url).searchParams;
+  const orgId = params.get('orgId');
+  const eventId = params.get('eventId');
   if (!orgId) return json({ error: 'orgId is required' }, 400);
 
-  const { results } = await env.DB.prepare(
-    'SELECT * FROM transactions WHERE org_id = ? ORDER BY completed_at DESC LIMIT 5000'
-  )
-    .bind(orgId)
-    .all<TransactionRow>();
+  const { results } = eventId
+    ? await env.DB.prepare('SELECT * FROM transactions WHERE org_id = ? AND event_id = ? ORDER BY completed_at DESC LIMIT 5000')
+        .bind(orgId, eventId)
+        .all<TransactionRow>()
+    : await env.DB.prepare('SELECT * FROM transactions WHERE org_id = ? ORDER BY completed_at DESC LIMIT 5000')
+        .bind(orgId)
+        .all<TransactionRow>();
+
   return json((results || []).map(rowToTransaction));
 }

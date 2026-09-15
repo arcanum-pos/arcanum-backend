@@ -4,6 +4,7 @@ import { listMembers, inviteMember, updateMemberRole, removeMember } from './mem
 import { getIdentityProvider, setIdentityProvider, handleResolveIdentityProviderForAuth } from './identity-providers';
 import { listPaymentCredentials, setPaymentCredential } from './payment-credentials';
 import { getSmtpCredentials, setSmtpCredentials, testSmtpCredentials } from './smtp-credentials';
+import { listEvents, createEvent } from './events';
 
 // Handles every /organizations/* path. Returns null for anything it doesn't
 // recognize, so the caller (the main router) can fall through to its own
@@ -82,6 +83,13 @@ export async function dispatchOrganizationsRoute(request: Request, env: Env, pat
   if (smtpMatch) {
     if (request.method === 'GET') return getSmtpCredentials(request, env, smtpMatch[1]);
     if (request.method === 'PUT') return setSmtpCredentials(request, env, smtpMatch[1]);
+    return null;
+  }
+
+  const eventsMatch = pathname.match(/^\/organizations\/([^/]+)\/events$/);
+  if (eventsMatch) {
+    if (request.method === 'GET') return listEvents(request, env, eventsMatch[1]);
+    if (request.method === 'POST') return createEvent(request, env, eventsMatch[1]);
     return null;
   }
 

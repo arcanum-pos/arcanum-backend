@@ -1,3 +1,16 @@
+-- Per-org events (see organizations/events.ts) — will drive what a kassa
+-- shows (menu/catalogue) for a given event once that part is built; for
+-- now, just name + date, and something transactions can be tagged with.
+CREATE TABLE IF NOT EXISTS events (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES organizations(id),
+  name TEXT NOT NULL,
+  event_date TEXT NOT NULL, -- ISO date, YYYY-MM-DD
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_events_org ON events(org_id);
+
 CREATE TABLE IF NOT EXISTS transactions (
   id TEXT PRIMARY KEY,
   amount_cents INTEGER NOT NULL,
@@ -12,12 +25,17 @@ CREATE TABLE IF NOT EXISTS transactions (
   -- Nullable only for backward compat with rows recorded before organization
   -- scoping existed; every new transaction is required to carry one.
   org_id TEXT,
+  -- Nullable: nothing assigns this yet (that needs the kassa to know which
+  -- event is active, a later step) — the column exists now so that step
+  -- doesn't need its own migration.
+  event_id TEXT REFERENCES events(id),
   completed_at TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_transactions_completed_at ON transactions(completed_at);
 CREATE INDEX IF NOT EXISTS idx_transactions_slot_id ON transactions(slot_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_org_id ON transactions(org_id);
+CREATE INDEX IF NOT EXISTS idx_transactions_event_id ON transactions(event_id);
 
 -- The `devices` table used to live here; it moved to questo-devicehub's own
 -- D1 database (questo-devices-dev) so the two Workers don't share a database.
