@@ -23,6 +23,10 @@
 		{
 			"binding": "DEVICEHUB_SERVICE",
 			"service": "questo-devicehub"
+		},
+		{
+			"binding": "MAILER_SERVICE",
+			"service": "questo-mail"
 		}
 	],
 	"kv_namespaces": [

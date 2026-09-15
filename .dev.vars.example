@@ -8,3 +8,25 @@ INTERNAL_API_KEY=change-me-to-a-long-random-value
 # (envelope encryption — see src/organizations/crypto.ts).
 ENCRYPTION_KEY=change-me-to-a-long-random-value
 
+# Authorizes questo-bff's calls to this Worker's internal-only
+# identity-provider-resolution route — must match questo-bff's own
+# BFF_INTERNAL_KEY. A different secret from INTERNAL_API_KEY above (that
+# one's for this Worker's own calls to questo-devicehub).
+BFF_INTERNAL_KEY=change-me-to-a-long-random-value
+
+# Seeds the platform-default identity provider the first time it's needed
+# (see organizations/identity-providers.ts ensureDefaultOrganization) — an
+# existing OIDC app's issuer/client id/secret. Consumed once; can be left
+# unset if you don't need to test login locally.
+DEFAULT_IDP_ISSUER_URL=
+DEFAULT_IDP_CLIENT_ID=
+DEFAULT_IDP_CLIENT_SECRET=
+DEFAULT_IDP_CONNECTION_NAME=
+
+# Local `wrangler dev` URL for the questo-mail Worker (run it on a different port).
+MAILER_LOCAL_URL=http://localhost:8792
+
+# Authorizes calls to questo-mail's /send route — must match questo-mail's
+# own MAILER_INTERNAL_KEY.
+MAILER_INTERNAL_KEY=change-me-to-a-long-random-value
+

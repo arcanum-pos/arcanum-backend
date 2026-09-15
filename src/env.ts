@@ -15,6 +15,12 @@ export interface Env {
   BFF_INTERNAL_KEY: string;
   DEVICEHUB_SERVICE: Fetcher;
   DEVICEHUB_LOCAL_URL?: string;
+  // questo-mail (separate Worker) — see mailer-client.ts. A different
+  // secret from INTERNAL_API_KEY/BFF_INTERNAL_KEY above, same "one secret
+  // per pairwise relationship" reasoning.
+  MAILER_SERVICE: Fetcher;
+  MAILER_LOCAL_URL?: string;
+  MAILER_INTERNAL_KEY: string;
   // Platform-wide key-encryption-key — wraps each organization's own data
   // key (envelope encryption). See organizations/crypto.ts.
   ENCRYPTION_KEY: string;

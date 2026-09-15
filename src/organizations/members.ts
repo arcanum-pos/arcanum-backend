@@ -1,5 +1,7 @@
 import type { Env } from '../env';
 import { json } from '../http';
+import { sendEmail } from '../mailer-client';
+import { buildInviteEmail } from '../email-templates/invite';
 import { extractCaller, requireOrgRole } from './auth';
 import { resolveConfiguredIssuerUrl } from './idp-resolution';
 import type { MembershipRow, OrgRole } from './types';
@@ -86,6 +88,17 @@ export async function inviteMember(request: Request, env: Env, orgId: string): P
     .run();
 
   const row = await env.DB.prepare('SELECT * FROM memberships WHERE id = ?').bind(id).first<MembershipRow>();
+
+  // Best-effort — sendEmail (mailer-client.ts) already swallows its own
+  // errors, so a broken SMTP config never fails invite creation itself,
+  // same as before this existed (the admin just has to tell them out of
+  // band, exactly like today).
+  const org = await env.DB.prepare('SELECT name FROM organizations WHERE id = ?').bind(orgId).first<{ name: string }>();
+  if (org) {
+    const content = buildInviteEmail({ orgName: org.name, role, loginUrl: `${env.PUBLIC_BASE_URL}/login` });
+    await sendEmail(env, { to: email, ...content });
+  }
+
   return json(rowToMember(row!), 201);
 }
 
