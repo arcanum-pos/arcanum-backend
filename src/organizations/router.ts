@@ -3,6 +3,7 @@ import { createOrganization, listMyOrganizations, listMyMemberships, getOrganiza
 import { listMembers, inviteMember, updateMemberRole, removeMember } from './members';
 import { getIdentityProvider, setIdentityProvider, handleResolveIdentityProviderForAuth } from './identity-providers';
 import { listPaymentCredentials, setPaymentCredential } from './payment-credentials';
+import { getSmtpCredentials, setSmtpCredentials, testSmtpCredentials } from './smtp-credentials';
 
 // Handles every /organizations/* path. Returns null for anything it doesn't
 // recognize, so the caller (the main router) can fall through to its own
@@ -69,6 +70,19 @@ export async function dispatchOrganizationsRoute(request: Request, env: Env, pat
   const credMatch = pathname.match(/^\/organizations\/([^/]+)\/payment-credentials\/([^/]+)$/);
   if (credMatch && request.method === 'PUT') {
     return setPaymentCredential(request, env, credMatch[1], credMatch[2]);
+  }
+
+  // Checked before the plain /smtp-credentials match below.
+  const smtpTestMatch = pathname.match(/^\/organizations\/([^/]+)\/smtp-credentials\/test$/);
+  if (smtpTestMatch && request.method === 'POST') {
+    return testSmtpCredentials(request, env, smtpTestMatch[1]);
+  }
+
+  const smtpMatch = pathname.match(/^\/organizations\/([^/]+)\/smtp-credentials$/);
+  if (smtpMatch) {
+    if (request.method === 'GET') return getSmtpCredentials(request, env, smtpMatch[1]);
+    if (request.method === 'PUT') return setSmtpCredentials(request, env, smtpMatch[1]);
+    return null;
   }
 
   return null;

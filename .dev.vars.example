@@ -30,3 +30,14 @@ MAILER_LOCAL_URL=http://localhost:8792
 # own MAILER_INTERNAL_KEY.
 MAILER_INTERNAL_KEY=change-me-to-a-long-random-value
 
+# Seeds the platform-default SMTP account the first time it's needed (see
+# organizations/smtp-credentials.ts ensureDefaultSmtpCredentials) — a
+# personal Gmail account + app password works fine. Consumed once; can be
+# left unset if you don't need to test sending locally.
+DEFAULT_SMTP_HOST=smtp.gmail.com
+DEFAULT_SMTP_PORT=587
+DEFAULT_SMTP_USER=
+DEFAULT_SMTP_PASS=
+DEFAULT_SMTP_FROM_ADDRESS=
+DEFAULT_SMTP_FROM_NAME=Questo
+

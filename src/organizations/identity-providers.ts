@@ -12,8 +12,8 @@ import type { Env } from '../env';
 import { json } from '../http';
 import { extractCaller, requireOrgRole } from './auth';
 import { getOrgDataKey } from './organizations';
-import { encryptWithKey, decryptWithKey, generateDataKey, wrapDataKey } from './crypto';
-import { resolveOidcDiscovery, DEFAULT_ORG_ID, type OidcEndpoints } from './idp-resolution';
+import { encryptWithKey, decryptWithKey } from './crypto';
+import { resolveOidcDiscovery, ensureDefaultOrganizationRow, DEFAULT_ORG_ID, type OidcEndpoints } from './idp-resolution';
 import type { IdentityProviderRow } from './types';
 
 // Never returns the decrypted client secret — only whether one is set.
@@ -147,21 +147,13 @@ export async function ensureDefaultOrganization(env: Env): Promise<void> {
     throw new Error('DEFAULT_IDP_ISSUER_URL is unreachable, or missing device_authorization_endpoint');
   }
 
+  await ensureDefaultOrganizationRow(env);
   const now = new Date().toISOString();
-  const dek = generateDataKey();
-  const wrapped = await wrapDataKey(dek, env.ENCRYPTION_KEY);
 
-  await env.DB.prepare(
-    `INSERT INTO organizations (id, name, logo_url, theme, dek_ciphertext, dek_iv, created_at, created_by_sub)
-     VALUES (?, ?, NULL, NULL, ?, ?, ?, ?)
-     ON CONFLICT(id) DO NOTHING`
-  )
-    .bind(DEFAULT_ORG_ID, 'Platform default', wrapped.ciphertext, wrapped.iv, now, 'system')
-    .run();
-
-  // Re-read whichever DEK actually won the insert above — never assume it
-  // was ours, so a concurrent first call can't encrypt the secret below
-  // under a DEK that doesn't match the org row that ended up persisted.
+  // Re-read whichever DEK actually won the row-creation above — never
+  // assume it was ours, so a concurrent first call can't encrypt the
+  // secret below under a DEK that doesn't match the org row that ended up
+  // persisted.
   const actualDek = await getOrgDataKey(env, DEFAULT_ORG_ID);
   if (!actualDek) throw new Error('Failed to seed default organization');
 

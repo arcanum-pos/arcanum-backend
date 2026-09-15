@@ -1,16 +1,33 @@
 // Outbound email lives in a separate Worker (questo-mail) — a raw-TCP SMTP
 // client is a different kind of thing from an HTTP request handler, kept
-// apart on purpose (same reasoning as questo-devicehub's own split). This
-// module only ever asks it to send a fully-rendered email; content/business
-// logic (what an invite email says) stays here in `worker`.
+// apart on purpose (same reasoning as questo-devicehub's own split).
+// questo-mail holds no SMTP secrets of its own — it's a pure transport:
+// every send carries the full connection details for whichever org's
+// config resolved (see organizations/smtp-credentials.ts), so each org can
+// genuinely bring its own SMTP account rather than everything going out
+// under one platform-wide identity.
 import type { Env } from './env';
 
-interface SendEmailRequest {
+// Defined here (the consumer) rather than in organizations/smtp-credentials.ts
+// (the producer) so that file can import this type from here — the reverse
+// would cycle, since it also imports sendEmail from here for
+// testSmtpCredentials.
+export interface ResolvedSmtpCredentials {
+  host: string;
+  port: number;
+  username: string;
+  password: string;
+  fromAddress: string;
+  fromName: string | null;
+}
+
+export interface SendEmailRequest {
   to: string | string[];
   subject: string;
   text?: string;
   html?: string;
   fromName?: string;
+  credentials: ResolvedSmtpCredentials;
 }
 
 function internalKeyHeader(env: Env): Record<string, string> {
@@ -30,20 +47,20 @@ async function callMailer(env: Env, path: string, init: RequestInit): Promise<Re
   return env.MAILER_SERVICE.fetch(`https://questo-mail${path}`, { ...init, headers });
 }
 
-// Best-effort, matching devicehub-client.ts's broadcastPaymentEvent: a
-// failure here must never fail whatever real action (e.g. creating an
-// invite) triggered it — worst case, nobody gets emailed and the admin
-// has to tell them out of band, exactly like before this existed.
+// Throws on failure — deliberately, unlike questo-devicehub's own
+// broadcastPaymentEvent. Whether a failed send should be best-effort
+// (inviteMember: never fail invite creation just because email didn't go
+// out) or surfaced (testSmtpCredentials: the whole point is telling the
+// admin it didn't work) depends on the caller, not on this function —
+// so each call site wraps this itself instead of the error being silently
+// swallowed here for everyone.
 export async function sendEmail(env: Env, request: SendEmailRequest): Promise<void> {
-  try {
-    const res = await callMailer(env, '/send', {
-      method: 'POST',
-      body: JSON.stringify(request),
-    });
-    if (!res.ok) {
-      console.error('questo-mail returned an error', res.status, await res.text().catch(() => ''));
-    }
-  } catch (err) {
-    console.error('Kon questo-mail niet bereiken', err);
+  const res = await callMailer(env, '/send', {
+    method: 'POST',
+    body: JSON.stringify(request),
+  });
+  if (!res.ok) {
+    const details = await res.text().catch(() => '');
+    throw new Error(`questo-mail returned ${res.status}: ${details}`);
   }
 }

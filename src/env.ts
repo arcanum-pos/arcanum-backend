@@ -42,4 +42,15 @@ export interface Env {
   // to force a specific enterprise connection) — most providers leave this
   // unset.
   DEFAULT_IDP_CONNECTION_NAME?: string;
+  // Seeds the platform-default SMTP account (the fallback used by any org
+  // that hasn't configured its own) — see organizations/smtp-credentials.ts
+  // `ensureDefaultSmtpCredentials`. Consumed only once, at first seed; safe
+  // to remove afterward. A personal Gmail account + an app password works
+  // fine (smtp.gmail.com, port 587).
+  DEFAULT_SMTP_HOST?: string;
+  DEFAULT_SMTP_PORT?: string;
+  DEFAULT_SMTP_USER?: string;
+  DEFAULT_SMTP_PASS?: string;
+  DEFAULT_SMTP_FROM_ADDRESS?: string;
+  DEFAULT_SMTP_FROM_NAME?: string;
 }

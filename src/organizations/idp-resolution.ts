@@ -1,13 +1,42 @@
-// Dependency-light identity-provider resolution helpers, shared by the admin
-// CRUD (identity-providers.ts) and invite reconciliation (members.ts).
-// Deliberately separate from identity-providers.ts: that file depends on
+// Dependency-light resolution helpers shared across org-scoped config types
+// (identity providers, SMTP credentials) and invite reconciliation
+// (invite-reconciliation.ts). Deliberately separate from
+// identity-providers.ts / smtp-credentials.ts: those depend on
 // organizations.ts (for DEK unwrapping), and organizations.ts depends on
-// members.ts (for reconcilePendingInvites) — so members.ts must not depend
-// on identity-providers.ts, or the import graph cycles.
+// invite-reconciliation.ts — so that file must not depend on either of
+// those, or the import graph cycles. (members.ts itself is fine to depend
+// on organizations.ts/smtp-credentials.ts — it's invite-reconciliation.ts,
+// split out specifically to avoid this, that can't.)
 import type { Env } from '../env';
 import type { IdentityProviderRow } from './types';
+import { generateDataKey, wrapDataKey } from './crypto';
 
 export const DEFAULT_ORG_ID = 'default';
+
+// Idempotent: creates the platform-default organization row (with its own
+// DEK) the first time anything needs it. Shared by identity-providers.ts
+// and smtp-credentials.ts — both attach org-scoped, DEK-encrypted config
+// to this same 'default' org, so both need the row to exist before they
+// can seed their own config onto it. Safe under concurrent first-calls
+// (ON CONFLICT DO NOTHING); callers that go on to encrypt something for
+// this org should re-read whichever DEK actually won via getOrgDataKey
+// rather than assuming it was the one generated here.
+export async function ensureDefaultOrganizationRow(env: Env): Promise<void> {
+  const existing = await env.DB.prepare('SELECT id FROM organizations WHERE id = ?').bind(DEFAULT_ORG_ID).first();
+  if (existing) return;
+
+  const now = new Date().toISOString();
+  const dek = generateDataKey();
+  const wrapped = await wrapDataKey(dek, env.ENCRYPTION_KEY);
+
+  await env.DB.prepare(
+    `INSERT INTO organizations (id, name, logo_url, theme, dek_ciphertext, dek_iv, created_at, created_by_sub)
+     VALUES (?, ?, NULL, NULL, ?, ?, ?, ?)
+     ON CONFLICT(id) DO NOTHING`
+  )
+    .bind(DEFAULT_ORG_ID, 'Platform default', wrapped.ciphertext, wrapped.iv, now, 'system')
+    .run();
+}
 
 export interface OidcEndpoints {
   authorization_endpoint: string;

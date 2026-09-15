@@ -1,7 +1,7 @@
 import type { Env } from '../env';
 import { json } from '../http';
 import { extractCaller, requireOrgRole } from './auth';
-import { reconcilePendingInvites } from './members';
+import { reconcilePendingInvites } from './invite-reconciliation';
 import { generateDataKey, wrapDataKey, unwrapDataKey } from './crypto';
 import type { OrganizationRow } from './types';
 

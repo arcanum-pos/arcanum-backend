@@ -57,3 +57,15 @@ export interface PaymentProviderCredentialRow {
   config_iv: string;
   updated_at: string;
 }
+
+export interface SmtpCredentialRow {
+  org_id: string;
+  host: string | null;
+  port: number | null;
+  username: string | null;
+  password_ciphertext: string | null;
+  password_iv: string | null;
+  from_address: string | null;
+  from_name: string | null;
+  updated_at: string;
+}

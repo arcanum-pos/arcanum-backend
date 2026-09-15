@@ -95,6 +95,23 @@ CREATE TABLE IF NOT EXISTS payment_provider_credentials (
   PRIMARY KEY (org_id, provider)
 );
 
+-- Per-org outbound email account (see organizations/smtp-credentials.ts) —
+-- an org that hasn't set its own falls back to the 'default' org's config,
+-- same pattern as identity_providers. Plain columns for everything but the
+-- password (shown back to the admin for editing, like identity_providers'
+-- issuer_url/client_id), one encrypted column pair for the password itself.
+CREATE TABLE IF NOT EXISTS smtp_credentials (
+  org_id TEXT PRIMARY KEY REFERENCES organizations(id),
+  host TEXT,
+  port INTEGER,
+  username TEXT,
+  password_ciphertext TEXT,
+  password_iv TEXT,
+  from_address TEXT,
+  from_name TEXT,
+  updated_at TEXT NOT NULL
+);
+
 -- Unified in-flight payment tracking — cash, SumUp, and Bancontact all share
 -- this one table now (previously: SumUp used a Durable Object, Bancontact
 -- tracked nothing server-side at all, the browser polled Bancontact's API
