@@ -17,7 +17,7 @@
 	},
 	"vars": {
 		"AUTH_SCHEME": "Bearer",
-		"PUBLIC_BASE_URL": "https://elewijtsepijl.esvvzw.be"
+		"PUBLIC_BASE_URL": "https://questo.kaboutersoft.be"
 	},
 	"services": [
 		{
