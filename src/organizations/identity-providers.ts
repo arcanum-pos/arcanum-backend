@@ -11,7 +11,7 @@
 import type { Env } from '../env';
 import { json } from '../http';
 import { extractCaller, requireOrgRole } from './auth';
-import { getOrgDataKey } from './organizations';
+import { getOrgDataKey, resolveOrgIdOrSlug } from './organizations';
 import { encryptWithKey, decryptWithKey } from './crypto';
 import { resolveOidcDiscovery, ensureDefaultOrganizationRow, DEFAULT_ORG_ID, type OidcEndpoints } from './idp-resolution';
 import type { IdentityProviderRow } from './types';
@@ -281,10 +281,17 @@ function hasValidInternalKey(request: Request, env: Env): boolean {
 }
 
 // HTTP wrapper for resolveIdentityProviderForAuth — see router.ts for the
-// route wiring.
-export async function handleResolveIdentityProviderForAuth(request: Request, env: Env, orgId: string): Promise<Response> {
+// route wiring. `orgIdOrSlug` is exactly that: the path segment questo-bff
+// forwards from a /login or /device URL, which an admin may have shared as
+// either the raw org id or the org's own slug (Settings > Authentication's
+// "aanmeldlink") — resolve it to the real id first. Falls through to the
+// raw value if it matches neither (e.g. 'default', or a stale/unknown id),
+// leaving resolveIdentityProviderForAuth's own fallback-to-default and
+// not-found handling unchanged.
+export async function handleResolveIdentityProviderForAuth(request: Request, env: Env, orgIdOrSlug: string): Promise<Response> {
   if (!hasValidInternalKey(request, env)) return json({ error: 'Unauthorized' }, 401);
 
+  const orgId = (await resolveOrgIdOrSlug(env, orgIdOrSlug)) ?? orgIdOrSlug;
   const resolved = await resolveIdentityProviderForAuth(env, orgId);
   if (!resolved) return json({ error: 'No identity provider configured' }, 404);
   return json(resolved);

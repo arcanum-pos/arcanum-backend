@@ -52,6 +52,12 @@ CREATE TABLE IF NOT EXISTS organizations (
   name TEXT NOT NULL,
   logo_url TEXT,
   theme TEXT,
+  -- Optional, admin-settable short identifier (see organizations.ts's
+  -- SLUG_RE) so device/login links can read e.g. "/scouts-elewijt/device"
+  -- instead of the raw id. Nullable — a NULL slug never conflicts with
+  -- another NULL under SQLite's unique-index semantics, so orgs without
+  -- one just keep using their UUID.
+  slug TEXT,
   -- Envelope encryption: this org's own AES-256 data key, wrapped (encrypted)
   -- with the platform-wide ENCRYPTION_KEY secret. Never stored unwrapped.
   dek_ciphertext TEXT NOT NULL,
@@ -59,6 +65,7 @@ CREATE TABLE IF NOT EXISTS organizations (
   created_at TEXT NOT NULL,
   created_by_sub TEXT NOT NULL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_organizations_slug ON organizations(slug);
 
 CREATE TABLE IF NOT EXISTS memberships (
   id TEXT PRIMARY KEY,

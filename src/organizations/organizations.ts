@@ -11,8 +11,27 @@ function rowToOrganization(row: OrganizationRow) {
     name: row.name,
     logoUrl: row.logo_url,
     theme: row.theme,
+    slug: row.slug,
     createdAt: row.created_at,
   };
+}
+
+// Lowercase, hyphen-separated, 1-50 chars — deliberately conservative (no
+// leading/trailing/double hyphens) since this ends up in a URL path segment
+// that's handed out as a login/device link.
+const SLUG_RE = /^[a-z0-9]([a-z0-9-]{0,48}[a-z0-9])?$/;
+
+// Used by identity-providers.ts's pre-auth resolve endpoint: the one place
+// a slug (rather than the real id) can show up in a URL, since that's what
+// the "aanmeldlink" in Settings > Authentication hands out. Everywhere else
+// in the admin API, orgId always comes from the org list (real ids only),
+// so nothing else needs this.
+export async function resolveOrgIdOrSlug(env: Env, idOrSlug: string): Promise<string | null> {
+  const byId = await env.DB.prepare('SELECT id FROM organizations WHERE id = ?').bind(idOrSlug).first<{ id: string }>();
+  if (byId) return byId.id;
+
+  const bySlug = await env.DB.prepare('SELECT id FROM organizations WHERE slug = ?').bind(idOrSlug).first<{ id: string }>();
+  return bySlug?.id ?? null;
 }
 
 export async function createOrganization(request: Request, env: Env): Promise<Response> {
@@ -107,7 +126,7 @@ export async function updateBranding(request: Request, env: Env, orgId: string):
   const membership = await requireOrgRole(env, orgId, caller, ['admin']);
   if (!membership) return json({ error: 'Forbidden' }, 403);
 
-  const body = (await request.json().catch(() => ({}))) as { name?: string; logoUrl?: string; theme?: string };
+  const body = (await request.json().catch(() => ({}))) as { name?: string; logoUrl?: string; theme?: string; slug?: string };
   const updates: string[] = [];
   const values: unknown[] = [];
 
@@ -123,6 +142,21 @@ export async function updateBranding(request: Request, env: Env, orgId: string):
   if (body.theme !== undefined) {
     updates.push('theme = ?');
     values.push(body.theme || null);
+  }
+  if (body.slug !== undefined) {
+    const slug = body.slug.trim().toLowerCase();
+    if (!slug) {
+      // Explicitly clearing it — falls back to the UUID-only link again.
+      updates.push('slug = NULL');
+    } else {
+      if (!SLUG_RE.test(slug)) {
+        return json({ error: 'Slug mag alleen kleine letters, cijfers en koppeltekens bevatten (geen koppelteken aan begin/eind)' }, 400);
+      }
+      const clash = await env.DB.prepare('SELECT id FROM organizations WHERE slug = ? AND id != ?').bind(slug, orgId).first();
+      if (clash) return json({ error: 'Deze slug is al in gebruik door een andere organisatie' }, 409);
+      updates.push('slug = ?');
+      values.push(slug);
+    }
   }
   if (updates.length === 0) return json({ error: 'Nothing to update' }, 400);
 

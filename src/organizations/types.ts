@@ -15,6 +15,7 @@ export interface OrganizationRow {
   name: string;
   logo_url: string | null;
   theme: string | null;
+  slug: string | null;
   dek_ciphertext: string;
   dek_iv: string;
   created_at: string;
