@@ -193,22 +193,55 @@ export interface ResolvedIdpSettings {
   endpoints: OidcEndpoints;
 }
 
+// A plain `row is IdentityProviderRow` predicate wouldn't narrow the
+// individual nullable fields below to non-null — this explicit shape does,
+// so the rest of resolveIdentityProviderForAuth can use them without `!`.
+type CompleteIdentityProviderRow = IdentityProviderRow & {
+  issuer_url: string;
+  client_id: string;
+  client_secret_ciphertext: string;
+  client_secret_iv: string;
+  authorization_endpoint: string;
+  token_endpoint: string;
+  userinfo_endpoint: string;
+  device_authorization_endpoint: string;
+};
+
+function isCompleteRow(row: IdentityProviderRow | null | undefined): row is CompleteIdentityProviderRow {
+  return Boolean(
+    row?.issuer_url &&
+      row.client_id &&
+      row.client_secret_ciphertext &&
+      row.client_secret_iv &&
+      row.authorization_endpoint &&
+      row.token_endpoint &&
+      row.userinfo_endpoint &&
+      row.device_authorization_endpoint
+  );
+}
+
 // Resolves the settings questo-bff needs to actually drive a login for
 // orgId — that org's own configured IdP if it has one, otherwise the
 // platform default's. The one place the plaintext client secret leaves
 // the DB.
+//
+// Checks this org's own config *before* touching the default at all — an
+// org with a fully configured IdP of its own must never fail just because
+// the platform-wide default hasn't been seeded yet (or is misconfigured).
+// ensureDefaultOrganization is only called, and only allowed to throw, on
+// the fallback path (mirrors the same fix in smtp-credentials.ts's
+// resolveSmtpCredentialsForSend — found as a real bug there first).
 export async function resolveIdentityProviderForAuth(env: Env, orgId: string): Promise<ResolvedIdpSettings | null> {
-  await ensureDefaultOrganization(env);
-
   let row = await env.DB.prepare('SELECT * FROM identity_providers WHERE org_id = ?').bind(orgId).first<IdentityProviderRow>();
   let effectiveOrgId = orgId;
-  if (!row?.issuer_url) {
+
+  if (!isCompleteRow(row)) {
+    await ensureDefaultOrganization(env);
     row = await env.DB.prepare('SELECT * FROM identity_providers WHERE org_id = ?').bind(DEFAULT_ORG_ID).first<IdentityProviderRow>();
     effectiveOrgId = DEFAULT_ORG_ID;
   }
 
-  if (!row || !row.issuer_url || !row.client_id || !row.client_secret_ciphertext || !row.client_secret_iv) return null;
-  if (!row.authorization_endpoint || !row.token_endpoint || !row.userinfo_endpoint || !row.device_authorization_endpoint) return null;
+  if (!isCompleteRow(row)) return null;
 
   const dek = await getOrgDataKey(env, effectiveOrgId);
   if (!dek) return null;

@@ -142,6 +142,22 @@ export async function ensureDefaultSmtpCredentials(env: Env): Promise<void> {
     .run();
 }
 
+// A plain `row is SmtpCredentialRow` predicate wouldn't narrow the
+// individual nullable fields below to non-null — this explicit shape does,
+// so the rest of resolveSmtpCredentialsForSend can use them without `!`.
+type CompleteSmtpCredentialRow = SmtpCredentialRow & {
+  host: string;
+  port: number;
+  username: string;
+  password_ciphertext: string;
+  password_iv: string;
+  from_address: string;
+};
+
+function isCompleteRow(row: SmtpCredentialRow | null | undefined): row is CompleteSmtpCredentialRow {
+  return Boolean(row?.host && row?.port && row?.username && row?.password_ciphertext && row?.password_iv && row?.from_address);
+}
+
 // Resolves what worker's mailer-client needs to actually send for orgId —
 // that org's own SMTP account if it has one, otherwise the platform
 // default's. The one place the plaintext password leaves the DB. Called
@@ -149,19 +165,23 @@ export async function ensureDefaultSmtpCredentials(env: Env): Promise<void> {
 // identity-provider resolution, the caller here (worker itself, via
 // inviteMember/testSmtpCredentials) already owns this D1 database, so
 // there's no cross-Worker hop to gate.
+//
+// Checks this org's own config *before* touching the default at all — an
+// org with a fully configured account of its own must never fail just
+// because the platform-wide default hasn't been seeded yet (or is
+// misconfigured). ensureDefaultSmtpCredentials is only called, and only
+// allowed to throw, on the fallback path.
 export async function resolveSmtpCredentialsForSend(env: Env, orgId: string): Promise<ResolvedSmtpCredentials | null> {
-  await ensureDefaultSmtpCredentials(env);
-
   let row = await env.DB.prepare('SELECT * FROM smtp_credentials WHERE org_id = ?').bind(orgId).first<SmtpCredentialRow>();
   let effectiveOrgId = orgId;
-  if (!row?.host) {
+
+  if (!isCompleteRow(row)) {
+    await ensureDefaultSmtpCredentials(env);
     row = await env.DB.prepare('SELECT * FROM smtp_credentials WHERE org_id = ?').bind(DEFAULT_ORG_ID).first<SmtpCredentialRow>();
     effectiveOrgId = DEFAULT_ORG_ID;
   }
 
-  if (!row || !row.host || !row.port || !row.username || !row.password_ciphertext || !row.password_iv || !row.from_address) {
-    return null;
-  }
+  if (!isCompleteRow(row)) return null;
 
   const dek = await getOrgDataKey(env, effectiveOrgId);
   if (!dek) return null;
@@ -192,7 +212,15 @@ export async function testSmtpCredentials(request: Request, env: Env, orgId: str
   const membership = await requireOrgRole(env, orgId, caller, ['admin']);
   if (!membership) return json({ error: 'Forbidden' }, 403);
 
-  const credentials = await resolveSmtpCredentialsForSend(env, orgId);
+  let credentials;
+  try {
+    credentials = await resolveSmtpCredentialsForSend(env, orgId);
+  } catch (err) {
+    // Only reachable via the fallback-to-default path (see resolveSmtpCredentialsForSend) —
+    // this org has no complete config of its own, and the platform default
+    // isn't configured either.
+    return json({ error: 'Geen platform-standaard SMTP-account geconfigureerd', details: (err as Error).message }, 404);
+  }
   if (!credentials) return json({ error: 'No SMTP account configured (and no platform default either)' }, 404);
 
   try {
