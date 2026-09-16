@@ -7,11 +7,10 @@
 // genuinely bring its own SMTP account rather than everything going out
 // under one platform-wide identity.
 import type { Env } from './env';
+import type { ResolvedGmailApiCredentials } from './organizations/gmail-api-credentials';
 
 // Defined here (the consumer) rather than in organizations/smtp-credentials.ts
-// (the producer) so that file can import this type from here — the reverse
-// would cycle, since it also imports sendEmail from here for
-// testSmtpCredentials.
+// (the producer) so that file can import this type from here.
 export interface ResolvedSmtpCredentials {
   host: string;
   port: number;
@@ -21,14 +20,21 @@ export interface ResolvedSmtpCredentials {
   fromName: string | null;
 }
 
-export interface SendEmailRequest {
+interface MailMessage {
   to: string | string[];
   subject: string;
   text?: string;
   html?: string;
   fromName?: string;
-  credentials: ResolvedSmtpCredentials;
 }
+
+// Tagged by provider so questo-mail knows which adapter to use — see
+// organizations/mail.ts, the one place this gets constructed. SMTP and the
+// Gmail API need entirely different credentials (a host/port/password vs a
+// service account + impersonated user), so this can't be one flat shape.
+export type SendEmailRequest =
+  | (MailMessage & { provider: 'smtp'; credentials: ResolvedSmtpCredentials })
+  | (MailMessage & { provider: 'gmail_api'; credentials: ResolvedGmailApiCredentials });
 
 function internalKeyHeader(env: Env): Record<string, string> {
   return { Authorization: `Bearer ${env.MAILER_INTERNAL_KEY}` };

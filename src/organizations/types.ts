@@ -70,3 +70,26 @@ export interface SmtpCredentialRow {
   from_name: string | null;
   updated_at: string;
 }
+
+export type MailProvider = 'smtp' | 'gmail_api';
+
+export interface MailProviderRow {
+  org_id: string;
+  provider: MailProvider;
+  updated_at: string;
+}
+
+// Domain-wide-delegated service account: client_email + private_key sign a
+// short-lived JWT (see questo-mail/src/mailer/gmail-api.ts), exchanged for
+// an OAuth2 access token, then used to call the Gmail API impersonating
+// impersonated_user. No SMTP, no DNS/SPF/DKIM changes — Google's own
+// already-authorized sending path for the domain.
+export interface GmailApiCredentialRow {
+  org_id: string;
+  client_email: string | null;
+  private_key_ciphertext: string | null;
+  private_key_iv: string | null;
+  impersonated_user: string | null;
+  from_name: string | null;
+  updated_at: string;
+}

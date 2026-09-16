@@ -1,9 +1,8 @@
 import type { Env } from '../env';
 import { json } from '../http';
-import { sendEmail } from '../mailer-client';
 import { buildInviteEmail } from '../email-templates/invite';
 import { extractCaller, requireOrgRole } from './auth';
-import { resolveSmtpCredentialsForSend } from './smtp-credentials';
+import { sendOrgEmail } from './mail';
 import type { MembershipRow, OrgRole } from './types';
 
 const VALID_ROLES = new Set<OrgRole>(['admin', 'cashier']);
@@ -59,15 +58,15 @@ export async function inviteMember(request: Request, env: Env, orgId: string): P
 
   const row = await env.DB.prepare('SELECT * FROM memberships WHERE id = ?').bind(id).first<MembershipRow>();
 
-  // Best-effort: a broken SMTP config (this org's own, or the platform
-  // default's) must never fail invite creation itself — worst case, the
-  // admin has to tell them out of band, exactly like before this existed.
+  // Best-effort: a broken mail config (this org's own, or the platform
+  // default's, whichever transport is active) must never fail invite
+  // creation itself — worst case, the admin has to tell them out of band,
+  // exactly like before this existed.
   try {
     const org = await env.DB.prepare('SELECT name FROM organizations WHERE id = ?').bind(orgId).first<{ name: string }>();
-    const credentials = await resolveSmtpCredentialsForSend(env, orgId);
-    if (org && credentials) {
+    if (org) {
       const content = buildInviteEmail({ orgName: org.name, role, loginUrl: `${env.PUBLIC_BASE_URL}/login` });
-      await sendEmail(env, { to: email, ...content, credentials });
+      await sendOrgEmail(env, orgId, { to: email, ...content });
     }
   } catch (err) {
     console.error('Kon uitnodigingsmail niet versturen', err);

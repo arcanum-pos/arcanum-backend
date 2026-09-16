@@ -3,13 +3,14 @@
 // config if it has one, otherwise the 'default' org's, encrypted with each
 // org's own DEK. Unlike an OIDC issuer, there's no cheap "discovery"
 // request to validate SMTP credentials against at save time — that's what
-// the explicit test-send action (testSmtpCredentials) is for, not a gate
-// on saving.
+// the explicit test-send action (mail.ts's testMailConfiguration) is for,
+// not a gate on saving. This is one of two transports an org can pick
+// between — see mail-provider.ts and gmail-api-credentials.ts for the other.
 import type { Env } from '../env';
 import { json } from '../http';
 import { extractCaller, requireOrgRole } from './auth';
 import { getOrgDataKey } from './organizations';
-import { sendEmail, type ResolvedSmtpCredentials } from '../mailer-client';
+import type { ResolvedSmtpCredentials } from '../mailer-client';
 import { encryptWithKey, decryptWithKey } from './crypto';
 import { ensureDefaultOrganizationRow, DEFAULT_ORG_ID } from './idp-resolution';
 import type { SmtpCredentialRow } from './types';
@@ -196,43 +197,4 @@ export async function resolveSmtpCredentialsForSend(env: Env, orgId: string): Pr
     fromAddress: row.from_address,
     fromName: row.from_name,
   };
-}
-
-// Admin action: sends a real test email to the admin's own address, using
-// whatever SMTP config currently resolves for this org (their own if set,
-// else the platform default's) — the way to actually verify a saved
-// config works, since there's no cheap way to validate SMTP credentials
-// synchronously at save time the way OIDC discovery lets identity-provider
-// config be validated.
-export async function testSmtpCredentials(request: Request, env: Env, orgId: string): Promise<Response> {
-  const caller = extractCaller(request);
-  if (!caller) return json({ error: 'Unauthorized' }, 401);
-  if (!caller.email) return json({ error: 'No email address on your session to send a test to' }, 400);
-
-  const membership = await requireOrgRole(env, orgId, caller, ['admin']);
-  if (!membership) return json({ error: 'Forbidden' }, 403);
-
-  let credentials;
-  try {
-    credentials = await resolveSmtpCredentialsForSend(env, orgId);
-  } catch (err) {
-    // Only reachable via the fallback-to-default path (see resolveSmtpCredentialsForSend) —
-    // this org has no complete config of its own, and the platform default
-    // isn't configured either.
-    return json({ error: 'Geen platform-standaard SMTP-account geconfigureerd', details: (err as Error).message }, 404);
-  }
-  if (!credentials) return json({ error: 'No SMTP account configured (and no platform default either)' }, 404);
-
-  try {
-    await sendEmail(env, {
-      to: caller.email,
-      subject: 'Testmail van Questo',
-      text: 'Als je dit leest, werkt de SMTP-configuratie voor deze organisatie.',
-      html: '<p>Als je dit leest, werkt de SMTP-configuratie voor deze organisatie.</p>',
-      credentials,
-    });
-    return json({ ok: true });
-  } catch (err) {
-    return json({ error: 'Verzenden mislukt', details: (err as Error).message }, 502);
-  }
 }

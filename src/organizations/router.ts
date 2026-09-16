@@ -3,7 +3,10 @@ import { createOrganization, listMyOrganizations, listMyMemberships, getOrganiza
 import { listMembers, inviteMember, updateMemberRole, removeMember } from './members';
 import { getIdentityProvider, setIdentityProvider, handleResolveIdentityProviderForAuth } from './identity-providers';
 import { listPaymentCredentials, setPaymentCredential } from './payment-credentials';
-import { getSmtpCredentials, setSmtpCredentials, testSmtpCredentials } from './smtp-credentials';
+import { getSmtpCredentials, setSmtpCredentials } from './smtp-credentials';
+import { getGmailApiCredentials, setGmailApiCredentials } from './gmail-api-credentials';
+import { getMailProvider, setMailProvider } from './mail-provider';
+import { testMailConfiguration } from './mail';
 import { listEvents, createEvent } from './events';
 
 // Handles every /organizations/* path. Returns null for anything it doesn't
@@ -73,16 +76,32 @@ export async function dispatchOrganizationsRoute(request: Request, env: Env, pat
     return setPaymentCredential(request, env, credMatch[1], credMatch[2]);
   }
 
-  // Checked before the plain /smtp-credentials match below.
-  const smtpTestMatch = pathname.match(/^\/organizations\/([^/]+)\/smtp-credentials\/test$/);
-  if (smtpTestMatch && request.method === 'POST') {
-    return testSmtpCredentials(request, env, smtpTestMatch[1]);
+  // Provider-agnostic — tests whichever transport (SMTP or Gmail API) is
+  // currently active for the org. Checked before the plain /smtp-credentials
+  // match below.
+  const mailTestMatch = pathname.match(/^\/organizations\/([^/]+)\/smtp-credentials\/test$/);
+  if (mailTestMatch && request.method === 'POST') {
+    return testMailConfiguration(request, env, mailTestMatch[1]);
   }
 
   const smtpMatch = pathname.match(/^\/organizations\/([^/]+)\/smtp-credentials$/);
   if (smtpMatch) {
     if (request.method === 'GET') return getSmtpCredentials(request, env, smtpMatch[1]);
     if (request.method === 'PUT') return setSmtpCredentials(request, env, smtpMatch[1]);
+    return null;
+  }
+
+  const gmailApiMatch = pathname.match(/^\/organizations\/([^/]+)\/gmail-api-credentials$/);
+  if (gmailApiMatch) {
+    if (request.method === 'GET') return getGmailApiCredentials(request, env, gmailApiMatch[1]);
+    if (request.method === 'PUT') return setGmailApiCredentials(request, env, gmailApiMatch[1]);
+    return null;
+  }
+
+  const mailProviderMatch = pathname.match(/^\/organizations\/([^/]+)\/mail-provider$/);
+  if (mailProviderMatch) {
+    if (request.method === 'GET') return getMailProvider(request, env, mailProviderMatch[1]);
+    if (request.method === 'PUT') return setMailProvider(request, env, mailProviderMatch[1]);
     return null;
   }
 

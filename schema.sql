@@ -137,6 +137,32 @@ CREATE TABLE IF NOT EXISTS smtp_credentials (
   updated_at TEXT NOT NULL
 );
 
+-- Which outbound mail transport an org uses — 'smtp' (smtp_credentials,
+-- above) or 'gmail_api' (gmail_api_credentials, below). No row means
+-- 'smtp', so this never needs backfilling for existing orgs. See
+-- organizations/mail-provider.ts.
+CREATE TABLE IF NOT EXISTS mail_provider (
+  org_id TEXT PRIMARY KEY REFERENCES organizations(id),
+  provider TEXT NOT NULL DEFAULT 'smtp' CHECK (provider IN ('smtp', 'gmail_api')),
+  updated_at TEXT NOT NULL
+);
+
+-- A domain-wide-delegated Google service account: client_email +
+-- private_key sign a JWT impersonating impersonated_user, exchanged for an
+-- OAuth2 token, then used to call the Gmail API directly — no SMTP socket,
+-- no DNS/SPF/DKIM changes needed, since it's Google's own already-
+-- authorized first-party sending path for the domain. See
+-- organizations/gmail-api-credentials.ts.
+CREATE TABLE IF NOT EXISTS gmail_api_credentials (
+  org_id TEXT PRIMARY KEY REFERENCES organizations(id),
+  client_email TEXT,
+  private_key_ciphertext TEXT,
+  private_key_iv TEXT,
+  impersonated_user TEXT,
+  from_name TEXT,
+  updated_at TEXT NOT NULL
+);
+
 -- Unified in-flight payment tracking — cash, SumUp, and Bancontact all share
 -- this one table now (previously: SumUp used a Durable Object, Bancontact
 -- tracked nothing server-side at all, the browser polled Bancontact's API
