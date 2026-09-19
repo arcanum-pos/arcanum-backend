@@ -117,6 +117,16 @@ export async function removeMember(request: Request, env: Env, orgId: string, me
   const target = await env.DB.prepare('SELECT * FROM memberships WHERE id = ? AND org_id = ?').bind(membershipId, orgId).first<MembershipRow>();
   if (!target) return json({ error: 'Unknown membership' }, 404);
 
+  // Removing your own membership locks you out of this org immediately —
+  // unlike a demotion (still reachable via another admin) or a last-admin
+  // removal, there's no recovery path once your own row is gone. Blocked
+  // unconditionally, regardless of role or how many other admins exist.
+  // issuer+sub together, not sub alone — a bare sub is only unique within
+  // the issuer that minted it (see auth.ts's extractCaller comment).
+  if (target.user_sub === caller.sub && target.issuer === caller.issuer) {
+    return json({ error: 'Cannot remove your own membership' }, 400);
+  }
+
   if (target.role === 'admin' && target.status === 'active') {
     const { results } = await env.DB.prepare(
       "SELECT id FROM memberships WHERE org_id = ? AND role = 'admin' AND status = 'active'"
