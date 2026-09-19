@@ -110,6 +110,13 @@ CREATE TABLE IF NOT EXISTS identity_providers (
   -- for why (not every provider accepts 'offline_access'). NULL uses the
   -- default.
   scopes TEXT,
+  -- Optional override client for the authorization-code flow only (browser
+  -- /login and /:orgId/console) — device grant always uses client_id above.
+  -- See migrations/0008_auth_code_client.sql for why (Google requires a
+  -- separate OAuth client per flow; Auth0 doesn't).
+  auth_code_client_id TEXT,
+  auth_code_client_secret_ciphertext TEXT,
+  auth_code_client_secret_iv TEXT,
   updated_at TEXT NOT NULL
 );
 

@@ -16,10 +16,19 @@ import { encryptWithKey, decryptWithKey } from './crypto';
 import { resolveOidcDiscovery, ensureDefaultOrganizationRow, DEFAULT_ORG_ID, type OidcEndpoints } from './idp-resolution';
 import type { IdentityProviderRow } from './types';
 
-// Never returns the decrypted client secret — only whether one is set.
+// Never returns a decrypted client secret — only whether one is set.
 function rowToPublicIdp(row: IdentityProviderRow | null) {
   if (!row) {
-    return { connectionName: null, issuerUrl: null, clientId: null, hasClientSecret: false, scopes: null, updatedAt: null };
+    return {
+      connectionName: null,
+      issuerUrl: null,
+      clientId: null,
+      hasClientSecret: false,
+      scopes: null,
+      authCodeClientId: null,
+      hasAuthCodeClientSecret: false,
+      updatedAt: null,
+    };
   }
   return {
     connectionName: row.connection_name,
@@ -27,6 +36,8 @@ function rowToPublicIdp(row: IdentityProviderRow | null) {
     clientId: row.client_id,
     hasClientSecret: Boolean(row.client_secret_ciphertext),
     scopes: row.scopes,
+    authCodeClientId: row.auth_code_client_id,
+    hasAuthCodeClientSecret: Boolean(row.auth_code_client_secret_ciphertext),
     updatedAt: row.updated_at,
   };
 }
@@ -55,6 +66,8 @@ export async function setIdentityProvider(request: Request, env: Env, orgId: str
     clientId?: string;
     clientSecret?: string;
     scopes?: string;
+    authCodeClientId?: string;
+    authCodeClientSecret?: string;
   };
 
   const dek = await getOrgDataKey(env, orgId);
@@ -89,15 +102,23 @@ export async function setIdentityProvider(request: Request, env: Env, orgId: str
     secretIv = encrypted.iv;
   }
 
+  let authCodeSecretCiphertext: string | null = null;
+  let authCodeSecretIv: string | null = null;
+  if (body.authCodeClientSecret) {
+    const encrypted = await encryptWithKey(body.authCodeClientSecret, dek);
+    authCodeSecretCiphertext = encrypted.ciphertext;
+    authCodeSecretIv = encrypted.iv;
+  }
+
   const now = new Date().toISOString();
 
   await env.DB.prepare(
     `INSERT INTO identity_providers (
        org_id, connection_name, issuer_url, client_id, client_secret_ciphertext, client_secret_iv,
        authorization_endpoint, token_endpoint, userinfo_endpoint, device_authorization_endpoint, end_session_endpoint,
-       scopes, updated_at
+       scopes, auth_code_client_id, auth_code_client_secret_ciphertext, auth_code_client_secret_iv, updated_at
      )
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(org_id) DO UPDATE SET
        connection_name = excluded.connection_name,
        issuer_url = excluded.issuer_url,
@@ -110,6 +131,9 @@ export async function setIdentityProvider(request: Request, env: Env, orgId: str
        device_authorization_endpoint = excluded.device_authorization_endpoint,
        end_session_endpoint = excluded.end_session_endpoint,
        scopes = excluded.scopes,
+       auth_code_client_id = excluded.auth_code_client_id,
+       auth_code_client_secret_ciphertext = COALESCE(excluded.auth_code_client_secret_ciphertext, identity_providers.auth_code_client_secret_ciphertext),
+       auth_code_client_secret_iv = COALESCE(excluded.auth_code_client_secret_iv, identity_providers.auth_code_client_secret_iv),
        updated_at = excluded.updated_at`
   )
     .bind(
@@ -125,6 +149,9 @@ export async function setIdentityProvider(request: Request, env: Env, orgId: str
       endpoints?.device_authorization_endpoint ?? existing?.device_authorization_endpoint ?? null,
       endpoints?.end_session_endpoint ?? existing?.end_session_endpoint ?? null,
       body.scopes ?? existing?.scopes ?? null,
+      body.authCodeClientId ?? existing?.auth_code_client_id ?? null,
+      authCodeSecretCiphertext,
+      authCodeSecretIv,
       now
     )
     .run();
@@ -167,9 +194,9 @@ export async function ensureDefaultOrganization(env: Env): Promise<void> {
     `INSERT INTO identity_providers (
        org_id, connection_name, issuer_url, client_id, client_secret_ciphertext, client_secret_iv,
        authorization_endpoint, token_endpoint, userinfo_endpoint, device_authorization_endpoint, end_session_endpoint,
-       scopes, updated_at
+       scopes, auth_code_client_id, auth_code_client_secret_ciphertext, auth_code_client_secret_iv, updated_at
      )
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(org_id) DO NOTHING`
   )
     .bind(
@@ -184,6 +211,9 @@ export async function ensureDefaultOrganization(env: Env): Promise<void> {
       endpoints.userinfo_endpoint,
       endpoints.device_authorization_endpoint,
       endpoints.end_session_endpoint,
+      null,
+      null,
+      null,
       null,
       now
     )
@@ -226,6 +256,8 @@ function isCompleteRow(row: IdentityProviderRow | null | undefined): row is Comp
   );
 }
 
+export type AuthPurpose = 'device' | 'authcode';
+
 // Resolves the settings questo-bff needs to actually drive a login for
 // orgId — that org's own configured IdP if it has one, otherwise the
 // platform default's. The one place the plaintext client secret leaves
@@ -237,7 +269,21 @@ function isCompleteRow(row: IdentityProviderRow | null | undefined): row is Comp
 // ensureDefaultOrganization is only called, and only allowed to throw, on
 // the fallback path (mirrors the same fix in smtp-credentials.ts's
 // resolveSmtpCredentialsForSend — found as a real bug there first).
-export async function resolveIdentityProviderForAuth(env: Env, orgId: string): Promise<ResolvedIdpSettings | null> {
+//
+// `purpose` picks which client the authorization-code flow (browser /login,
+// /:orgId/console) vs. the device grant (/:orgId/device) actually uses: some
+// providers (Google) require a distinct OAuth client per flow — a device
+// grant "TV and Limited Input" client can't do authorization-code, and a
+// "Web application" client can't do the device grant — so an org can
+// register auth_code_client_id/secret as an override, used only when
+// purpose is 'authcode'. Unset (the common case — e.g. Auth0, where one
+// Application does both), or purpose is 'device': always the primary
+// client_id/client_secret.
+export async function resolveIdentityProviderForAuth(
+  env: Env,
+  orgId: string,
+  purpose: AuthPurpose
+): Promise<ResolvedIdpSettings | null> {
   let row = await env.DB.prepare('SELECT * FROM identity_providers WHERE org_id = ?').bind(orgId).first<IdentityProviderRow>();
   let effectiveOrgId = orgId;
 
@@ -252,11 +298,17 @@ export async function resolveIdentityProviderForAuth(env: Env, orgId: string): P
   const dek = await getOrgDataKey(env, effectiveOrgId);
   if (!dek) return null;
 
-  const clientSecret = await decryptWithKey({ ciphertext: row.client_secret_ciphertext, iv: row.client_secret_iv }, dek);
+  const useAuthCodeOverride =
+    purpose === 'authcode' && row.auth_code_client_id && row.auth_code_client_secret_ciphertext && row.auth_code_client_secret_iv;
+
+  const clientId = useAuthCodeOverride ? row.auth_code_client_id! : row.client_id;
+  const clientSecret = useAuthCodeOverride
+    ? await decryptWithKey({ ciphertext: row.auth_code_client_secret_ciphertext!, iv: row.auth_code_client_secret_iv! }, dek)
+    : await decryptWithKey({ ciphertext: row.client_secret_ciphertext, iv: row.client_secret_iv }, dek);
 
   return {
     issuerUrl: row.issuer_url,
-    clientId: row.client_id,
+    clientId,
     clientSecret,
     connectionName: row.connection_name,
     scopes: row.scopes,
@@ -298,8 +350,13 @@ function hasValidInternalKey(request: Request, env: Env): boolean {
 export async function handleResolveIdentityProviderForAuth(request: Request, env: Env, orgIdOrSlug: string): Promise<Response> {
   if (!hasValidInternalKey(request, env)) return json({ error: 'Unauthorized' }, 401);
 
+  const purposeParam = new URL(request.url).searchParams.get('purpose');
+  if (purposeParam !== 'device' && purposeParam !== 'authcode') {
+    return json({ error: "Missing or invalid 'purpose' query param (expected 'device' or 'authcode')" }, 400);
+  }
+
   const orgId = (await resolveOrgIdOrSlug(env, orgIdOrSlug)) ?? orgIdOrSlug;
-  const resolved = await resolveIdentityProviderForAuth(env, orgId);
+  const resolved = await resolveIdentityProviderForAuth(env, orgId, purposeParam);
   if (!resolved) return json({ error: 'No identity provider configured' }, 404);
   return json(resolved);
 }

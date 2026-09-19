@@ -47,6 +47,15 @@ export interface IdentityProviderRow {
   device_authorization_endpoint: string | null;
   end_session_endpoint: string | null;
   scopes: string | null;
+  // Optional override, used only for the authorization-code flow (browser
+  // /login, and /:orgId/console) — the device grant always uses client_id/
+  // client_secret_ciphertext above. Needed because some providers (Google)
+  // require a different OAuth client per flow, unlike Auth0 where one
+  // Application can do both. NULL/unset means "use the fields above for
+  // both flows" — see resolveIdentityProviderForAuth's `purpose` param.
+  auth_code_client_id: string | null;
+  auth_code_client_secret_ciphertext: string | null;
+  auth_code_client_secret_iv: string | null;
   updated_at: string;
 }
 
