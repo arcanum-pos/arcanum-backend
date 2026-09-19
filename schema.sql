@@ -105,6 +105,11 @@ CREATE TABLE IF NOT EXISTS identity_providers (
   userinfo_endpoint TEXT,
   device_authorization_endpoint TEXT,
   end_session_endpoint TEXT,
+  -- Overrides the hardcoded 'openid profile email offline_access' scope
+  -- string sent at login/device-flow time — see migrations/0007_idp_scopes.sql
+  -- for why (not every provider accepts 'offline_access'). NULL uses the
+  -- default.
+  scopes TEXT,
   updated_at TEXT NOT NULL
 );
 

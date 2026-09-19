@@ -19,13 +19,14 @@ import type { IdentityProviderRow } from './types';
 // Never returns the decrypted client secret — only whether one is set.
 function rowToPublicIdp(row: IdentityProviderRow | null) {
   if (!row) {
-    return { connectionName: null, issuerUrl: null, clientId: null, hasClientSecret: false, updatedAt: null };
+    return { connectionName: null, issuerUrl: null, clientId: null, hasClientSecret: false, scopes: null, updatedAt: null };
   }
   return {
     connectionName: row.connection_name,
     issuerUrl: row.issuer_url,
     clientId: row.client_id,
     hasClientSecret: Boolean(row.client_secret_ciphertext),
+    scopes: row.scopes,
     updatedAt: row.updated_at,
   };
 }
@@ -53,6 +54,7 @@ export async function setIdentityProvider(request: Request, env: Env, orgId: str
     issuerUrl?: string;
     clientId?: string;
     clientSecret?: string;
+    scopes?: string;
   };
 
   const dek = await getOrgDataKey(env, orgId);
@@ -93,9 +95,9 @@ export async function setIdentityProvider(request: Request, env: Env, orgId: str
     `INSERT INTO identity_providers (
        org_id, connection_name, issuer_url, client_id, client_secret_ciphertext, client_secret_iv,
        authorization_endpoint, token_endpoint, userinfo_endpoint, device_authorization_endpoint, end_session_endpoint,
-       updated_at
+       scopes, updated_at
      )
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(org_id) DO UPDATE SET
        connection_name = excluded.connection_name,
        issuer_url = excluded.issuer_url,
@@ -107,6 +109,7 @@ export async function setIdentityProvider(request: Request, env: Env, orgId: str
        userinfo_endpoint = excluded.userinfo_endpoint,
        device_authorization_endpoint = excluded.device_authorization_endpoint,
        end_session_endpoint = excluded.end_session_endpoint,
+       scopes = excluded.scopes,
        updated_at = excluded.updated_at`
   )
     .bind(
@@ -121,6 +124,7 @@ export async function setIdentityProvider(request: Request, env: Env, orgId: str
       endpoints?.userinfo_endpoint ?? existing?.userinfo_endpoint ?? null,
       endpoints?.device_authorization_endpoint ?? existing?.device_authorization_endpoint ?? null,
       endpoints?.end_session_endpoint ?? existing?.end_session_endpoint ?? null,
+      body.scopes ?? existing?.scopes ?? null,
       now
     )
     .run();
@@ -163,9 +167,9 @@ export async function ensureDefaultOrganization(env: Env): Promise<void> {
     `INSERT INTO identity_providers (
        org_id, connection_name, issuer_url, client_id, client_secret_ciphertext, client_secret_iv,
        authorization_endpoint, token_endpoint, userinfo_endpoint, device_authorization_endpoint, end_session_endpoint,
-       updated_at
+       scopes, updated_at
      )
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(org_id) DO NOTHING`
   )
     .bind(
@@ -180,6 +184,7 @@ export async function ensureDefaultOrganization(env: Env): Promise<void> {
       endpoints.userinfo_endpoint,
       endpoints.device_authorization_endpoint,
       endpoints.end_session_endpoint,
+      null,
       now
     )
     .run();
@@ -190,6 +195,7 @@ export interface ResolvedIdpSettings {
   clientId: string;
   clientSecret: string;
   connectionName: string | null;
+  scopes: string | null;
   endpoints: OidcEndpoints;
 }
 
@@ -253,6 +259,7 @@ export async function resolveIdentityProviderForAuth(env: Env, orgId: string): P
     clientId: row.client_id,
     clientSecret,
     connectionName: row.connection_name,
+    scopes: row.scopes,
     endpoints: {
       authorization_endpoint: row.authorization_endpoint,
       token_endpoint: row.token_endpoint,

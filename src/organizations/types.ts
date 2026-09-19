@@ -46,6 +46,7 @@ export interface IdentityProviderRow {
   userinfo_endpoint: string | null;
   device_authorization_endpoint: string | null;
   end_session_endpoint: string | null;
+  scopes: string | null;
   updated_at: string;
 }
 
