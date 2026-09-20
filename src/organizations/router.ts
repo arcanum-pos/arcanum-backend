@@ -8,6 +8,7 @@ import { getGmailApiCredentials, setGmailApiCredentials } from './gmail-api-cred
 import { getMailProvider, setMailProvider } from './mail-provider';
 import { testMailConfiguration } from './mail';
 import { listEvents, createEvent } from './events';
+import { getCustomDomain, setCustomDomain, verifyCustomDomain, removeCustomDomain } from './custom-domain';
 
 // Handles every /organizations/* path. Returns null for anything it doesn't
 // recognize, so the caller (the main router) can fall through to its own
@@ -34,6 +35,19 @@ export async function dispatchOrganizationsRoute(request: Request, env: Env, pat
   const brandingMatch = pathname.match(/^\/organizations\/([^/]+)\/branding$/);
   if (brandingMatch && request.method === 'PATCH') {
     return updateBranding(request, env, brandingMatch[1]);
+  }
+
+  const customDomainVerifyMatch = pathname.match(/^\/organizations\/([^/]+)\/custom-domain\/verify$/);
+  if (customDomainVerifyMatch && request.method === 'POST') {
+    return verifyCustomDomain(request, env, customDomainVerifyMatch[1]);
+  }
+
+  const customDomainMatch = pathname.match(/^\/organizations\/([^/]+)\/custom-domain$/);
+  if (customDomainMatch) {
+    if (request.method === 'GET') return getCustomDomain(request, env, customDomainMatch[1]);
+    if (request.method === 'PUT') return setCustomDomain(request, env, customDomainMatch[1]);
+    if (request.method === 'DELETE') return removeCustomDomain(request, env, customDomainMatch[1]);
+    return null;
   }
 
   const membersMatch = pathname.match(/^\/organizations\/([^/]+)\/members$/);

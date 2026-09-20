@@ -20,6 +20,15 @@ export interface OrganizationRow {
   dek_iv: string;
   created_at: string;
   created_by_sub: string;
+  // See organizations/custom-domain.ts. custom_domain_cf_id is Cloudflare's
+  // Custom Hostname id (needed to poll/delete it) — never shown to the
+  // admin. custom_domain_status/ssl_status mirror Cloudflare's own
+  // `status`/`ssl.status` fields, refreshed only when the admin clicks
+  // Verify (no background polling).
+  custom_domain: string | null;
+  custom_domain_cf_id: string | null;
+  custom_domain_status: string | null;
+  custom_domain_ssl_status: string | null;
 }
 
 export interface MembershipRow {

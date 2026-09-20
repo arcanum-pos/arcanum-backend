@@ -53,4 +53,13 @@ export interface Env {
   DEFAULT_SMTP_PASS?: string;
   DEFAULT_SMTP_FROM_ADDRESS?: string;
   DEFAULT_SMTP_FROM_NAME?: string;
+  // Lets an org register its own custom domain via Cloudflare's Custom
+  // Hostnames API (Cloudflare for SaaS) — see organizations/custom-domain.ts.
+  // Scoped to the kaboutersoft.be zone, "SSL and Certificates: Edit".
+  CLOUDFLARE_API_TOKEN?: string;
+  // Not secret — the kaboutersoft.be zone id. Its Fallback Origin is
+  // already set to arcanum.kaboutersoft.be, so every validated custom
+  // hostname proxies straight to this same app with no further per-org
+  // routing step.
+  CLOUDFLARE_ZONE_ID?: string;
 }

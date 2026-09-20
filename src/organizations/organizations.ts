@@ -13,6 +13,9 @@ function rowToOrganization(row: OrganizationRow) {
     theme: row.theme,
     slug: row.slug,
     createdAt: row.created_at,
+    customDomain: row.custom_domain,
+    customDomainStatus: row.custom_domain_status,
+    customDomainSslStatus: row.custom_domain_ssl_status,
   };
 }
 

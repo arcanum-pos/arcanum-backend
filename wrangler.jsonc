@@ -17,7 +17,14 @@
 	},
 	"vars": {
 		"AUTH_SCHEME": "Bearer",
-		"PUBLIC_BASE_URL": "https://arcanum.kaboutersoft.be"
+		"PUBLIC_BASE_URL": "https://arcanum.kaboutersoft.be",
+		// kaboutersoft.be — the zone Custom Hostnames (org custom domains) are
+		// registered against. Its Fallback Origin is arcanum.kaboutersoft.be
+		// (already configured, points at this same app), so any org's
+		// validated custom domain proxies straight through with no further
+		// per-hostname routing step. Not secret — paired with the
+		// CLOUDFLARE_API_TOKEN secret (Zone > SSL and Certificates > Edit).
+		"CLOUDFLARE_ZONE_ID": "f68954584752839bfd85b0b143ed6f9d"
 	},
 	"services": [
 		{

@@ -63,9 +63,19 @@ CREATE TABLE IF NOT EXISTS organizations (
   dek_ciphertext TEXT NOT NULL,
   dek_iv TEXT NOT NULL,
   created_at TEXT NOT NULL,
-  created_by_sub TEXT NOT NULL
+  created_by_sub TEXT NOT NULL,
+  -- Optional custom domain, registered with Cloudflare's Custom Hostnames
+  -- API against the kaboutersoft.be zone — see organizations/custom-domain.ts.
+  -- custom_domain_cf_id is Cloudflare's own hostname id (needed to poll/
+  -- delete it); status/ssl_status mirror Cloudflare's `status`/`ssl.status`,
+  -- refreshed only on an explicit Verify, not polled in the background.
+  custom_domain TEXT,
+  custom_domain_cf_id TEXT,
+  custom_domain_status TEXT,
+  custom_domain_ssl_status TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_organizations_slug ON organizations(slug);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_organizations_custom_domain ON organizations(custom_domain);
 
 CREATE TABLE IF NOT EXISTS memberships (
   id TEXT PRIMARY KEY,
