@@ -25,7 +25,7 @@ const CNAME_TARGET = 'arcanum.kaboutersoft.be';
 // Conservative: lowercase letters/digits/hyphens per label, at least one dot,
 // a 2+ letter TLD. Rejects anything Cloudflare would reject anyway, before
 // spending an API call on it.
-const HOSTNAME_RE = /^(?=.{1,253}$)([a-z0-9](-[a-z0-9]+)*\.)+[a-z]{2,63}$/;
+const HOSTNAME_RE = /^(?=.{1,253}$)([a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,63}$/;
 
 interface CloudflareCustomHostname {
   id: string;
