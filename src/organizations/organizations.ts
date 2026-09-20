@@ -25,16 +25,24 @@ function rowToOrganization(row: OrganizationRow) {
 const SLUG_RE = /^[a-z0-9]([a-z0-9-]{0,48}[a-z0-9])?$/;
 
 // Used by identity-providers.ts's pre-auth resolve endpoint: the one place
-// a slug (rather than the real id) can show up in a URL, since that's what
-// the "aanmeldlink" in Settings > Authentication hands out. Everywhere else
-// in the admin API, orgId always comes from the org list (real ids only),
-// so nothing else needs this.
-export async function resolveOrgIdOrSlug(env: Env, idOrSlug: string): Promise<string | null> {
-  const byId = await env.DB.prepare('SELECT id FROM organizations WHERE id = ?').bind(idOrSlug).first<{ id: string }>();
+// an org identifier other than the real id can show up in a URL — a slug
+// (what the "aanmeldlink" in Settings > Authentication hands out), or now a
+// custom domain (what questo-bff passes as a last resort, from the request's
+// own Host header, for an unprefixed /login or /device/start — see
+// identity-providers.ts's handleResolveIdentityProviderForAuth). Everywhere
+// else in the admin API, orgId always comes from the org list (real ids
+// only), so nothing else needs this.
+export async function resolveOrgIdOrSlug(env: Env, idOrSlugOrHost: string): Promise<string | null> {
+  const byId = await env.DB.prepare('SELECT id FROM organizations WHERE id = ?').bind(idOrSlugOrHost).first<{ id: string }>();
   if (byId) return byId.id;
 
-  const bySlug = await env.DB.prepare('SELECT id FROM organizations WHERE slug = ?').bind(idOrSlug).first<{ id: string }>();
-  return bySlug?.id ?? null;
+  const bySlug = await env.DB.prepare('SELECT id FROM organizations WHERE slug = ?').bind(idOrSlugOrHost).first<{ id: string }>();
+  if (bySlug) return bySlug.id;
+
+  const byCustomDomain = await env.DB.prepare('SELECT id FROM organizations WHERE custom_domain = ?')
+    .bind(idOrSlugOrHost)
+    .first<{ id: string }>();
+  return byCustomDomain?.id ?? null;
 }
 
 export async function createOrganization(request: Request, env: Env): Promise<Response> {

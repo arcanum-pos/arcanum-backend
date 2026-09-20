@@ -221,6 +221,21 @@ export async function ensureDefaultOrganization(env: Env): Promise<void> {
 }
 
 export interface ResolvedIdpSettings {
+  // The real id of the org actually being logged into — never a slug/custom
+  // domain (those are resolved to this before questo-bff ever sees it), so
+  // questo-bff can store an actual id in session data instead of whatever
+  // string the URL/Host happened to carry.
+  orgId: string;
+  // This org's own custom domain, if it has one — regardless of whether its
+  // credentials below came from its own config or the platform-default
+  // fallback. Lets questo-bff decide where to redirect back to.
+  customDomain: string | null;
+  // True when the credentials below are this org's OWN (not the
+  // platform-default fallback) — only then is it safe/correct to use a
+  // dynamic, this-org's-own-domain redirect_uri (see authroutes.ts): the
+  // shared default IdP has exactly one registered callback and can't vary
+  // per org.
+  isOwnIdp: boolean;
   issuerUrl: string;
   clientId: string;
   clientSecret: string;
@@ -284,6 +299,13 @@ export async function resolveIdentityProviderForAuth(
   orgId: string,
   purpose: AuthPurpose
 ): Promise<ResolvedIdpSettings | null> {
+  // Captured before any fallback substitution below — this org's own
+  // custom_domain, regardless of whose credentials end up being used.
+  const orgRow = await env.DB.prepare('SELECT custom_domain FROM organizations WHERE id = ?')
+    .bind(orgId)
+    .first<{ custom_domain: string | null }>();
+  const customDomain = orgRow?.custom_domain ?? null;
+
   let row = await env.DB.prepare('SELECT * FROM identity_providers WHERE org_id = ?').bind(orgId).first<IdentityProviderRow>();
   let effectiveOrgId = orgId;
 
@@ -307,6 +329,9 @@ export async function resolveIdentityProviderForAuth(
     : await decryptWithKey({ ciphertext: row.client_secret_ciphertext, iv: row.client_secret_iv }, dek);
 
   return {
+    orgId,
+    customDomain,
+    isOwnIdp: effectiveOrgId === orgId,
     issuerUrl: row.issuer_url,
     clientId,
     clientSecret,
@@ -341,12 +366,14 @@ function hasValidInternalKey(request: Request, env: Env): boolean {
 
 // HTTP wrapper for resolveIdentityProviderForAuth — see router.ts for the
 // route wiring. `orgIdOrSlug` is exactly that: the path segment questo-bff
-// forwards from a /login or /device URL, which an admin may have shared as
-// either the raw org id or the org's own slug (Settings > Authentication's
-// "aanmeldlink") — resolve it to the real id first. Falls through to the
-// raw value if it matches neither (e.g. 'default', or a stale/unknown id),
-// leaving resolveIdentityProviderForAuth's own fallback-to-default and
-// not-found handling unchanged.
+// forwards from a /login or /device URL — an admin may have shared the raw
+// org id or its slug (Settings > Authentication's "aanmeldlink") — or, for
+// an unprefixed /login or /device/start, the request's own Host header
+// (questo-bff's last resort before literal 'default'), letting a custom
+// domain resolve to its org with no slug needed. resolveOrgIdOrSlug tries
+// all three; falls through to the raw value if none match (e.g. 'default',
+// or a stale/unknown id), leaving resolveIdentityProviderForAuth's own
+// fallback-to-default and not-found handling unchanged.
 export async function handleResolveIdentityProviderForAuth(request: Request, env: Env, orgIdOrSlug: string): Promise<Response> {
   if (!hasValidInternalKey(request, env)) return json({ error: 'Unauthorized' }, 401);
 
