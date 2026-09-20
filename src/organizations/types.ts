@@ -27,6 +27,10 @@ export interface OrganizationRow {
   // Verify (no background polling).
   custom_domain: string | null;
   custom_domain_cf_id: string | null;
+  // The exact-hostname Workers Route id created alongside custom_domain_cf_id
+  // — deleted whenever the hostname changes or is removed. See
+  // custom-domain.ts's file header for why this exists (no zone-wide route).
+  custom_domain_route_id: string | null;
   custom_domain_status: string | null;
   custom_domain_ssl_status: string | null;
 }

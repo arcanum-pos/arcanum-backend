@@ -3,10 +3,25 @@
 // kaboutersoft.be zone. The org's admin creates a CNAME pointing at a
 // single static target (arcanum.kaboutersoft.be, this app's own domain) —
 // Cloudflare validates that CNAME (which doubles as domain-control
-// validation for the cert, ssl.method: 'http') and, once active, proxies
-// traffic on the custom hostname straight through via the zone's Fallback
-// Origin (already configured to point at that same target) — no per-org
-// routing step needed here or in questo-bff.
+// validation for the cert, ssl.method: 'http').
+//
+// Getting a validated custom hostname's traffic to actually reach a Worker
+// is a separate step from validation, and the zone's Fallback Origin alone
+// does NOT do it: a Workers "Custom Domain" (what arcanum.kaboutersoft.be
+// itself uses) only binds requests whose Host header exactly equals that
+// domain, so a customer's own hostname never matches it — Cloudflare falls
+// through to actually resolving the Fallback Origin as a real backend,
+// which times out (522), since it's a Worker, not a real server.
+//
+// The kaboutersoft.be zone also hosts ~30 unrelated proxied subdomains
+// (Cloudflare Tunnels, Pages sites, other Workers) — a zone-wide wildcard
+// Workers Route (the common "recommended" fix) would intercept ALL of that
+// traffic too, ahead of Tunnels/Pages routing, which is unacceptable here.
+// Instead, every registered custom domain gets its OWN exact-hostname
+// Workers Route (`<hostname>/*` → wrk-questo-bff), created alongside the
+// Cloudflare custom hostname and deleted alongside it. An exact-hostname
+// Route only ever matches that literal Host, so this can never affect any
+// other subdomain on the zone — no wildcard, no shared blast radius.
 //
 // Deliberately does NOT yet change how an org is identified/routed by
 // hostname — a custom domain today just makes the existing app (kassa,
@@ -21,6 +36,7 @@ import { extractCaller, requireOrgRole } from './auth';
 import type { OrganizationRow } from './types';
 
 const CNAME_TARGET = 'arcanum.kaboutersoft.be';
+const WORKER_SCRIPT_NAME = 'wrk-questo-bff';
 
 // Conservative: lowercase letters/digits/hyphens per label, at least one dot,
 // a 2+ letter TLD. Rejects anything Cloudflare would reject anyway, before
@@ -33,6 +49,12 @@ interface CloudflareCustomHostname {
   status: string;
   ssl?: { status: string; validation_errors?: { message: string }[] };
   verification_errors?: string[];
+}
+
+interface CloudflareWorkerRoute {
+  id: string;
+  pattern: string;
+  script: string;
 }
 
 interface CloudflareApiResponse<T> {
@@ -56,6 +78,20 @@ async function cfRequest<T>(
   });
   const body = (await res.json().catch(() => null)) as CloudflareApiResponse<T> | null;
   return { ok: res.ok && Boolean(body?.success), body };
+}
+
+// Exact-hostname pattern only (`<hostname>/*`, never a wildcard host) — see
+// the file header for why this is the whole safety story here.
+async function createWorkerRoute(env: Env, hostname: string): Promise<string | null> {
+  const { ok, body } = await cfRequest<CloudflareWorkerRoute>(env, '/workers/routes', {
+    method: 'POST',
+    body: JSON.stringify({ pattern: `${hostname}/*`, script: WORKER_SCRIPT_NAME }),
+  });
+  return ok && body?.result ? body.result.id : null;
+}
+
+async function deleteWorkerRoute(env: Env, routeId: string): Promise<void> {
+  await cfRequest(env, `/workers/routes/${routeId}`, { method: 'DELETE' }).catch(() => {});
 }
 
 function rowToPublicCustomDomain(row: OrganizationRow) {
@@ -109,10 +145,11 @@ export async function setCustomDomain(request: Request, env: Env, orgId: string)
   if (clash) return json({ error: 'Dit domein is al in gebruik door een andere organisatie' }, 409);
 
   // Changing domains: Cloudflare has no "edit hostname" — remove the old
-  // registration first. Best-effort; a failure here (e.g. already gone)
-  // shouldn't block registering the new one.
+  // registration (and its route) first. Best-effort; a failure here (e.g.
+  // already gone) shouldn't block registering the new one.
   if (existing.custom_domain_cf_id && existing.custom_domain !== hostname) {
     await cfRequest(env, `/custom_hostnames/${existing.custom_domain_cf_id}`, { method: 'DELETE' }).catch(() => {});
+    if (existing.custom_domain_route_id) await deleteWorkerRoute(env, existing.custom_domain_route_id);
   }
 
   const { ok, body: cfBody } = await cfRequest<CloudflareCustomHostname>(env, '/custom_hostnames', {
@@ -126,10 +163,20 @@ export async function setCustomDomain(request: Request, env: Env, orgId: string)
   }
 
   const cf = cfBody.result;
+
+  // Without a matching route, this hostname would validate fine but every
+  // request to it would 522 forever — treat route creation as required, not
+  // best-effort, and roll back the just-created hostname if it fails.
+  const routeId = await createWorkerRoute(env, hostname);
+  if (!routeId) {
+    await cfRequest(env, `/custom_hostnames/${cf.id}`, { method: 'DELETE' }).catch(() => {});
+    return json({ error: 'Kon geen routing instellen voor dit domein bij Cloudflare' }, 502);
+  }
+
   await env.DB.prepare(
-    'UPDATE organizations SET custom_domain = ?, custom_domain_cf_id = ?, custom_domain_status = ?, custom_domain_ssl_status = ? WHERE id = ?'
+    'UPDATE organizations SET custom_domain = ?, custom_domain_cf_id = ?, custom_domain_route_id = ?, custom_domain_status = ?, custom_domain_ssl_status = ? WHERE id = ?'
   )
-    .bind(hostname, cf.id, cf.status, cf.ssl?.status ?? null, orgId)
+    .bind(hostname, cf.id, routeId, cf.status, cf.ssl?.status ?? null, orgId)
     .run();
 
   const row = await env.DB.prepare('SELECT * FROM organizations WHERE id = ?').bind(orgId).first<OrganizationRow>();
@@ -176,14 +223,17 @@ export async function removeCustomDomain(request: Request, env: Env, orgId: stri
   const row = await env.DB.prepare('SELECT * FROM organizations WHERE id = ?').bind(orgId).first<OrganizationRow>();
   if (!row) return json({ error: 'Unknown organization' }, 404);
 
-  if (row.custom_domain_cf_id && !notConfigured(env)) {
+  if (!notConfigured(env)) {
     // Best-effort — clear our own state regardless, so an admin is never
     // stuck because Cloudflare's side (e.g. already removed) disagrees.
-    await cfRequest(env, `/custom_hostnames/${row.custom_domain_cf_id}`, { method: 'DELETE' }).catch(() => {});
+    if (row.custom_domain_cf_id) {
+      await cfRequest(env, `/custom_hostnames/${row.custom_domain_cf_id}`, { method: 'DELETE' }).catch(() => {});
+    }
+    if (row.custom_domain_route_id) await deleteWorkerRoute(env, row.custom_domain_route_id);
   }
 
   await env.DB.prepare(
-    'UPDATE organizations SET custom_domain = NULL, custom_domain_cf_id = NULL, custom_domain_status = NULL, custom_domain_ssl_status = NULL WHERE id = ?'
+    'UPDATE organizations SET custom_domain = NULL, custom_domain_cf_id = NULL, custom_domain_route_id = NULL, custom_domain_status = NULL, custom_domain_ssl_status = NULL WHERE id = ?'
   )
     .bind(orgId)
     .run();

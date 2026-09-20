@@ -69,8 +69,11 @@ CREATE TABLE IF NOT EXISTS organizations (
   -- custom_domain_cf_id is Cloudflare's own hostname id (needed to poll/
   -- delete it); status/ssl_status mirror Cloudflare's `status`/`ssl.status`,
   -- refreshed only on an explicit Verify, not polled in the background.
+  -- custom_domain_route_id is the exact-hostname Workers Route id created
+  -- alongside it (never a zone-wide wildcard — see custom-domain.ts).
   custom_domain TEXT,
   custom_domain_cf_id TEXT,
+  custom_domain_route_id TEXT,
   custom_domain_status TEXT,
   custom_domain_ssl_status TEXT
 );
