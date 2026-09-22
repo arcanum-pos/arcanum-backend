@@ -3,8 +3,8 @@
 	"name": "arcanum-backend",
 	"main": "src/index.ts",
 	"compatibility_date": "2026-09-11",
-	// Not directly publicly reachable — only questo-bff calls this Worker (via
-	// the BANCONTACT_SERVICE service binding, which works regardless of this
+	// Not directly publicly reachable — only arcanum-bff calls this Worker (via
+	// the ARCANUM_BACKEND_SERVICE service binding, which works regardless of this
 	// setting). The iOS SumUp bridge used to depend on the workers.dev URL
 	// directly (bearer-token gated); now retired. Explicit here so it doesn't
 	// silently come back on a future deploy — that's the actual bug this is
@@ -46,8 +46,8 @@
 		
 		{
 			"binding": "DB",
-			"database_name": "questo-transactions",
-			"database_id": "e89eefb2-b515-4e44-976f-73b9d0de6558"
+			"database_name": "arcanum-backend",
+			"database_id": "684e3e7c-2859-429e-a5d3-d8159b0bf86d"
 		}
 	],
 	"durable_objects": {
