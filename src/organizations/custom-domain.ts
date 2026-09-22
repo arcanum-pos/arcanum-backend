@@ -18,7 +18,7 @@
 // Workers Route (the common "recommended" fix) would intercept ALL of that
 // traffic too, ahead of Tunnels/Pages routing, which is unacceptable here.
 // Instead, every registered custom domain gets its OWN exact-hostname
-// Workers Route (`<hostname>/*` → wrk-questo-bff), created alongside the
+// Workers Route (`<hostname>/*` → arcanum-bff), created alongside the
 // Cloudflare custom hostname and deleted alongside it. An exact-hostname
 // Route only ever matches that literal Host, so this can never affect any
 // other subdomain on the zone — no wildcard, no shared blast radius.
@@ -41,7 +41,7 @@ import { hasCompleteIdentityProvider } from './identity-providers';
 import type { OrganizationRow } from './types';
 
 const CNAME_TARGET = 'arcanum.kaboutersoft.be';
-const WORKER_SCRIPT_NAME = 'wrk-questo-bff';
+const WORKER_SCRIPT_NAME = 'arcanum-bff';
 
 // Conservative: lowercase letters/digits/hyphens per label, at least one dot,
 // a 2+ letter TLD. Rejects anything Cloudflare would reject anyway, before
