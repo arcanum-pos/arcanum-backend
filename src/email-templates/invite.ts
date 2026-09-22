@@ -21,7 +21,7 @@ export function buildInviteEmail(params: { orgName: string; role: string; loginU
   const subject = `Uitnodiging voor ${params.orgName}`;
 
   const text = [
-    `Je bent uitgenodigd om lid te worden van ${params.orgName} op Questo, als ${roleLabel}.`,
+    `Je bent uitgenodigd om lid te worden van ${params.orgName} op Arcanum, als ${roleLabel}.`,
     '',
     `Meld je aan om je uitnodiging te activeren: ${params.loginUrl}`,
     '',
@@ -29,7 +29,7 @@ export function buildInviteEmail(params: { orgName: string; role: string; loginU
   ].join('\n');
 
   const html = `
-    <p>Je bent uitgenodigd om lid te worden van <strong>${escapeHtml(params.orgName)}</strong> op Questo, als ${escapeHtml(roleLabel)}.</p>
+    <p>Je bent uitgenodigd om lid te worden van <strong>${escapeHtml(params.orgName)}</strong> op Arcanum, als ${escapeHtml(roleLabel)}.</p>
     <p><a href="${escapeHtml(params.loginUrl)}">Meld je aan om je uitnodiging te activeren</a></p>
     <p>Gebruik hetzelfde e-mailadres waarop je deze uitnodiging ontvangen hebt.</p>
   `.trim();

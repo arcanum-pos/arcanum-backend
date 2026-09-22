@@ -1,6 +1,6 @@
 API_KEY=your-api-key-from-bancontact-api-manager
 
-# Shared secret for server-to-server calls to questo-devicehub's
+# Shared secret for server-to-server calls to arcanum-devicehub's
 # /devices/broadcast — must match the same secret set on that Worker.
 INTERNAL_API_KEY=change-me-to-a-long-random-value
 
@@ -8,10 +8,10 @@ INTERNAL_API_KEY=change-me-to-a-long-random-value
 # (envelope encryption — see src/organizations/crypto.ts).
 ENCRYPTION_KEY=change-me-to-a-long-random-value
 
-# Authorizes questo-bff's calls to this Worker's internal-only
-# identity-provider-resolution route — must match questo-bff's own
+# Authorizes arcanum-bff's calls to this Worker's internal-only
+# identity-provider-resolution route — must match arcanum-bff's own
 # BFF_INTERNAL_KEY. A different secret from INTERNAL_API_KEY above (that
-# one's for this Worker's own calls to questo-devicehub).
+# one's for this Worker's own calls to arcanum-devicehub).
 BFF_INTERNAL_KEY=change-me-to-a-long-random-value
 
 # Seeds the platform-default identity provider the first time it's needed
@@ -23,10 +23,10 @@ DEFAULT_IDP_CLIENT_ID=
 DEFAULT_IDP_CLIENT_SECRET=
 DEFAULT_IDP_CONNECTION_NAME=
 
-# Local `wrangler dev` URL for the questo-mail Worker (run it on a different port).
+# Local `wrangler dev` URL for the arcanum-mailer Worker (run it on a different port).
 MAILER_LOCAL_URL=http://localhost:8792
 
-# Authorizes calls to questo-mail's /send route — must match questo-mail's
+# Authorizes calls to arcanum-mailer's /send route — must match arcanum-mailer's
 # own MAILER_INTERNAL_KEY.
 MAILER_INTERNAL_KEY=change-me-to-a-long-random-value
 
@@ -39,5 +39,5 @@ DEFAULT_SMTP_PORT=587
 DEFAULT_SMTP_USER=
 DEFAULT_SMTP_PASS=
 DEFAULT_SMTP_FROM_ADDRESS=
-DEFAULT_SMTP_FROM_NAME=Questo
+DEFAULT_SMTP_FROM_NAME=Arcanum
 

@@ -1,7 +1,7 @@
--- One-time migration for the existing production `questo-transactions` D1
+-- One-time migration for the existing production `arcanum-backend` D1
 -- database: adds per-org events and a way to tag transactions with one.
 -- Run once via:
---   wrangler d1 execute questo-transactions --remote --file=migrations/0004_events.sql
+--   wrangler d1 execute arcanum-backend --remote --file=migrations/0004_events.sql
 CREATE TABLE IF NOT EXISTS events (
   id TEXT PRIMARY KEY,
   org_id TEXT NOT NULL REFERENCES organizations(id),

@@ -1,3 +1,3 @@
 # arcanum-backend
 
-Cloudflare Worker handling Bancontact payments and bon-price settings for Questo.
+Cloudflare Worker handling Bancontact payments and bon-price settings for Arcanum.

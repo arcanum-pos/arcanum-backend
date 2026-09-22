@@ -62,7 +62,7 @@ export async function testMailConfiguration(request: Request, env: Env, orgId: s
   const provider = await resolveMailProvider(env, orgId);
   const sendRequest = await buildSendRequest(env, orgId, {
     to: caller.email,
-    subject: 'Testmail van Questo',
+    subject: 'Testmail van Arcanum',
     text: 'Als je dit leest, werkt de e-mailconfiguratie voor deze organisatie.',
     html: '<p>Als je dit leest, werkt de e-mailconfiguratie voor deze organisatie.</p>',
   });

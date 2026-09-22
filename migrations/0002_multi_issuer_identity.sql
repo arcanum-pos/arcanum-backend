@@ -1,7 +1,7 @@
--- One-time migration for the existing production `questo-transactions` D1
+-- One-time migration for the existing production `arcanum-backend` D1
 -- database: adds the columns needed for per-organization identity providers.
 -- Run once via:
---   wrangler d1 execute questo-transactions --remote --file=migrations/0002_multi_issuer_identity.sql
+--   wrangler d1 execute arcanum-backend --remote --file=migrations/0002_multi_issuer_identity.sql
 -- Safe to run once; ALTER TABLE ADD COLUMN errors if re-run (columns already
 -- exist).
 

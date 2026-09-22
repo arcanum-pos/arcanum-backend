@@ -1,7 +1,7 @@
--- One-time migration for the existing production `questo-transactions` D1
+-- One-time migration for the existing production `arcanum-backend` D1
 -- database: adds per-org SMTP credentials (see organizations/smtp-credentials.ts).
 -- Run once via:
---   wrangler d1 execute questo-transactions --remote --file=migrations/0003_smtp_credentials.sql
+--   wrangler d1 execute arcanum-backend --remote --file=migrations/0003_smtp_credentials.sql
 CREATE TABLE IF NOT EXISTS smtp_credentials (
   org_id TEXT PRIMARY KEY REFERENCES organizations(id),
   host TEXT,

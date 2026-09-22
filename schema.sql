@@ -37,8 +37,8 @@ CREATE INDEX IF NOT EXISTS idx_transactions_slot_id ON transactions(slot_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_org_id ON transactions(org_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_event_id ON transactions(event_id);
 
--- The `devices` table used to live here; it moved to questo-devicehub's own
--- D1 database (questo-devices-dev) so the two Workers don't share a database.
+-- The `devices` table used to live here; it moved to arcanum-devicehub's own
+-- D1 database (arcanum-devices) so the two Workers don't share a database.
 
 -- --- Organizations / admin portal ---
 -- No separate "users" table: identity is the Auth0 `sub` forwarded by the BFF

@@ -4,6 +4,6 @@
 -- (org context comes from the admin-portal org picker / device-registration
 -- prompt instead) — see organizations.ts's resolveOrgId (was
 -- resolveOrgIdOrSlug) and custom-domain.ts.
---   wrangler d1 execute questo-transactions --remote --file=migrations/0011_drop_org_slug.sql
+--   wrangler d1 execute arcanum-backend --remote --file=migrations/0011_drop_org_slug.sql
 DROP INDEX IF EXISTS idx_organizations_slug;
 ALTER TABLE organizations DROP COLUMN slug;
