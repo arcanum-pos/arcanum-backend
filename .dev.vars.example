@@ -1,4 +1,7 @@
-API_KEY=your-api-key-from-bancontact-api-manager
+# Gates kassa Settings' pricing-save and slot-reset actions
+# (src/settings.ts) — pick any value. Unset means that check always fails,
+# not "no password required".
+SETTINGS_PASSWORD=change-me
 
 # Shared secret for server-to-server calls to arcanum-devicehub's
 # /devices/broadcast — must match the same secret set on that Worker.
