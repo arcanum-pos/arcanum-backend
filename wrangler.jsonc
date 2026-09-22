@@ -1,6 +1,6 @@
 {
 	"$schema": "./node_modules/wrangler/config-schema.json",
-	"name": "questo-bancontact-worker",
+	"name": "arcanum-backend",
 	"main": "src/index.ts",
 	"compatibility_date": "2026-09-11",
 	// Not directly publicly reachable — only questo-bff calls this Worker (via
@@ -29,11 +29,11 @@
 	"services": [
 		{
 			"binding": "DEVICEHUB_SERVICE",
-			"service": "questo-devicehub"
+			"service": "arcanum-devicehub"
 		},
 		{
 			"binding": "MAILER_SERVICE",
-			"service": "questo-mail"
+			"service": "arcanum-mailer"
 		}
 	],
 	"kv_namespaces": [
