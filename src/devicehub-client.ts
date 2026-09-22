@@ -18,7 +18,7 @@ async function callDeviceHub(env: Env, path: string, init: RequestInit): Promise
   if (env.DEVICEHUB_LOCAL_URL) {
     return fetch(`${env.DEVICEHUB_LOCAL_URL}${path}`, { ...init, headers });
   }
-  return env.DEVICEHUB_SERVICE.fetch(`https://devicehub${path}`, { ...init, headers });
+  return env.ARCANUM_DEVICEHUB_SERVICE.fetch(`https://devicehub${path}`, { ...init, headers });
 }
 
 // Pushes a payment/reset event to the POS itself, plus whichever CFD/sim are

@@ -28,11 +28,11 @@
 	},
 	"services": [
 		{
-			"binding": "DEVICEHUB_SERVICE",
+			"binding": "ARCANUM_DEVICEHUB_SERVICE",
 			"service": "arcanum-devicehub"
 		},
 		{
-			"binding": "MAILER_SERVICE",
+			"binding": "ARCANUM_MAILER_SERVICE",
 			"service": "arcanum-mailer"
 		}
 	],
@@ -80,6 +80,28 @@
 					"from": "SumupChargeCoordinator",
 					"to": "ChargePoller"
 				}
+			]
+		},
+		// Purely cosmetic cleanup: the DO namespace created at v1 is still
+		// internally labeled with the script's pre-rename name
+		// (questo-bancontact-worker) -- Cloudflare's dashboard never updates
+		// that label on a later Worker rename. Retiring and recreating the
+		// class here (safe: confirmed no data is ever written to it, see
+		// poller.ts -- the only storage call is getAlarm/setAlarm) gets a
+		// fresh namespace labeled under the current name, arcanum-backend.
+		// Done while there's no live traffic; losing a scheduled alarm
+		// mid-flight would be harmless anyway (ensureChargePolling
+		// re-arms it on the next charge dispatch).
+		{
+			"tag": "v3",
+			"deleted_classes": [
+				"ChargePoller"
+			]
+		},
+		{
+			"tag": "v4",
+			"new_sqlite_classes": [
+				"ChargePoller"
 			]
 		}
 	],

@@ -50,7 +50,7 @@ async function callMailer(env: Env, path: string, init: RequestInit): Promise<Re
   if (env.MAILER_LOCAL_URL) {
     return fetch(`${env.MAILER_LOCAL_URL}${path}`, { ...init, headers });
   }
-  return env.MAILER_SERVICE.fetch(`https://arcanum-mailer${path}`, { ...init, headers });
+  return env.ARCANUM_MAILER_SERVICE.fetch(`https://arcanum-mailer${path}`, { ...init, headers });
 }
 
 // Throws on failure — deliberately, unlike arcanum-devicehub's own

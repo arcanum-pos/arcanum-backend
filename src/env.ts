@@ -13,12 +13,12 @@ export interface Env {
   // from INTERNAL_API_KEY above (a different pairwise relationship,
   // independently rotatable) — not the same value.
   BFF_INTERNAL_KEY: string;
-  DEVICEHUB_SERVICE: Fetcher;
+  ARCANUM_DEVICEHUB_SERVICE: Fetcher;
   DEVICEHUB_LOCAL_URL?: string;
   // arcanum-mailer (separate Worker) — see mailer-client.ts. A different
   // secret from INTERNAL_API_KEY/BFF_INTERNAL_KEY above, same "one secret
   // per pairwise relationship" reasoning.
-  MAILER_SERVICE: Fetcher;
+  ARCANUM_MAILER_SERVICE: Fetcher;
   MAILER_LOCAL_URL?: string;
   MAILER_INTERNAL_KEY: string;
   // Platform-wide key-encryption-key — wraps each organization's own data
