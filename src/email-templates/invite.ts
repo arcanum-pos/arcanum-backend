@@ -1,5 +1,5 @@
 // Content lives here (in `worker`, alongside the invite logic that
-// triggers it), not in questo-mail — that Worker is a pure transport
+// triggers it), not in arcanum-mailer — that Worker is a pure transport
 // ("send this to/subject/text/html"), it has no business knowing what an
 // invite email says.
 //

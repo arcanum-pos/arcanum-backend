@@ -1,6 +1,6 @@
 // Ties the two mail transports together: resolves whichever one an org has
 // selected (mail-provider.ts) into the right shape of credentials, and is
-// the one place that actually calls questo-mail. inviteMember (members.ts)
+// the one place that actually calls arcanum-mailer. inviteMember (members.ts)
 // and testMailConfiguration (below) both go through here rather than
 // picking a transport themselves.
 import type { Env } from '../env';

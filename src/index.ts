@@ -4,7 +4,7 @@
 //   payments/poller.ts                           — ChargePoller DO, fallback for missed callbacks
 //   settings.ts                                  — pricing config + password gate
 //   transactions.ts                              — the shared D1 sales ledger
-//   devicehub-client.ts                          — outbound calls to questo-devicehub
+//   devicehub-client.ts                          — outbound calls to arcanum-devicehub
 //   organizations/                                — multi-tenant admin portal backend
 // Kept as file-level modules within one deployed Worker rather than split into
 // separate Workers — see the 2026-09 discussion: Settings and Transactions
@@ -69,7 +69,7 @@ export default {
       }
 
       // Payment-provider webhook callbacks — reached via the BFF's
-      // unauthenticated /api/callback/* passthrough (see questo-bff's
+      // unauthenticated /api/callback/* passthrough (see arcanum-bff's
       // router.ts), never called directly by a browser. Each verifies its
       // own authenticity (SumUp: a per-charge token embedded in the URL;
       // Bancontact: a JWS signature) rather than relying on this being

@@ -64,7 +64,7 @@ export async function dispatchOrganizationsRoute(request: Request, env: Env, pat
     return null;
   }
 
-  // Pre-authentication lookup for questo-bff to drive a login — gated by
+  // Pre-authentication lookup for arcanum-bff to drive a login — gated by
   // BFF_INTERNAL_KEY, not caller identity (see identity-providers.ts's
   // comment on handleResolveIdentityProviderForAuth for why that matters).
   // Checked before the plain /identity-provider match below.

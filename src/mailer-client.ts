@@ -1,7 +1,7 @@
-// Outbound email lives in a separate Worker (questo-mail) — a raw-TCP SMTP
+// Outbound email lives in a separate Worker (arcanum-mailer) — a raw-TCP SMTP
 // client is a different kind of thing from an HTTP request handler, kept
-// apart on purpose (same reasoning as questo-devicehub's own split).
-// questo-mail holds no SMTP secrets of its own — it's a pure transport:
+// apart on purpose (same reasoning as arcanum-devicehub's own split).
+// arcanum-mailer holds no SMTP secrets of its own — it's a pure transport:
 // every send carries the full connection details for whichever org's
 // config resolved (see organizations/smtp-credentials.ts), so each org can
 // genuinely bring its own SMTP account rather than everything going out
@@ -28,7 +28,7 @@ interface MailMessage {
   fromName?: string;
 }
 
-// Tagged by provider so questo-mail knows which adapter to use — see
+// Tagged by provider so arcanum-mailer knows which adapter to use — see
 // organizations/mail.ts, the one place this gets constructed. SMTP and the
 // Gmail API need entirely different credentials (a host/port/password vs a
 // service account + impersonated user), so this can't be one flat shape.
@@ -50,10 +50,10 @@ async function callMailer(env: Env, path: string, init: RequestInit): Promise<Re
   if (env.MAILER_LOCAL_URL) {
     return fetch(`${env.MAILER_LOCAL_URL}${path}`, { ...init, headers });
   }
-  return env.MAILER_SERVICE.fetch(`https://questo-mail${path}`, { ...init, headers });
+  return env.MAILER_SERVICE.fetch(`https://arcanum-mailer${path}`, { ...init, headers });
 }
 
-// Throws on failure — deliberately, unlike questo-devicehub's own
+// Throws on failure — deliberately, unlike arcanum-devicehub's own
 // broadcastPaymentEvent. Whether a failed send should be best-effort
 // (inviteMember: never fail invite creation just because email didn't go
 // out) or surfaced (testSmtpCredentials: the whole point is telling the
@@ -67,6 +67,6 @@ export async function sendEmail(env: Env, request: SendEmailRequest): Promise<vo
   });
   if (!res.ok) {
     const details = await res.text().catch(() => '');
-    throw new Error(`questo-mail returned ${res.status}: ${details}`);
+    throw new Error(`arcanum-mailer returned ${res.status}: ${details}`);
   }
 }

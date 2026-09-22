@@ -20,7 +20,7 @@ function rowToOrganization(row: OrganizationRow) {
 
 // Used by identity-providers.ts's pre-auth resolve endpoint: the one place
 // an org identifier other than the real id can show up in a URL — the
-// request's own Host header, passed by questo-bff for an unprefixed /login
+// request's own Host header, passed by arcanum-bff for an unprefixed /login
 // or /device/start, letting a custom domain resolve to its org with no path
 // segment at all. Everywhere else in the admin API, orgId always comes from
 // the org list (real ids only), so nothing else needs this.

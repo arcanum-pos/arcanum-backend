@@ -5,9 +5,9 @@ export interface Env {
   SETTINGS_PASSWORD?: string;
   CHARGE_POLLER: DurableObjectNamespace;
   DB: D1Database;
-  // questo-devicehub (separate Worker) — see devicehub-client.ts.
+  // arcanum-devicehub (separate Worker) — see devicehub-client.ts.
   INTERNAL_API_KEY: string;
-  // questo-bff's calls to this Worker's own internal-only
+  // arcanum-bff's calls to this Worker's own internal-only
   // /organizations/:orgId/identity-provider/resolve route — see
   // organizations/identity-providers.ts. Deliberately a separate secret
   // from INTERNAL_API_KEY above (a different pairwise relationship,
@@ -15,7 +15,7 @@ export interface Env {
   BFF_INTERNAL_KEY: string;
   DEVICEHUB_SERVICE: Fetcher;
   DEVICEHUB_LOCAL_URL?: string;
-  // questo-mail (separate Worker) — see mailer-client.ts. A different
+  // arcanum-mailer (separate Worker) — see mailer-client.ts. A different
   // secret from INTERNAL_API_KEY/BFF_INTERNAL_KEY above, same "one secret
   // per pairwise relationship" reasoning.
   MAILER_SERVICE: Fetcher;

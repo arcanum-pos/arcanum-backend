@@ -1,5 +1,5 @@
 // Device identity/linking and the live WebSocket relay live in a separate
-// Worker (questo-devicehub) — kept apart from payment processing on purpose.
+// Worker (arcanum-devicehub) — kept apart from payment processing on purpose.
 // This module only ever asks it to broadcast an event; it carries no
 // business data, same as before.
 import type { Env } from './env';

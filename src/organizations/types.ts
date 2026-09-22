@@ -102,7 +102,7 @@ export interface MailProviderRow {
 }
 
 // Domain-wide-delegated service account: client_email + private_key sign a
-// short-lived JWT (see questo-mail/src/mailer/gmail-api.ts), exchanged for
+// short-lived JWT (see arcanum-mailer/src/mailer/gmail-api.ts), exchanged for
 // an OAuth2 access token, then used to call the Gmail API impersonating
 // impersonated_user. No SMTP, no DNS/SPF/DKIM changes — Google's own
 // already-authorized sending path for the domain.

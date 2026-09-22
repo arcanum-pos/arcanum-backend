@@ -3,7 +3,7 @@
 //  - admin CRUD (getIdentityProvider/setIdentityProvider): what an org's
 //    admin sees/edits over the API. Never returns the decrypted secret.
 //  - auth resolution (resolveIdentityProviderForAuth, ensureDefaultOrganization):
-//    what questo-bff calls, pre-authentication, to actually drive a login.
+//    what arcanum-bff calls, pre-authentication, to actually drive a login.
 //    This is the one place the plaintext client secret ever leaves the DB.
 //    No caller-identity check — safe by construction, since `worker` has no
 //    public HTTP ingress (workers_dev: false); the only path here is the
@@ -222,13 +222,13 @@ export async function ensureDefaultOrganization(env: Env): Promise<void> {
 
 export interface ResolvedIdpSettings {
   // The real id of the org actually being logged into — never a custom
-  // domain (that's resolved to this before questo-bff ever sees it), so
-  // questo-bff can store an actual id in session data instead of whatever
+  // domain (that's resolved to this before arcanum-bff ever sees it), so
+  // arcanum-bff can store an actual id in session data instead of whatever
   // string the URL/Host happened to carry.
   orgId: string;
   // This org's own custom domain, if it has one — regardless of whether its
   // credentials below came from its own config or the platform-default
-  // fallback. Lets questo-bff decide where to redirect back to.
+  // fallback. Lets arcanum-bff decide where to redirect back to.
   customDomain: string | null;
   // True when the credentials below are this org's OWN (not the
   // platform-default fallback) — only then is it safe/correct to use a
@@ -282,7 +282,7 @@ export async function hasCompleteIdentityProvider(env: Env, orgId: string): Prom
 
 export type AuthPurpose = 'device' | 'authcode';
 
-// Resolves the settings questo-bff needs to actually drive a login for
+// Resolves the settings arcanum-bff needs to actually drive a login for
 // orgId — that org's own configured IdP if it has one, otherwise the
 // platform default's. The one place the plaintext client secret leaves
 // the DB.
@@ -356,12 +356,12 @@ export async function resolveIdentityProviderForAuth(
   };
 }
 
-// Gated by BFF_INTERNAL_KEY (the same shared-secret pattern questo-devicehub
+// Gated by BFF_INTERNAL_KEY (the same shared-secret pattern arcanum-devicehub
 // uses for its own internal routes, just a separate, independently
 // rotatable secret from INTERNAL_API_KEY), NOT by caller identity — there
 // is deliberately no logged-in user yet at this point in the login flow.
 // This is NOT optional: `worker` having no public ingress only blocks
-// *direct* internet access — questo-bff's own generic `/api/organizations/*`
+// *direct* internet access — arcanum-bff's own generic `/api/organizations/*`
 // proxy still reaches this exact route for any ordinary logged-in session
 // (it only checks *a* session exists, not that its owner administers this
 // specific org), and this handler hands back a plaintext client secret. Only
@@ -374,10 +374,10 @@ function hasValidInternalKey(request: Request, env: Env): boolean {
 }
 
 // HTTP wrapper for resolveIdentityProviderForAuth — see router.ts for the
-// route wiring. `orgIdOrHost` is exactly that: the path segment questo-bff
+// route wiring. `orgIdOrHost` is exactly that: the path segment arcanum-bff
 // forwards from a /login or /device URL — either a real org id, or, for an
 // unprefixed /login or /device/start, the request's own Host header
-// (questo-bff's last resort before literal 'default'), letting a custom
+// (arcanum-bff's last resort before literal 'default'), letting a custom
 // domain resolve to its org with no org identifier in the URL at all.
 // resolveOrgId tries both; falls through to the raw value if neither match
 // (e.g. 'default', or a stale/unknown id), leaving

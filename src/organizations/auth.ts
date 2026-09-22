@@ -15,7 +15,7 @@ import type { Env } from '../env';
 import type { CallerIdentity, MembershipRow, OrgRole } from './types';
 
 // Transitional fallback only: a request with no X-User-Issuer header predates
-// questo-bff sending one, which — since no other issuer existed before this
+// arcanum-bff sending one, which — since no other issuer existed before this
 // support shipped — can only mean it was authenticated against the
 // platform's one original shared Auth0 tenant. Must match the literal value
 // the 0002 migration backfilled onto every pre-existing membership row.
