@@ -23,16 +23,21 @@
 // Route only ever matches that literal Host, so this can never affect any
 // other subdomain on the zone — no wildcard, no shared blast radius.
 //
-// Deliberately does NOT yet change how an org is identified/routed by
-// hostname — a custom domain today just makes the existing app (kassa,
-// admin portal, ...) reachable under the org's own branding. An org still
-// uses its slug-prefixed links for a specific identity provider exactly as
-// before; recognizing an org by its custom domain (so a specific-IdP org
-// could drop the slug too) is a deliberately separate, harder piece of
-// work, not attempted here.
+// Setting a custom domain requires this org to already have a complete
+// identity provider of its own configured (see setCustomDomain below) — a
+// custom domain and an own identity provider are a mandatory pair. Login
+// links carry no org identifier at all (see identity-providers.ts's
+// resolveOrgId / handleResolveIdentityProviderForAuth): an org either stays
+// on the shared platform domain and uses the shared/default identity
+// provider, or gets its own domain and its own identity provider, resolved
+// purely from the request's Host header. Without that pairing, an org with
+// its own IdP but no custom domain would be unreachable by any login link,
+// and a custom domain on the shared/default IdP would have nowhere for its
+// one fixed OAuth callback to land.
 import type { Env } from '../env';
 import { json } from '../http';
 import { extractCaller, requireOrgRole } from './auth';
+import { hasCompleteIdentityProvider } from './identity-providers';
 import type { OrganizationRow } from './types';
 
 const CNAME_TARGET = 'arcanum.kaboutersoft.be';
@@ -134,6 +139,16 @@ export async function setCustomDomain(request: Request, env: Env, orgId: string)
 
   const existing = await env.DB.prepare('SELECT * FROM organizations WHERE id = ?').bind(orgId).first<OrganizationRow>();
   if (!existing) return json({ error: 'Unknown organization' }, 404);
+
+  if (!(await hasCompleteIdentityProvider(env, orgId))) {
+    return json(
+      {
+        error:
+          'Configureer eerst een eigen identity provider voor deze organisatie (zie Authentication) voordat je een aangepast domein instelt.',
+      },
+      400
+    );
+  }
 
   // Re-submitting the exact hostname that's already registered — nothing to
   // do, just report current status (use Verify to refresh it).

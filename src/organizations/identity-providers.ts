@@ -11,7 +11,7 @@
 import type { Env } from '../env';
 import { json } from '../http';
 import { extractCaller, requireOrgRole } from './auth';
-import { getOrgDataKey, resolveOrgIdOrSlug } from './organizations';
+import { getOrgDataKey, resolveOrgId } from './organizations';
 import { encryptWithKey, decryptWithKey } from './crypto';
 import { resolveOidcDiscovery, ensureDefaultOrganizationRow, DEFAULT_ORG_ID, type OidcEndpoints } from './idp-resolution';
 import type { IdentityProviderRow } from './types';
@@ -221,8 +221,8 @@ export async function ensureDefaultOrganization(env: Env): Promise<void> {
 }
 
 export interface ResolvedIdpSettings {
-  // The real id of the org actually being logged into — never a slug/custom
-  // domain (those are resolved to this before questo-bff ever sees it), so
+  // The real id of the org actually being logged into — never a custom
+  // domain (that's resolved to this before questo-bff ever sees it), so
   // questo-bff can store an actual id in session data instead of whatever
   // string the URL/Host happened to carry.
   orgId: string;
@@ -269,6 +269,15 @@ function isCompleteRow(row: IdentityProviderRow | null | undefined): row is Comp
       row.userinfo_endpoint &&
       row.device_authorization_endpoint
   );
+}
+
+// Used by custom-domain.ts to enforce the custom-domain/own-identity-provider
+// pairing: an org may only set a custom domain once it has a complete IdP
+// row of its own — see that file's header comment for why this pairing is
+// mandatory now that login links carry no org identifier at all.
+export async function hasCompleteIdentityProvider(env: Env, orgId: string): Promise<boolean> {
+  const row = await env.DB.prepare('SELECT * FROM identity_providers WHERE org_id = ?').bind(orgId).first<IdentityProviderRow>();
+  return isCompleteRow(row);
 }
 
 export type AuthPurpose = 'device' | 'authcode';
@@ -365,16 +374,16 @@ function hasValidInternalKey(request: Request, env: Env): boolean {
 }
 
 // HTTP wrapper for resolveIdentityProviderForAuth — see router.ts for the
-// route wiring. `orgIdOrSlug` is exactly that: the path segment questo-bff
-// forwards from a /login or /device URL — an admin may have shared the raw
-// org id or its slug (Settings > Authentication's "aanmeldlink") — or, for
-// an unprefixed /login or /device/start, the request's own Host header
+// route wiring. `orgIdOrHost` is exactly that: the path segment questo-bff
+// forwards from a /login or /device URL — either a real org id, or, for an
+// unprefixed /login or /device/start, the request's own Host header
 // (questo-bff's last resort before literal 'default'), letting a custom
-// domain resolve to its org with no slug needed. resolveOrgIdOrSlug tries
-// all three; falls through to the raw value if none match (e.g. 'default',
-// or a stale/unknown id), leaving resolveIdentityProviderForAuth's own
-// fallback-to-default and not-found handling unchanged.
-export async function handleResolveIdentityProviderForAuth(request: Request, env: Env, orgIdOrSlug: string): Promise<Response> {
+// domain resolve to its org with no org identifier in the URL at all.
+// resolveOrgId tries both; falls through to the raw value if neither match
+// (e.g. 'default', or a stale/unknown id), leaving
+// resolveIdentityProviderForAuth's own fallback-to-default and not-found
+// handling unchanged.
+export async function handleResolveIdentityProviderForAuth(request: Request, env: Env, orgIdOrHost: string): Promise<Response> {
   if (!hasValidInternalKey(request, env)) return json({ error: 'Unauthorized' }, 401);
 
   const purposeParam = new URL(request.url).searchParams.get('purpose');
@@ -382,7 +391,7 @@ export async function handleResolveIdentityProviderForAuth(request: Request, env
     return json({ error: "Missing or invalid 'purpose' query param (expected 'device' or 'authcode')" }, 400);
   }
 
-  const orgId = (await resolveOrgIdOrSlug(env, orgIdOrSlug)) ?? orgIdOrSlug;
+  const orgId = (await resolveOrgId(env, orgIdOrHost)) ?? orgIdOrHost;
   const resolved = await resolveIdentityProviderForAuth(env, orgId, purposeParam);
   if (!resolved) return json({ error: 'No identity provider configured' }, 404);
   return json(resolved);

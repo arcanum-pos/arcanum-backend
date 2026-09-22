@@ -52,12 +52,6 @@ CREATE TABLE IF NOT EXISTS organizations (
   name TEXT NOT NULL,
   logo_url TEXT,
   theme TEXT,
-  -- Optional, admin-settable short identifier (see organizations.ts's
-  -- SLUG_RE) so device/login links can read e.g. "/scouts-elewijt/device"
-  -- instead of the raw id. Nullable — a NULL slug never conflicts with
-  -- another NULL under SQLite's unique-index semantics, so orgs without
-  -- one just keep using their UUID.
-  slug TEXT,
   -- Envelope encryption: this org's own AES-256 data key, wrapped (encrypted)
   -- with the platform-wide ENCRYPTION_KEY secret. Never stored unwrapped.
   dek_ciphertext TEXT NOT NULL,
@@ -66,6 +60,11 @@ CREATE TABLE IF NOT EXISTS organizations (
   created_by_sub TEXT NOT NULL,
   -- Optional custom domain, registered with Cloudflare's Custom Hostnames
   -- API against the kaboutersoft.be zone — see organizations/custom-domain.ts.
+  -- Setting one requires this org to already have a complete identity_providers
+  -- row of its own (enforced in custom-domain.ts's setCustomDomain): custom
+  -- domain and own identity provider are a mandatory pair, since login links
+  -- carry no org identifier at all (see identity-providers.ts) — Host header
+  -- is the only thing that can tell such an org apart from the shared default.
   -- custom_domain_cf_id is Cloudflare's own hostname id (needed to poll/
   -- delete it); status/ssl_status mirror Cloudflare's `status`/`ssl.status`,
   -- refreshed only on an explicit Verify, not polled in the background.
@@ -77,7 +76,6 @@ CREATE TABLE IF NOT EXISTS organizations (
   custom_domain_status TEXT,
   custom_domain_ssl_status TEXT
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_organizations_slug ON organizations(slug);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_organizations_custom_domain ON organizations(custom_domain);
 
 CREATE TABLE IF NOT EXISTS memberships (
