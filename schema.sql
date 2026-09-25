@@ -80,7 +80,13 @@ CREATE TABLE IF NOT EXISTS organizations (
   custom_domain_cf_id TEXT,
   custom_domain_route_id TEXT,
   custom_domain_status TEXT,
-  custom_domain_ssl_status TEXT
+  custom_domain_ssl_status TEXT,
+  -- Set only while this org is being imported from an export file (see
+  -- org-transfer.ts): 'importing', the id-remapping key, and the expected
+  -- row counts. Cleared by /import/finish.
+  import_status TEXT,
+  import_key TEXT,
+  import_manifest TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_organizations_custom_domain ON organizations(custom_domain);
 

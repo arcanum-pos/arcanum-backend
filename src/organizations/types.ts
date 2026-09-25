@@ -31,6 +31,10 @@ export interface OrganizationRow {
   // custom-domain.ts's file header for why this exists (no zone-wide route).
   custom_domain_route_id: string | null;
   custom_domain_status: string | null;
+  // See org-transfer.ts — non-null only while an import is in progress.
+  import_status: string | null;
+  import_key: string | null;
+  import_manifest: string | null;
   custom_domain_ssl_status: string | null;
 }
 

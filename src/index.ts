@@ -7,6 +7,7 @@
 //   catalog.ts                                   — categories, products, catalogs (menukaarten)
 //   catalog-import.ts                            — menukaart import/export (spreadsheet rows)
 //   reports.ts                                   — sales report
+//   org-transfer.ts                              — org data export / import (self-hosting move)
 //   devicehub-client.ts                          — outbound calls to arcanum-devicehub
 //   organizations/                                — multi-tenant admin portal backend
 // Kept as file-level modules within one deployed Worker rather than split into
@@ -27,6 +28,7 @@ import { dispatchTabsRoute } from './tabs';
 import { dispatchCatalogRoute } from './catalog';
 import { dispatchCatalogImportRoute } from './catalog-import';
 import { dispatchReportsRoute } from './reports';
+import { dispatchOrgTransferRoute } from './org-transfer';
 
 // Durable Object classes must be a named export of the Worker's main entry
 // file — re-exported here since it actually lives in payments/poller.ts.
@@ -86,6 +88,9 @@ export default {
       }
 
       if (url.pathname.startsWith('/organizations')) {
+        // First: /organizations/import/start would otherwise be read as an org id.
+        const transferResponse = await dispatchOrgTransferRoute(request, env, url.pathname);
+        if (transferResponse) return transferResponse;
         // Tabs live under the org path (so they share its BFF route and
         // membership check) but aren't admin-portal code — own module.
         const tabsResponse = await dispatchTabsRoute(request, env, url.pathname);

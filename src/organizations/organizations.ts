@@ -15,6 +15,7 @@ function rowToOrganization(row: OrganizationRow) {
     customDomain: row.custom_domain,
     customDomainStatus: row.custom_domain_status,
     customDomainSslStatus: row.custom_domain_ssl_status,
+    importStatus: row.import_status ?? null,
   };
 }
 
