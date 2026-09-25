@@ -284,6 +284,7 @@ CREATE TABLE IF NOT EXISTS orders (
   org_id TEXT NOT NULL REFERENCES organizations(id),
   tab_id TEXT NOT NULL REFERENCES tabs(id),
   source TEXT NOT NULL, -- 'kassa' (later: 'waiter' | 'self_order')
+  catalog_id TEXT REFERENCES catalogs(id), -- set when the order has catalog-priced lines
   device_id TEXT,
   device_name TEXT,
   user_name TEXT,

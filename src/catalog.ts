@@ -84,7 +84,8 @@ const ENTRY_SELECT = `SELECT e.id, e.section_id, e.variant_id, e.price_cents, e.
   JOIN products p ON p.id = v.product_id
   LEFT JOIN categories c ON c.id = p.category_id`;
 
-function displayName(productName: string, variantName: string): string {
+// Shared with tabs.ts, which copies it into order_lines.name at sale time.
+export function displayName(productName: string, variantName: string): string {
   return variantName ? `${productName} (${variantName})` : productName;
 }
 

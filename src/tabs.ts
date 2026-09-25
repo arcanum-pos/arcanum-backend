@@ -17,11 +17,15 @@
 // paid >= total — all as conditions inside the SQL itself, so two kassas
 // racing can at worst leave a tab open with a remainder, never closed short.
 //
-// Line prices are still client-supplied (same as every kassa amount today);
-// once the catalog exists, the server prices lines from the catalog entry.
+// A line with a `variantId` is priced by the server from the order's
+// catalog entry (catalog.ts) — the kassa's own price/name are ignored — and
+// name/price/code/category/VAT are copied in. Free lines without a variant
+// (fooi, until it moves onto the payment in step 3d) still carry their own
+// client-supplied price.
 import type { Env } from './env';
 import { json } from './http';
 import { extractCaller, requireOrgRole } from './organizations/auth';
+import { displayName } from './catalog';
 
 type TabStatus = 'open' | 'closed' | 'cancelled';
 
@@ -159,6 +163,11 @@ interface LineInput {
   unitPriceCents: number;
   quantity: number;
   note: string | null;
+  // Set for catalog lines; name/unitPriceCents/itemCode/category/vatRateBp
+  // are then filled in from the catalog by priceCatalogLines.
+  variantId: string | null;
+  category: string | null;
+  vatRateBp: number | null;
 }
 
 const MAX_LINES_PER_ORDER = 100;
@@ -169,9 +178,16 @@ function parseLines(raw: unknown): LineInput[] | string {
 
   const lines: LineInput[] = [];
   for (const item of raw as Record<string, unknown>[]) {
+    const quantity = Number(item?.quantity);
+    const note = typeof item?.note === 'string' && item.note.trim() ? item.note.trim().slice(0, 200) : null;
+    if (typeof item?.variantId === 'string' && item.variantId) {
+      if (!Number.isInteger(quantity) || quantity < 1 || quantity > 999) return 'quantity must be an integer between 1 and 999';
+      lines.push({ variantId: item.variantId, quantity, note, itemCode: null, name: '', unitPriceCents: 0, category: null, vatRateBp: null });
+      continue;
+    }
+
     const name = typeof item?.name === 'string' ? item.name.trim() : '';
     const unitPriceCents = Number(item?.unitPriceCents);
-    const quantity = Number(item?.quantity);
     if (!name || name.length > 100) return 'each line needs a name (max 100 characters)';
     if (!Number.isInteger(unitPriceCents) || unitPriceCents < 0 || unitPriceCents > 1_000_000) {
       return 'unitPriceCents must be an integer between 0 and 1000000';
@@ -182,10 +198,61 @@ function parseLines(raw: unknown): LineInput[] | string {
       name,
       unitPriceCents,
       quantity,
-      note: typeof item.note === 'string' && item.note.trim() ? item.note.trim().slice(0, 200) : null,
+      note,
+      variantId: null,
+      category: null,
+      vatRateBp: null,
     });
   }
   return lines;
+}
+
+// Fills in catalog lines from the order's catalog: the entry must be on
+// that (non-archived, same-org) catalog, visible, and its product/variant
+// not archived — the same rule as the kassa view, so a kassa can only sell
+// what it's shown.
+async function priceCatalogLines(env: Env, orgId: string, catalogId: string | null, lines: LineInput[]): Promise<string | null> {
+  const variantIds = [...new Set(lines.filter((l) => l.variantId).map((l) => l.variantId as string))];
+  if (variantIds.length === 0) return null;
+  if (!catalogId) return 'catalogId is required for lines with a variantId';
+
+  const catalog = await env.DB.prepare('SELECT 1 FROM catalogs WHERE id = ? AND org_id = ? AND archived_at IS NULL').bind(catalogId, orgId).first();
+  if (!catalog) return 'Onbekende of gearchiveerde menukaart';
+
+  const { results } = await env.DB.prepare(
+    `SELECT e.variant_id, e.price_cents, v.name AS variant_name, v.code, p.name AS product_name, p.vat_rate_bp, c.name AS category_name
+     FROM catalog_entries e
+     JOIN product_variants v ON v.id = e.variant_id
+     JOIN products p ON p.id = v.product_id
+     LEFT JOIN categories c ON c.id = p.category_id
+     WHERE e.catalog_id = ? AND e.visible = 1 AND v.archived_at IS NULL AND p.archived_at IS NULL
+       AND e.variant_id IN (${variantIds.map(() => '?').join(', ')})`
+  )
+    .bind(catalogId, ...variantIds)
+    .all<{ variant_id: string; price_cents: number; variant_name: string; code: string | null; product_name: string; vat_rate_bp: number | null; category_name: string | null }>();
+
+  const byVariant = new Map((results || []).map((r) => [r.variant_id, r]));
+  for (const line of lines) {
+    if (!line.variantId) continue;
+    const entry = byVariant.get(line.variantId);
+    if (!entry) return 'Dit product staat niet (meer) op de menukaart — herlaad de kassa';
+    line.name = displayName(entry.product_name, entry.variant_name);
+    line.unitPriceCents = entry.price_cents;
+    line.itemCode = entry.code;
+    line.category = entry.category_name;
+    line.vatRateBp = entry.vat_rate_bp;
+  }
+  return null;
+}
+
+// parseLines + priceCatalogLines for an order body ({ lines, catalogId? }).
+async function prepareOrderLines(env: Env, orgId: string, body: Record<string, unknown>): Promise<{ lines: LineInput[]; catalogId: string | null } | string> {
+  const lines = parseLines(body.lines);
+  if (typeof lines === 'string') return lines;
+  const catalogId = typeof body.catalogId === 'string' && body.catalogId ? body.catalogId : null;
+  const error = await priceCatalogLines(env, orgId, catalogId, lines);
+  if (error) return error;
+  return { lines, catalogId: lines.some((l) => l.variantId) ? catalogId : null };
 }
 
 // Every order_lines insert is conditional on its order row having been
@@ -194,9 +261,24 @@ function parseLines(raw: unknown): LineInput[] | string {
 function lineInsertStatements(env: Env, orgId: string, tabId: string, orderId: string, lines: LineInput[], now: string): D1PreparedStatement[] {
   return lines.map((line) =>
     env.DB.prepare(
-      `INSERT INTO order_lines (id, org_id, tab_id, order_id, item_code, name, unit_price_cents, quantity, note, created_at)
-       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM orders WHERE id = ?)`
-    ).bind(crypto.randomUUID(), orgId, tabId, orderId, line.itemCode, line.name, line.unitPriceCents, line.quantity, line.note, now, orderId)
+      `INSERT INTO order_lines (id, org_id, tab_id, order_id, item_code, variant_id, name, unit_price_cents, quantity, category, vat_rate_bp, note, created_at)
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM orders WHERE id = ?)`
+    ).bind(
+      crypto.randomUUID(),
+      orgId,
+      tabId,
+      orderId,
+      line.itemCode,
+      line.variantId,
+      line.name,
+      line.unitPriceCents,
+      line.quantity,
+      line.category,
+      line.vatRateBp,
+      line.note,
+      now,
+      orderId
+    )
   );
 }
 
@@ -269,7 +351,7 @@ async function listTabs(request: Request, env: Env, orgId: string): Promise<Resp
   return json((results || []).map(rowToTabSummary));
 }
 
-// POST /organizations/:orgId/tabs { label?, slotId?, deviceId?, deviceName?, lines? }
+// POST /organizations/:orgId/tabs { label?, slotId?, deviceId?, deviceName?, lines?, catalogId? }
 // Optional `lines` submits a first order in the same batch — the Toog
 // quick sale (open + order + pay) is then two round trips, not three.
 async function createTab(request: Request, env: Env, orgId: string): Promise<Response> {
@@ -277,10 +359,11 @@ async function createTab(request: Request, env: Env, orgId: string): Promise<Res
   const label = typeof body.label === 'string' ? body.label.trim().slice(0, 60) : '';
 
   let lines: LineInput[] = [];
+  let catalogId: string | null = null;
   if (body.lines !== undefined) {
-    const parsed = parseLines(body.lines);
-    if (typeof parsed === 'string') return json({ error: parsed }, 400);
-    lines = parsed;
+    const prepared = await prepareOrderLines(env, orgId, body);
+    if (typeof prepared === 'string') return json({ error: prepared }, 400);
+    ({ lines, catalogId } = prepared);
   }
 
   const who = attribution(request, body);
@@ -311,9 +394,9 @@ async function createTab(request: Request, env: Env, orgId: string): Promise<Res
     const orderId = crypto.randomUUID();
     statements.push(
       env.DB.prepare(
-        `INSERT INTO orders (id, org_id, tab_id, source, device_id, device_name, user_name, user_email, submitted_at)
-         VALUES (?, ?, ?, 'kassa', ?, ?, ?, ?, ?)`
-      ).bind(orderId, orgId, tabId, who.deviceId, who.deviceName, who.userName, who.userEmail, now),
+        `INSERT INTO orders (id, org_id, tab_id, source, catalog_id, device_id, device_name, user_name, user_email, submitted_at)
+         VALUES (?, ?, ?, 'kassa', ?, ?, ?, ?, ?, ?)`
+      ).bind(orderId, orgId, tabId, catalogId, who.deviceId, who.deviceName, who.userName, who.userEmail, now),
       ...lineInsertStatements(env, orgId, tabId, orderId, lines, now)
     );
   }
@@ -338,11 +421,12 @@ async function renameTab(request: Request, env: Env, orgId: string, tabId: strin
   return json(await loadTabDetail(env, orgId, tabId));
 }
 
-// POST /organizations/:orgId/tabs/:tabId/orders { lines, deviceId?, deviceName? }
+// POST /organizations/:orgId/tabs/:tabId/orders { lines, catalogId?, deviceId?, deviceName? }
 async function addOrder(request: Request, env: Env, orgId: string, tabId: string): Promise<Response> {
   const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
-  const lines = parseLines(body.lines);
-  if (typeof lines === 'string') return json({ error: lines }, 400);
+  const prepared = await prepareOrderLines(env, orgId, body);
+  if (typeof prepared === 'string') return json({ error: prepared }, 400);
+  const { lines, catalogId } = prepared;
 
   const who = attribution(request, body);
   const orderId = crypto.randomUUID();
@@ -350,11 +434,11 @@ async function addOrder(request: Request, env: Env, orgId: string, tabId: string
 
   const [orderResult] = await env.DB.batch([
     env.DB.prepare(
-      `INSERT INTO orders (id, org_id, tab_id, source, device_id, device_name, user_name, user_email, submitted_at)
-       SELECT ?, ?, ?, 'kassa', ?, ?, ?, ?, ?
+      `INSERT INTO orders (id, org_id, tab_id, source, catalog_id, device_id, device_name, user_name, user_email, submitted_at)
+       SELECT ?, ?, ?, 'kassa', ?, ?, ?, ?, ?, ?
        WHERE EXISTS (SELECT 1 FROM tabs WHERE id = ? AND org_id = ? AND status = 'open')
          AND NOT EXISTS (SELECT 1 FROM charges WHERE tab_id = ? AND status = 'pending')`
-    ).bind(orderId, orgId, tabId, who.deviceId, who.deviceName, who.userName, who.userEmail, now, tabId, orgId, tabId),
+    ).bind(orderId, orgId, tabId, catalogId, who.deviceId, who.deviceName, who.userName, who.userEmail, now, tabId, orgId, tabId),
     ...lineInsertStatements(env, orgId, tabId, orderId, lines, now),
   ]);
 
