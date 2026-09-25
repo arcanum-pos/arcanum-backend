@@ -2,11 +2,11 @@ import { readFileSync } from 'node:fs';
 import { cloudflareTest } from '@cloudflare/vitest-pool-workers';
 import { defineConfig } from 'vitest/config';
 
-// schema.sql split into single statements (D1 exec/prepare want one at a
+// A .sql file split into single statements (D1 exec/prepare want one at a
 // time) — read here, in Node, so any schema.sql change flows straight into
 // the tests. `--` comments are stripped first since some contain ';'.
-function schemaStatements(): string[] {
-  const sql = readFileSync(new URL('./schema.sql', import.meta.url), 'utf8')
+function sqlStatements(file: string): string[] {
+  const sql = readFileSync(new URL(file, import.meta.url), 'utf8')
     .split('\n')
     .map((line) => line.replace(/--.*$/, ''))
     .join('\n');
@@ -39,7 +39,9 @@ export default defineConfig({
       wrangler: { configPath: './wrangler.jsonc' },
       miniflare: {
         bindings: {
-          TEST_SCHEMA: JSON.stringify(schemaStatements()),
+          TEST_SCHEMA: JSON.stringify(sqlStatements('./schema.sql')),
+          // Its seed is org-specific — test/catalog-seed.test.ts runs it.
+          TEST_MIGRATION_0013: JSON.stringify(sqlStatements('./migrations/0013_catalog.sql')),
           // Test-only values — never real secrets. ENCRYPTION_KEY must be
           // base64 of 32 bytes (see CLAUDE.md: hex silently breaks crypto).
           ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64'),

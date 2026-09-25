@@ -319,3 +319,97 @@ CREATE TABLE IF NOT EXISTS order_lines (
 
 CREATE INDEX IF NOT EXISTS idx_order_lines_tab ON order_lines(tab_id);
 CREATE INDEX IF NOT EXISTS idx_order_lines_voids ON order_lines(voids_line_id);
+
+-- --- Catalog (see catalog.ts, DOMAIN_MODEL.md) ---
+
+-- Categories: what a product *is* (Drank, Eten, Inschrijvingen) — for
+-- reporting now, prep-station routing later. Org-level, shared by every
+-- catalog.
+CREATE TABLE IF NOT EXISTS categories (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES organizations(id),
+  name TEXT NOT NULL,
+  position INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_categories_org ON categories(org_id);
+
+-- Products are defined once per org; price lives on the catalog entry, not
+-- here. Archived, never deleted — order_lines reference their variants.
+CREATE TABLE IF NOT EXISTS products (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES organizations(id),
+  category_id TEXT REFERENCES categories(id),
+  name TEXT NOT NULL,
+  vat_rate_bp INTEGER, -- basis points (2100 = 21%); NULL = not set yet
+  archived_at TEXT,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_products_org ON products(org_id);
+
+-- Every product has >= 1 variant (a single-version product has one with an
+-- empty name). `code` is the "typ een code" / later barcode key, and for
+-- the seeded legacy items the old transactions.items key (bon,
+-- fietstochtMember, ...), so reports keep working until they move to
+-- order_lines.
+CREATE TABLE IF NOT EXISTS product_variants (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES organizations(id),
+  product_id TEXT NOT NULL REFERENCES products(id),
+  name TEXT NOT NULL DEFAULT '',
+  code TEXT,
+  position INTEGER NOT NULL DEFAULT 0,
+  archived_at TEXT,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_product_variants_product ON product_variants(product_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_product_variants_org_code ON product_variants(org_id, code) WHERE code IS NOT NULL AND archived_at IS NULL;
+
+-- A selection of variants with a price each, plus the kassa layout
+-- (sections). Independent of events (DOMAIN_MODEL.md decision 1). Exactly
+-- one default per org — what a kassa sells from unless the device picks
+-- another.
+CREATE TABLE IF NOT EXISTS catalogs (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES organizations(id),
+  name TEXT NOT NULL,
+  is_default INTEGER NOT NULL DEFAULT 0,
+  archived_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_catalogs_org ON catalogs(org_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_catalogs_one_default ON catalogs(org_id) WHERE is_default = 1;
+
+-- Button page/group on the kassa — this *is* the layout.
+CREATE TABLE IF NOT EXISTS catalog_sections (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES organizations(id),
+  catalog_id TEXT NOT NULL REFERENCES catalogs(id),
+  name TEXT NOT NULL,
+  position INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_catalog_sections_catalog ON catalog_sections(catalog_id);
+
+-- One variant at most once per catalog, with its price there. Deletable
+-- (history is copied into order_lines). quick_quantities: optional JSON
+-- array of "sell N at once" buttons (e.g. [5,10,...] bonnen).
+CREATE TABLE IF NOT EXISTS catalog_entries (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES organizations(id),
+  catalog_id TEXT NOT NULL REFERENCES catalogs(id),
+  section_id TEXT NOT NULL REFERENCES catalog_sections(id),
+  variant_id TEXT NOT NULL REFERENCES product_variants(id),
+  price_cents INTEGER NOT NULL,
+  visible INTEGER NOT NULL DEFAULT 1,
+  position INTEGER NOT NULL DEFAULT 0,
+  quick_quantities TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_catalog_entries_section ON catalog_entries(section_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_catalog_entries_catalog_variant ON catalog_entries(catalog_id, variant_id);

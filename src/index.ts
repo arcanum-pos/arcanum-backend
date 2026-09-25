@@ -5,6 +5,7 @@
 //   settings.ts                                  — pricing config + password gate
 //   transactions.ts                              — the shared D1 sales ledger
 //   tabs.ts                                      — tabs (rekeningen), orders, order lines
+//   catalog.ts                                   — categories, products, catalogs (menukaarten)
 //   devicehub-client.ts                          — outbound calls to arcanum-devicehub
 //   organizations/                                — multi-tenant admin portal backend
 // Kept as file-level modules within one deployed Worker rather than split into
@@ -23,6 +24,7 @@ import { getSettings, updateSettings, verifyPassword } from './settings';
 import { createTransaction, listTransactions } from './transactions';
 import { dispatchOrganizationsRoute } from './organizations/router';
 import { dispatchTabsRoute } from './tabs';
+import { dispatchCatalogRoute } from './catalog';
 
 // Durable Object classes must be a named export of the Worker's main entry
 // file — re-exported here since it actually lives in payments/poller.ts.
@@ -98,6 +100,8 @@ export default {
         // membership check) but aren't admin-portal code — own module.
         const tabsResponse = await dispatchTabsRoute(request, env, url.pathname);
         if (tabsResponse) return tabsResponse;
+        const catalogResponse = await dispatchCatalogRoute(request, env, url.pathname);
+        if (catalogResponse) return catalogResponse;
         const response = await dispatchOrganizationsRoute(request, env, url.pathname);
         if (response) return response;
       }

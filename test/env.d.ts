@@ -5,6 +5,8 @@ declare global {
     interface Env extends WorkerEnv {
       // schema.sql as a JSON array of statements — see vitest.config.ts.
       TEST_SCHEMA: string;
+      // migrations/0013_catalog.sql (tables + Scouts Elewijt seed), same shape.
+      TEST_MIGRATION_0013: string;
     }
   }
 }
