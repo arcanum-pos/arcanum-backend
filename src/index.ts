@@ -5,6 +5,7 @@
 //   transactions.ts                              — the shared D1 sales ledger
 //   tabs.ts                                      — tabs (rekeningen), orders, order lines
 //   catalog.ts                                   — categories, products, catalogs (menukaarten)
+//   catalog-import.ts                            — menukaart import/export (spreadsheet rows)
 //   reports.ts                                   — sales report
 //   devicehub-client.ts                          — outbound calls to arcanum-devicehub
 //   organizations/                                — multi-tenant admin portal backend
@@ -24,6 +25,7 @@ import { createTransaction, listTransactions } from './transactions';
 import { dispatchOrganizationsRoute } from './organizations/router';
 import { dispatchTabsRoute } from './tabs';
 import { dispatchCatalogRoute } from './catalog';
+import { dispatchCatalogImportRoute } from './catalog-import';
 import { dispatchReportsRoute } from './reports';
 
 // Durable Object classes must be a named export of the Worker's main entry
@@ -88,6 +90,9 @@ export default {
         // membership check) but aren't admin-portal code — own module.
         const tabsResponse = await dispatchTabsRoute(request, env, url.pathname);
         if (tabsResponse) return tabsResponse;
+        // Before the generic catalog routes, which would read 'import' as a catalog id.
+        const importResponse = await dispatchCatalogImportRoute(request, env, url.pathname);
+        if (importResponse) return importResponse;
         const catalogResponse = await dispatchCatalogRoute(request, env, url.pathname);
         if (catalogResponse) return catalogResponse;
         const reportsResponse = await dispatchReportsRoute(request, env, url.pathname);
