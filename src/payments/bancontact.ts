@@ -14,7 +14,7 @@ import { json } from '../http';
 import { broadcastPaymentEvent } from '../devicehub-client';
 import { getDecryptedPaymentCredential } from '../organizations/payment-credentials';
 import { verifyBancontactCallback } from './bancontact-jws';
-import { createCharge, getCharge, resolveCharge, updateChargeProviderStatus } from './charges';
+import { createCharge, getCharge, parseTipCents, resolveCharge, updateChargeProviderStatus } from './charges';
 import { isPendingTabChargeConflict, prepareTabCharge } from '../tabs';
 import { ensureChargePolling } from './charge-poller-client';
 
@@ -60,6 +60,7 @@ export async function createPayment(request: Request, env: Env): Promise<Respons
     deviceId?: string;
     deviceName?: string;
     tabId?: string;
+    tipCents?: number;
   };
   const amountCents = Number(body.amount);
 
@@ -73,11 +74,13 @@ export async function createPayment(request: Request, env: Env): Promise<Respons
 
   // Checked before calling Bancontact, so a refused tab payment never leaves
   // a provider-side payment behind (see tabs.ts's prepareTabCharge).
+  const tipCents = parseTipCents(body.tipCents);
+  if (tipCents === null || tipCents > amountCents) return json({ error: 'tipCents must be an integer between 0 and 100000, and not more than the amount' }, 400);
   const tabId = body.tabId ? String(body.tabId) : null;
   let items = body.items || {};
   let description = body.description ? String(body.description).slice(0, 140) : '';
   if (tabId) {
-    const prepared = await prepareTabCharge(request, env, orgId, tabId, amountCents);
+    const prepared = await prepareTabCharge(request, env, orgId, tabId, amountCents, tipCents);
     if (!prepared.ok) return prepared.response;
     items = prepared.context.items;
     description = description || prepared.context.description;
@@ -133,6 +136,7 @@ export async function createPayment(request: Request, env: Env): Promise<Respons
       userName: request.headers.get('X-User-Name') || null,
       userEmail: request.headers.get('X-User-Email') || null,
       tabId,
+      tipCents,
       providerRef: data.paymentId || null,
       // Stored so a linked CFD — same-device or a genuinely separate one —
       // can render the actual QR code from the payment_updated push, not

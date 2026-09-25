@@ -20,7 +20,7 @@ import { json } from '../http';
 import { broadcastPaymentEvent } from '../devicehub-client';
 import { getDecryptedPaymentCredential } from '../organizations/payment-credentials';
 import { createSumupReaderCheckout, SumupCloudApiError, listSumupReaders } from './sumup-cloud-api';
-import { createCharge, getCharge, setChargeProviderRef, resolveCharge, type ChargeRecord } from './charges';
+import { createCharge, getCharge, parseTipCents, setChargeProviderRef, resolveCharge, type ChargeRecord } from './charges';
 import { ensureChargePolling } from './charge-poller-client';
 import { isPendingTabChargeConflict, prepareTabCharge } from '../tabs';
 
@@ -65,6 +65,8 @@ interface CreateChargeBody {
   readerId?: string;
   // The tab this charge settles — see tabs.ts.
   tabId?: string;
+  // Fooi, part of amount — see charges.ts parseTipCents.
+  tipCents?: number;
 }
 
 export async function createSumupCharge(request: Request, env: Env): Promise<Response> {
@@ -84,11 +86,13 @@ export async function createSumupCharge(request: Request, env: Env): Promise<Res
   const method = (body.method ? String(body.method) : 'sumup') as ChargeRecord['method'];
   const orgId = String(body.orgId);
 
+  const tipCents = parseTipCents(body.tipCents);
+  if (tipCents === null || tipCents > amountCents) return json({ error: 'tipCents must be an integer between 0 and 100000, and not more than the amount' }, 400);
   const tabId = body.tabId ? String(body.tabId) : null;
   let items = body.items || {};
   let description = body.description ? String(body.description).slice(0, 140) : '';
   if (tabId) {
-    const prepared = await prepareTabCharge(request, env, orgId, tabId, amountCents);
+    const prepared = await prepareTabCharge(request, env, orgId, tabId, amountCents, tipCents);
     if (!prepared.ok) return prepared.response;
     items = prepared.context.items;
     description = description || prepared.context.description;
@@ -111,6 +115,7 @@ export async function createSumupCharge(request: Request, env: Env): Promise<Res
       userName: request.headers.get('X-User-Name') || null,
       userEmail: request.headers.get('X-User-Email') || null,
       tabId,
+      tipCents,
     });
   } catch (err) {
     if (isPendingTabChargeConflict(err)) return json({ error: 'Er loopt al een betaling voor deze rekening' }, 409);
@@ -219,6 +224,7 @@ export async function getSumupStatus(chargeId: string, env: Env): Promise<Respon
     status: charge.status,
     providerStatus: charge.providerStatus,
     amountCents: charge.amountCents,
+    tipCents: charge.tipCents,
     transactionCode: charge.transactionCode,
     errorMessage: charge.errorMessage,
     method: charge.method,

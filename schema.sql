@@ -32,6 +32,8 @@ CREATE TABLE IF NOT EXISTS transactions (
   -- Set for sales paid through a tab (see tabs.ts) — every kassa sale from
   -- migration 0012 on. NULL for rows recorded before tabs existed.
   tab_id TEXT REFERENCES tabs(id),
+  -- Part of amount_cents, not revenue (step 3d). 0 for everything before tips.
+  tip_cents INTEGER NOT NULL DEFAULT 0,
   completed_at TEXT NOT NULL
 );
 
@@ -234,7 +236,10 @@ CREATE TABLE IF NOT EXISTS charges (
   expires_at TEXT,
   -- The tab this payment settles (see tabs.ts). NULL for charges created
   -- before tabs existed.
-  tab_id TEXT REFERENCES tabs(id)
+  tab_id TEXT REFERENCES tabs(id),
+  -- Part of amount_cents (the customer pays it in the same payment), never
+  -- counted toward the tab's paid amount — see tabs.ts PAID_SQL.
+  tip_cents INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_charges_org ON charges(org_id);

@@ -1,7 +1,7 @@
 # arcanum-backend
 
 
-Cloudflare Worker handling Bancontact payments and bon-price settings for Arcanum.
+Cloudflare Worker handling payments (Bancontact, SumUp, cash), tabs, catalogs and reports for Arcanum.
 
 ## Tests
 

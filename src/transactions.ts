@@ -8,6 +8,7 @@
 // replacing what used to be per-device localStorage.
 import type { Env } from './env';
 import { json } from './http';
+import { extractCaller, requireOrgRole } from './organizations/auth';
 
 const TRANSACTION_METHODS = new Set(['cash', 'sumup', 'bancontact']);
 
@@ -27,6 +28,7 @@ interface TransactionFields {
   // sending eventId", not another migration.
   eventId?: string | null;
   tabId?: string | null;
+  tipCents?: number;
   completedAt?: string;
 }
 
@@ -36,8 +38,8 @@ async function insertTransaction(env: Env, fields: TransactionFields): Promise<{
 
   await env.DB.prepare(
     `INSERT INTO transactions
-      (id, amount_cents, description, method, items, slot_id, device_id, device_name, user_name, user_email, org_id, event_id, tab_id, completed_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      (id, amount_cents, description, method, items, slot_id, device_id, device_name, user_name, user_email, org_id, event_id, tab_id, tip_cents, completed_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       id,
@@ -53,6 +55,7 @@ async function insertTransaction(env: Env, fields: TransactionFields): Promise<{
       fields.orgId,
       fields.eventId ? String(fields.eventId) : null,
       fields.tabId ? String(fields.tabId) : null,
+      Number.isInteger(fields.tipCents) && (fields.tipCents as number) > 0 ? fields.tipCents : 0,
       completedAt
     )
     .run();
@@ -77,6 +80,7 @@ export interface RecordableCharge {
   userEmail: string | null;
   orgId: string | null;
   tabId: string | null;
+  tipCents: number;
 }
 
 export async function recordChargeTransaction(env: Env, charge: RecordableCharge): Promise<void> {
@@ -97,6 +101,7 @@ export async function recordChargeTransaction(env: Env, charge: RecordableCharge
     userEmail: charge.userEmail,
     orgId: charge.orgId || '',
     tabId: charge.tabId,
+    tipCents: charge.tipCents,
   });
 }
 
@@ -118,7 +123,7 @@ export async function createTransaction(request: Request, env: Env): Promise<Res
 
   // tabId deliberately dropped: a tab's sales are only ever recorded via its
   // charge resolving (recordChargeTransaction), which is also what settles it.
-  const result = await insertTransaction(env, { ...body, amountCents, method, orgId, tabId: null });
+  const result = await insertTransaction(env, { ...body, amountCents, method, orgId, tabId: null, tipCents: 0 });
   return json(result, 201);
 }
 
@@ -135,6 +140,8 @@ interface TransactionRow {
   user_email: string | null;
   org_id: string | null;
   event_id: string | null;
+  tab_id: string | null;
+  tip_cents: number;
   completed_at: string;
 }
 
@@ -158,15 +165,22 @@ function rowToTransaction(row: TransactionRow) {
     userEmail: row.user_email,
     orgId: row.org_id,
     eventId: row.event_id,
+    tabId: row.tab_id,
+    tipCents: row.tip_cents || 0,
     completedAt: row.completed_at,
   };
 }
 
+// Members only — until step 3d this trusted the orgId query param alone,
+// so any logged-in user could read any org's ledger.
 export async function listTransactions(request: Request, env: Env): Promise<Response> {
   const params = new URL(request.url).searchParams;
   const orgId = params.get('orgId');
   const eventId = params.get('eventId');
   if (!orgId) return json({ error: 'orgId is required' }, 400);
+  const caller = extractCaller(request);
+  if (!caller) return json({ error: 'Unauthorized' }, 401);
+  if (!(await requireOrgRole(env, orgId, caller, ['admin', 'cashier']))) return json({ error: 'Forbidden' }, 403);
 
   const { results } = eventId
     ? await env.DB.prepare('SELECT * FROM transactions WHERE org_id = ? AND event_id = ? ORDER BY completed_at DESC LIMIT 5000')

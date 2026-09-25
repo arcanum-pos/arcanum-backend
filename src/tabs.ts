@@ -17,11 +17,10 @@
 // paid >= total — all as conditions inside the SQL itself, so two kassas
 // racing can at worst leave a tab open with a remainder, never closed short.
 //
-// A line with a `variantId` is priced by the server from the order's
-// catalog entry (catalog.ts) — the kassa's own price/name are ignored — and
-// name/price/code/category/VAT are copied in. Free lines without a variant
-// (fooi, until it moves onto the payment in step 3d) still carry their own
-// client-supplied price.
+// Every order line references a catalog entry (variantId + the order's
+// catalogId) and is priced by the server from it — the kassa never sends a
+// price — with name/price/code/category/VAT copied in at sale time. Fooi is
+// a tip on the payment (charges.tip_cents), not a line.
 import type { Env } from './env';
 import { json } from './http';
 import { extractCaller, requireOrgRole } from './organizations/auth';
@@ -84,6 +83,7 @@ interface TabChargeRow {
   method: string;
   status: string;
   amount_cents: number;
+  tip_cents: number;
   device_name: string | null;
   user_name: string | null;
   created_at: string;
@@ -92,7 +92,8 @@ interface TabChargeRow {
 
 // SQL fragments, all scoped to an outer `tabs` row.
 const TOTAL_SQL = `(SELECT COALESCE(SUM(unit_price_cents * quantity), 0) FROM order_lines WHERE tab_id = tabs.id)`;
-const PAID_SQL = `(SELECT COALESCE(SUM(amount_cents), 0) FROM charges WHERE tab_id = tabs.id AND status = 'succeeded')`;
+// Tips are part of a charge's amount but never pay off the tab itself.
+const PAID_SQL = `(SELECT COALESCE(SUM(amount_cents - tip_cents), 0) FROM charges WHERE tab_id = tabs.id AND status = 'succeeded')`;
 const PENDING_SQL = `EXISTS (SELECT 1 FROM charges WHERE tab_id = tabs.id AND status = 'pending')`;
 
 const SUMMARY_SELECT = `SELECT tabs.*, ${TOTAL_SQL} AS total_cents, ${PAID_SQL} AS paid_cents, ${PENDING_SQL} AS payment_pending FROM tabs`;
@@ -163,8 +164,8 @@ interface LineInput {
   unitPriceCents: number;
   quantity: number;
   note: string | null;
-  // Set for catalog lines; name/unitPriceCents/itemCode/category/vatRateBp
-  // are then filled in from the catalog by priceCatalogLines.
+  // name/unitPriceCents/itemCode/category/vatRateBp are filled in from the
+  // catalog by priceCatalogLines.
   variantId: string | null;
   category: string | null;
   vatRateBp: number | null;
@@ -176,33 +177,16 @@ function parseLines(raw: unknown): LineInput[] | string {
   if (!Array.isArray(raw) || raw.length === 0) return 'lines must be a non-empty array';
   if (raw.length > MAX_LINES_PER_ORDER) return `at most ${MAX_LINES_PER_ORDER} lines per order`;
 
+  // Since step 3d every line comes from a menukaart — the kassa never sets a
+  // price itself (fooi is a tip on the payment now). Name, price and the rest
+  // are filled in by priceCatalogLines.
   const lines: LineInput[] = [];
   for (const item of raw as Record<string, unknown>[]) {
-    const quantity = Number(item?.quantity);
-    const note = typeof item?.note === 'string' && item.note.trim() ? item.note.trim().slice(0, 200) : null;
-    if (typeof item?.variantId === 'string' && item.variantId) {
-      if (!Number.isInteger(quantity) || quantity < 1 || quantity > 999) return 'quantity must be an integer between 1 and 999';
-      lines.push({ variantId: item.variantId, quantity, note, itemCode: null, name: '', unitPriceCents: 0, category: null, vatRateBp: null });
-      continue;
-    }
-
-    const name = typeof item?.name === 'string' ? item.name.trim() : '';
-    const unitPriceCents = Number(item?.unitPriceCents);
-    if (!name || name.length > 100) return 'each line needs a name (max 100 characters)';
-    if (!Number.isInteger(unitPriceCents) || unitPriceCents < 0 || unitPriceCents > 1_000_000) {
-      return 'unitPriceCents must be an integer between 0 and 1000000';
-    }
+    if (typeof item?.variantId !== 'string' || !item.variantId) return 'every line needs a variantId from the menukaart';
+    const quantity = Number(item.quantity);
     if (!Number.isInteger(quantity) || quantity < 1 || quantity > 999) return 'quantity must be an integer between 1 and 999';
-    lines.push({
-      itemCode: typeof item.itemCode === 'string' && item.itemCode ? item.itemCode.slice(0, 40) : null,
-      name,
-      unitPriceCents,
-      quantity,
-      note,
-      variantId: null,
-      category: null,
-      vatRateBp: null,
-    });
+    const note = typeof item.note === 'string' && item.note.trim() ? item.note.trim().slice(0, 200) : null;
+    lines.push({ variantId: item.variantId, quantity, note, itemCode: null, name: '', unitPriceCents: 0, category: null, vatRateBp: null });
   }
   return lines;
 }
@@ -295,7 +279,7 @@ async function loadTabDetail(env: Env, orgId: string, tabId: string) {
     env.DB.prepare('SELECT id, source, device_id, device_name, user_name, user_email, submitted_at FROM orders WHERE tab_id = ? ORDER BY submitted_at').bind(tabId),
     env.DB.prepare('SELECT * FROM order_lines WHERE tab_id = ? ORDER BY created_at, rowid').bind(tabId),
     env.DB.prepare(
-      'SELECT id, method, status, amount_cents, device_name, user_name, created_at, resolved_at FROM charges WHERE tab_id = ? ORDER BY created_at'
+      'SELECT id, method, status, amount_cents, tip_cents, device_name, user_name, created_at, resolved_at FROM charges WHERE tab_id = ? ORDER BY created_at'
     ).bind(tabId),
   ]);
 
@@ -323,6 +307,7 @@ async function loadTabDetail(env: Env, orgId: string, tabId: string) {
       method: c.method,
       status: c.status,
       amountCents: c.amount_cents,
+      tipCents: c.tip_cents,
       deviceName: c.device_name,
       userName: c.user_name,
       createdAt: c.created_at,
@@ -567,7 +552,8 @@ export async function prepareTabCharge(
   env: Env,
   orgId: string,
   tabId: string,
-  amountCents: number
+  amountCents: number,
+  tipCents = 0
 ): Promise<{ ok: true; context: TabChargeContext } | { ok: false; response: Response }> {
   const refusal = await authorize(request, env, orgId);
   if (refusal) return { ok: false, response: refusal };
@@ -577,7 +563,7 @@ export async function prepareTabCharge(
   if (tab.status !== 'open') return { ok: false, response: json({ error: 'Rekening is niet meer open', tab }, 409) };
   if (tab.paymentPending) return { ok: false, response: json({ error: 'Er loopt al een betaling voor deze rekening', tab }, 409) };
   if (tab.outstandingCents < 1) return { ok: false, response: json({ error: 'Niets te betalen op deze rekening', tab }, 409) };
-  if (amountCents !== tab.outstandingCents) {
+  if (amountCents !== tab.outstandingCents + tipCents) {
     return { ok: false, response: json({ error: 'Rekening is gewijzigd, herlaad en probeer opnieuw', tab }, 409) };
   }
 

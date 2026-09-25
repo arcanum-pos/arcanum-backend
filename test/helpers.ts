@@ -82,8 +82,69 @@ export async function api<T = any>(method: string, path: string, options: { user
 
 export const DEVICE = { deviceId: 'device-1', deviceName: 'Toog' };
 
-export function line(itemCode: string | null, name: string, unitPriceCents: number, quantity: number) {
+// A line the test wants on a tab. Since step 3d every order line must come
+// from a menukaart, so orderBody()/createTab() turn these into real catalog
+// lines: the first use of a code creates that product on the org's test
+// menukaart at this price. `itemCode` doubles as the variant code, so the
+// legacy items JSON still shows it.
+export interface TestLine {
+  itemCode: string;
+  name: string;
+  unitPriceCents: number;
+  quantity: number;
+}
+
+export function line(itemCode: string, name: string, unitPriceCents: number, quantity: number): TestLine {
   return { itemCode, name, unitPriceCents, quantity };
+}
+
+interface TestMenu {
+  catalogId: string;
+  sectionId: string;
+  variants: Map<string, { id: string; priceCents: number }>;
+}
+
+const menus = new Map<string, TestMenu>();
+
+async function adminCall(org: TestOrg, method: string, path: string, body?: unknown) {
+  const res = await api(method, path, { user: org.admin, body });
+  if (res.status >= 300) throw new Error(`${method} ${path} failed: ${res.status} ${JSON.stringify(res.body)}`);
+  return res.body;
+}
+
+export async function testMenu(org: TestOrg): Promise<TestMenu> {
+  let menu = menus.get(org.orgId);
+  if (!menu) {
+    const catalog = await adminCall(org, 'POST', `/organizations/${org.orgId}/catalogs`, { name: 'Testkaart' });
+    const section = await adminCall(org, 'POST', `/organizations/${org.orgId}/catalogs/${catalog.id}/sections`, { name: 'Alles' });
+    menu = { catalogId: catalog.id, sectionId: section.id, variants: new Map() };
+    menus.set(org.orgId, menu);
+  }
+  return menu;
+}
+
+// The variant id for a code on the org's test menukaart, created on first use.
+export async function menuVariant(org: TestOrg, code: string, name: string, priceCents: number): Promise<string> {
+  const menu = await testMenu(org);
+  const known = menu.variants.get(code);
+  if (known) {
+    if (known.priceCents !== priceCents) throw new Error(`test menu: ${code} already priced ${known.priceCents}, not ${priceCents}`);
+    return known.id;
+  }
+  const product = await adminCall(org, 'POST', `/organizations/${org.orgId}/catalog/products`, { name, variants: [{ name: '', code }] });
+  const variantId = product.variants[0].id;
+  await adminCall(org, 'POST', `/organizations/${org.orgId}/catalogs/${menu.catalogId}/entries`, { sectionId: menu.sectionId, variantId, priceCents });
+  menu.variants.set(code, { id: variantId, priceCents });
+  return variantId;
+}
+
+// An order body with TestLines resolved to catalog lines + catalogId.
+export async function orderBody(org: TestOrg, body: Record<string, unknown> & { lines?: TestLine[] }) {
+  if (!body.lines || body.lines.length === 0) return body;
+  const menu = await testMenu(org);
+  const lines = [];
+  for (const l of body.lines) lines.push({ variantId: await menuVariant(org, l.itemCode, l.name, l.unitPriceCents), quantity: l.quantity });
+  return { ...body, catalogId: menu.catalogId, lines };
 }
 
 // --- Tab shortcuts ---
@@ -92,8 +153,12 @@ export function tabsPath(orgId: string, suffix = '') {
   return `/organizations/${orgId}/tabs${suffix}`;
 }
 
+// Lines given as TestLines (see line()) are resolved to the org's test
+// menukaart; lines that already carry a variantId (+ catalogId) pass through.
 export async function createTab(org: TestOrg, body: Record<string, unknown> = {}) {
-  const res = await api('POST', tabsPath(org.orgId), { user: org.cashier, body: { ...DEVICE, ...body } });
+  const lines = body.lines as unknown[] | undefined;
+  const resolved = lines && lines.length > 0 && (lines[0] as TestLine).itemCode !== undefined ? await orderBody(org, body as any) : body;
+  const res = await api('POST', tabsPath(org.orgId), { user: org.cashier, body: { ...DEVICE, ...resolved } });
   if (res.status !== 201) throw new Error(`createTab failed: ${res.status} ${JSON.stringify(res.body)}`);
   return res.body;
 }

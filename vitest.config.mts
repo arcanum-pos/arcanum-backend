@@ -48,7 +48,6 @@ export default defineConfig({
           INTERNAL_API_KEY: 'test-internal-key',
           BFF_INTERNAL_KEY: 'test-bff-key',
           MAILER_INTERNAL_KEY: 'test-mailer-key',
-          SETTINGS_PASSWORD: 'test-settings-password',
           PUBLIC_BASE_URL: 'https://arcanum.test',
           // A developer's own .dev.vars may point these at local Workers;
           // blank them so tests always go through the stub bindings below.

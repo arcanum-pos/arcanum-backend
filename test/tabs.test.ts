@@ -1,12 +1,12 @@
 // Tabs API: auth, numbering, orders, voids, cancel, rename, listing.
 // Payment-related tab rules live in tab-payments.test.ts.
 import { describe, expect, it } from 'vitest';
-import { api, createTab, DEVICE, getTab, line, payCash, seedOrg, tabsPath, type TestOrg } from './helpers';
+import { api, createTab, DEVICE, getTab, line, orderBody, payCash, seedOrg, tabsPath, type TestOrg } from './helpers';
 
 async function tabWithOrder(org: TestOrg) {
   return createTab(org, {
     label: 'Toog',
-    lines: [line('bon', 'Bonnen', 100, 10), line('fooi', 'Fooi', 150, 1)],
+    lines: [line('bon', 'Bonnen', 100, 10), line('pils', 'Pils', 150, 1)],
   });
 }
 
@@ -83,12 +83,12 @@ describe('tabs: order validation', () => {
     expect(res.status).toBe(400);
   });
 
-  it('rejects a non-integer price (400)', async () => {
+  it('rejects a free line without a variant — prices only come from the menukaart (400)', async () => {
     const org = await seedOrg();
     const tab = await createTab(org);
     const res = await api('POST', tabsPath(org.orgId, `/${tab.id}/orders`), {
       user: org.cashier,
-      body: { lines: [line(null, 'x', 1.5, 1)] },
+      body: { lines: [{ name: 'x', unitPriceCents: 100, quantity: 1 }] },
     });
     expect(res.status).toBe(400);
   });
@@ -98,7 +98,7 @@ describe('tabs: order validation', () => {
     const tab = await createTab(org);
     const res = await api('POST', tabsPath(org.orgId, `/${tab.id}/orders`), {
       user: org.cashier,
-      body: { lines: [line(null, 'x', 100, 0)] },
+      body: await orderBody(org, { lines: [line('x', 'x', 100, 0)] }),
     });
     expect(res.status).toBe(400);
   });
@@ -109,7 +109,7 @@ describe('tabs: orders and voids', () => {
     const tab = await tabWithOrder(org);
     const res = await api('POST', tabsPath(org.orgId, `/${tab.id}/orders`), {
       user: org.cashier,
-      body: { ...DEVICE, lines: [line('fietstocht', 'Fietstocht', 800, 2)] },
+      body: await orderBody(org, { ...DEVICE, lines: [line('fietstocht', 'Fietstocht', 800, 2)] }),
     });
     expect(res.status).toBe(201);
     const fiets = res.body.lines.find((l: any) => l.itemCode === 'fietstocht');
@@ -188,7 +188,7 @@ describe('tabs: orders and voids', () => {
     const org = await seedOrg();
     const tab = await tabWithOrder(org);
     await payCash(org, tab.id, 1150);
-    const res = await api('POST', tabsPath(org.orgId, `/${tab.id}/orders`), { user: org.cashier, body: { lines: [line(null, 'x', 100, 1)] } });
+    const res = await api('POST', tabsPath(org.orgId, `/${tab.id}/orders`), { user: org.cashier, body: await orderBody(org, { lines: [line('x', 'x', 100, 1)] }) });
     expect(res.status).toBe(409);
   });
 });

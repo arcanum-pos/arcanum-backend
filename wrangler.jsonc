@@ -36,12 +36,6 @@
 			"service": "arcanum-mailer"
 		}
 	],
-	"kv_namespaces": [
-		{
-			"binding": "SETTINGS",
-			"id": "1a77d762d41f4fefb159050422ff86eb"
-		}
-	],
 	"d1_databases": [
 		
 		{
@@ -103,16 +97,6 @@
 			"new_sqlite_classes": [
 				"ChargePoller"
 			]
-		}
-	],
-	"ratelimits": [
-		{
-			"name": "AUTH_RATE_LIMITER",
-			"namespace_id": "1001",
-			"simple": {
-				"limit": 1,
-				"period": 60
-			}
 		}
 	],
 	"observability": {

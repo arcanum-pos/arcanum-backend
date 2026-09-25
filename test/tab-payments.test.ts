@@ -5,9 +5,9 @@
 import { env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { settleTab } from '../src/tabs';
-import { api, chargeCash, confirmCharge, createTab, getTab, line, payCash, recordedCalls, rows, seedOrg, tabsPath, type TestOrg } from './helpers';
+import { api, chargeCash, confirmCharge, createTab, getTab, line, orderBody, payCash, recordedCalls, rows, seedOrg, tabsPath, type TestOrg } from './helpers';
 
-async function openTab(org: TestOrg, lines = [line('bon', 'Bonnen', 100, 10), line('fooi', 'Fooi', 150, 1)]) {
+async function openTab(org: TestOrg, lines = [line('bon', 'Bonnen', 100, 10), line('pils', 'Pils', 150, 1)]) {
   return createTab(org, { label: 'Toog', lines });
 }
 
@@ -41,7 +41,7 @@ describe('tab payments: charge rules', () => {
     expect((await chargeCash(org, tab.id, 1150)).status).toBe(201);
     expect((await getTab(org, tab.id)).paymentPending).toBe(true);
 
-    const res = await api('POST', tabsPath(org.orgId, `/${tab.id}/orders`), { user: org.cashier, body: { lines: [line(null, 'x', 100, 1)] } });
+    const res = await api('POST', tabsPath(org.orgId, `/${tab.id}/orders`), { user: org.cashier, body: await orderBody(org, { lines: [line('x', 'x', 100, 1)] }) });
     expect(res.status).toBe(409);
   });
 
@@ -141,11 +141,11 @@ describe('tab payments: closing and receipt numbers', () => {
 });
 
 describe('tab payments: transactions ledger', () => {
-  it('records the legacy items JSON derived from net lines: counts, fooi in cents, voided lines left out', async () => {
+  it('records the legacy items JSON derived from net lines: counts per code, voided lines left out', async () => {
     const org = await seedOrg();
     const tab = await createTab(org, {
       label: 'Toog',
-      lines: [line('bon', 'Bonnen', 100, 10), line('fooi', 'Fooi', 150, 1), line('fietstocht', 'Fietstocht', 800, 2)],
+      lines: [line('bon', 'Bonnen', 100, 10), line('pils', 'Pils', 150, 1), line('fietstocht', 'Fietstocht', 800, 2)],
     });
     const fiets = tab.lines.find((l: any) => l.itemCode === 'fietstocht');
     await api('POST', tabsPath(org.orgId, `/${tab.id}/lines/${fiets.id}/void`), { user: org.cashier, body: { reason: 'weg' } });
@@ -157,7 +157,7 @@ describe('tab payments: transactions ledger', () => {
       tab.id
     );
     expect(tx.amount_cents).toBe(1150);
-    expect(JSON.parse(tx.items)).toEqual({ bon: 10, fooi: 150 });
+    expect(JSON.parse(tx.items)).toEqual({ bon: 10, pils: 1 });
     expect(tx.description).toBe(`Rekening #${tab.number} Toog`);
     expect(tx.user_name).toBe(org.cashier.name);
   });

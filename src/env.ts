@@ -1,8 +1,5 @@
 export interface Env {
   AUTH_SCHEME?: string;
-  SETTINGS: KVNamespace;
-  AUTH_RATE_LIMITER?: RateLimit;
-  SETTINGS_PASSWORD?: string;
   CHARGE_POLLER: DurableObjectNamespace;
   DB: D1Database;
   // arcanum-devicehub (separate Worker) — see devicehub-client.ts.

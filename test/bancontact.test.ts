@@ -57,10 +57,28 @@ function payBancontact(org: TestOrg, tabId: string, amount: number) {
 }
 
 async function openTab(org: TestOrg) {
-  return createTab(org, { label: 'Tafel 1', lines: [line('bon', 'Bonnen', 100, 10), line('fooi', 'Fooi', 150, 1)] });
+  return createTab(org, { label: 'Tafel 1', lines: [line('bon', 'Bonnen', 100, 10), line('pils', 'Pils', 150, 1)] });
 }
 
 describe('bancontact tab payments', () => {
+  it('charges outstanding + tip at Bancontact and stores the tip on the charge', async () => {
+    const org = await orgWithBancontact();
+    const tab = await openTab(org);
+    const res = await api('POST', '/payments', { user: org.cashier, body: { orgId: org.orgId, tabId: tab.id, amount: 1350, tipCents: 200, ...DEVICE } });
+    expect(res.status).toBe(201);
+    expect(bancontactRequests[0].body).toMatchObject({ amount: 1350 });
+    const [charge] = await rows<{ tip_cents: number; amount_cents: number }>('SELECT tip_cents, amount_cents FROM charges WHERE id = ?', res.body.chargeId);
+    expect(charge).toEqual({ tip_cents: 200, amount_cents: 1350 });
+  });
+
+  it('refuses a tip that does not add up before calling Bancontact (409)', async () => {
+    const org = await orgWithBancontact();
+    const tab = await openTab(org);
+    const res = await api('POST', '/payments', { user: org.cashier, body: { orgId: org.orgId, tabId: tab.id, amount: 1150, tipCents: 200, ...DEVICE } });
+    expect(res.status).toBe(409);
+    expect(bancontactRequests).toHaveLength(0);
+  });
+
   it('refuses a wrong amount before calling Bancontact at all', async () => {
     const org = await orgWithBancontact();
     const tab = await openTab(org);
@@ -95,7 +113,7 @@ describe('bancontact tab payments', () => {
       res.body.chargeId
     );
     expect(charge).toMatchObject({ tab_id: tab.id, status: 'pending', method: 'bancontact', provider_ref: 'bc-payment-1' });
-    expect(JSON.parse(charge.items)).toEqual({ bon: 10, fooi: 150 });
+    expect(JSON.parse(charge.items)).toEqual({ bon: 10, pils: 1 });
     expect((await getTab(org, tab.id)).paymentPending).toBe(true);
   });
 

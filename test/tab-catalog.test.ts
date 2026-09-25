@@ -108,14 +108,14 @@ describe('tabs: lines priced from the catalog', () => {
     expect(JSON.parse(row!.items)).toEqual({ fietstochtMember: 2, fietstocht: 1 });
   });
 
-  it('still accepts free lines without a variant (fooi until 3d) alongside catalog lines', async () => {
+  it('refuses a free line (no variant) even next to catalog lines — fooi is a tip on the payment now (400)', async () => {
     const org = await seedOrg();
     const c = await seedCatalog(org);
-    const tab = await createTab(org, {
-      catalogId: c.catalog.id,
-      lines: [variantLine(c.product.variants[0].id, 1), { itemCode: 'fooi', name: 'Fooi', unitPriceCents: 150, quantity: 1 }],
+    const res = await api('POST', tabsPath(org.orgId), {
+      user: org.cashier,
+      body: { ...DEVICE, catalogId: c.catalog.id, lines: [variantLine(c.product.variants[0].id, 1), { itemCode: 'fooi', name: 'Fooi', unitPriceCents: 150, quantity: 1 }] },
     });
-    expect(tab.totalCents).toBe(950);
+    expect(res.status).toBe(400);
   });
 
   describe('refuses (400) and creates nothing when', () => {

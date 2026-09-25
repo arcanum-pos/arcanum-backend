@@ -2,17 +2,17 @@
 //   payments/bancontact.ts, payments/sumup.ts   — payment processing
 //   payments/charges.ts                          — shared in-flight payment tracking
 //   payments/poller.ts                           — ChargePoller DO, fallback for missed callbacks
-//   settings.ts                                  — pricing config + password gate
 //   transactions.ts                              — the shared D1 sales ledger
 //   tabs.ts                                      — tabs (rekeningen), orders, order lines
 //   catalog.ts                                   — categories, products, catalogs (menukaarten)
+//   reports.ts                                   — sales report
 //   devicehub-client.ts                          — outbound calls to arcanum-devicehub
 //   organizations/                                — multi-tenant admin portal backend
 // Kept as file-level modules within one deployed Worker rather than split into
-// separate Workers — see the 2026-09 discussion: Settings and Transactions
-// aren't coupled tightly enough to payment processing (or, for Transactions,
-// coupled in a way that tolerates network failure) to justify the operational
-// cost of separate deployments yet.
+// separate Workers — see the 2026-09 discussion: Transactions, tabs and
+// catalogs aren't coupled to payment processing in a way that tolerates
+// network failure, and don't justify the operational cost of separate
+// deployments yet.
 import type { Env } from './env';
 export type { Env };
 
@@ -20,11 +20,11 @@ import { json, CORS_HEADERS } from './http';
 import { createPayment, postBancontactCallback } from './payments/bancontact';
 import { createSumupCharge, postSumupCallback, confirmChargeFromPos, getSumupStatus, listSumupReadersForOrg } from './payments/sumup';
 import { ChargePoller } from './payments/poller';
-import { getSettings, updateSettings, verifyPassword } from './settings';
 import { createTransaction, listTransactions } from './transactions';
 import { dispatchOrganizationsRoute } from './organizations/router';
 import { dispatchTabsRoute } from './tabs';
 import { dispatchCatalogRoute } from './catalog';
+import { dispatchReportsRoute } from './reports';
 
 // Durable Object classes must be a named export of the Worker's main entry
 // file — re-exported here since it actually lives in payments/poller.ts.
@@ -41,18 +41,6 @@ export default {
     try {
       if (request.method === 'POST' && url.pathname === '/payments') {
         return await createPayment(request, env);
-      }
-
-      if (request.method === 'GET' && url.pathname === '/settings') {
-        return await getSettings(env);
-      }
-
-      if (request.method === 'POST' && url.pathname === '/settings') {
-        return await updateSettings(request, env);
-      }
-
-      if (request.method === 'POST' && url.pathname === '/verify-password') {
-        return await verifyPassword(request, env);
       }
 
       if (request.method === 'POST' && url.pathname === '/sumup/charge') {
@@ -102,6 +90,8 @@ export default {
         if (tabsResponse) return tabsResponse;
         const catalogResponse = await dispatchCatalogRoute(request, env, url.pathname);
         if (catalogResponse) return catalogResponse;
+        const reportsResponse = await dispatchReportsRoute(request, env, url.pathname);
+        if (reportsResponse) return reportsResponse;
         const response = await dispatchOrganizationsRoute(request, env, url.pathname);
         if (response) return response;
       }

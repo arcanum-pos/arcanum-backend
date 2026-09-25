@@ -37,6 +37,7 @@ export interface ChargeRecord {
   providerData: Record<string, unknown>;
   expiresAt: string | null;
   tabId: string | null;
+  tipCents: number;
 }
 
 interface ChargeRow {
@@ -62,6 +63,7 @@ interface ChargeRow {
   provider_data: string | null;
   expires_at: string | null;
   tab_id: string | null;
+  tip_cents: number;
 }
 
 function rowToCharge(row: ChargeRow): ChargeRecord {
@@ -88,6 +90,7 @@ function rowToCharge(row: ChargeRow): ChargeRecord {
     providerData: row.provider_data ? JSON.parse(row.provider_data) : {},
     expiresAt: row.expires_at,
     tabId: row.tab_id,
+    tipCents: row.tip_cents || 0,
   };
 }
 
@@ -115,6 +118,16 @@ export interface CreateChargeFields {
   // per tab (idx_charges_one_pending_per_tab): a second insert throws, see
   // tabs.ts's isPendingTabChargeConflict.
   tabId?: string | null;
+  // Part of amountCents — see parseTipCents.
+  tipCents?: number;
+}
+
+// A tip (fooi) on a payment: an integer 0..100000 cents, part of the charged
+// amount. Returns null for anything invalid; undefined/null input means 0.
+export function parseTipCents(raw: unknown): number | null {
+  if (raw === undefined || raw === null) return 0;
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 0 && n <= 100_000 ? n : null;
 }
 
 export async function createCharge(env: Env, fields: CreateChargeFields): Promise<ChargeRecord> {
@@ -127,8 +140,8 @@ export async function createCharge(env: Env, fields: CreateChargeFields): Promis
 
   await env.DB.prepare(
     `INSERT INTO charges
-      (id, org_id, method, status, provider_status, amount_cents, description, pos_terminal_id, items, slot_id, device_id, device_name, user_name, user_email, created_at, provider_ref, provider_data, expires_at, tab_id)
-     VALUES (?, ?, ?, 'pending', NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      (id, org_id, method, status, provider_status, amount_cents, description, pos_terminal_id, items, slot_id, device_id, device_name, user_name, user_email, created_at, provider_ref, provider_data, expires_at, tab_id, tip_cents)
+     VALUES (?, ?, ?, 'pending', NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       id,
@@ -147,7 +160,8 @@ export async function createCharge(env: Env, fields: CreateChargeFields): Promis
       fields.providerRef || null,
       JSON.stringify(fields.providerData || {}),
       fields.expiresAt || null,
-      fields.tabId || null
+      fields.tabId || null,
+      fields.tipCents || 0
     )
     .run();
 
