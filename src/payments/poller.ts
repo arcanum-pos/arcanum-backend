@@ -23,10 +23,60 @@ import { getDecryptedPaymentCredential } from '../organizations/payment-credenti
 import { getBancontactPaymentStatus, BANCONTACT_TERMINAL_STATUSES } from './bancontact';
 
 const POLL_INTERVAL_MS = 30 * 1000;
+// A backlog (more stale charges than one run may handle) is worked off at this pace.
+const BACKLOG_INTERVAL_MS = 1000;
+
+// D1 on the Workers Free plan allows 50 queries per invocation — an alarm
+// run included. Each step below is only started if its worst case still
+// fits: expiring a charge ≈ 8 queries (resolve + ledger + tab settle),
+// polling one ≈ 10 (credentials + a possible resolve). Whatever doesn't fit
+// waits for the next run.
+const QUERY_BUDGET = 40;
+const EXPIRE_COST = 8;
+const POLL_COST = 10;
+
+export interface SweepResult {
+  expired: number;
+  polled: number;
+  // True when stale charges are left over: run again soon.
+  backlog: boolean;
+  // Where the next run's polling continues (rotates through a large backlog).
+  cursor: string;
+}
+
+export async function sweepCharges(env: Env, cursor = ''): Promise<SweepResult> {
+  let used = 2; // the two list queries below
+  const expireLimit = Math.max(0, Math.floor((QUERY_BUDGET - used) / EXPIRE_COST));
+  const { expired, more } = await expireStaleCharges(env, expireLimit);
+  used += expired * EXPIRE_COST;
+
+  const pollLimit = Math.max(0, Math.floor((QUERY_BUDGET - used) / POLL_COST));
+  let polled = 0;
+  let next = cursor;
+  if (pollLimit > 0) {
+    let pending = await listPendingChargesForPolling(env, cursor, pollLimit);
+    if (pending.length === 0 && cursor) pending = await listPendingChargesForPolling(env, '', pollLimit); // wrap around
+    for (const charge of pending) {
+      try {
+        await pollCharge(env, charge);
+      } catch (err) {
+        // A transient error polling one charge shouldn't stop the sweep —
+        // just try it again next tick.
+        console.error(`Kon status niet pollen voor charge ${charge.id}`, err);
+      }
+      polled++;
+      next = charge.id;
+    }
+    if (pending.length < pollLimit) next = '';
+  }
+  return { expired, polled, backlog: more, cursor: next };
+}
 
 export class ChargePoller implements DurableObject {
   private state: DurableObjectState;
   private env: Env;
+  // In memory only — losing it just restarts the rotation from the start.
+  private cursor = '';
 
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
@@ -46,57 +96,51 @@ export class ChargePoller implements DurableObject {
   }
 
   async alarm(): Promise<void> {
-    await expireStaleCharges(this.env);
-
-    const pending = await listPendingChargesForPolling(this.env);
-    for (const charge of pending) {
-      try {
-        if (charge.method === 'sumup') {
-          await this.pollSumup(charge);
-        } else if (charge.method === 'bancontact') {
-          await this.pollBancontact(charge);
-        }
-      } catch (err) {
-        // A transient error polling one charge shouldn't stop the sweep —
-        // just try it again next tick.
-        console.error(`Kon status niet pollen voor charge ${charge.id}`, err);
-      }
+    const result = await sweepCharges(this.env, this.cursor);
+    this.cursor = result.cursor;
+    if (result.backlog) {
+      await this.state.storage.setAlarm(Date.now() + BACKLOG_INTERVAL_MS);
+      return;
     }
-
-    const remaining = await listPendingChargesForPolling(this.env);
+    const remaining = await listPendingChargesForPolling(this.env, '', 1);
     if (remaining.length > 0) {
       await this.state.storage.setAlarm(Date.now() + POLL_INTERVAL_MS);
     }
   }
+}
 
-  private async pollSumup(charge: ChargeRecord): Promise<void> {
-    const readerId = (charge.providerData as { readerId?: string }).readerId;
-    if (!charge.providerRef || !readerId) return;
+async function pollCharge(env: Env, charge: ChargeRecord): Promise<void> {
+  if (charge.method === 'sumup') await pollSumup(env, charge);
+  else if (charge.method === 'bancontact') await pollBancontact(env, charge);
+}
 
-    const credential = await getDecryptedPaymentCredential(this.env, charge.orgId, 'sumup');
-    const merchantId = credential?.merchantId ? String(credential.merchantId) : '';
-    const apiKey = credential?.apiKey ? String(credential.apiKey) : '';
-    if (!merchantId || !apiKey) return;
+async function pollSumup(env: Env, charge: ChargeRecord): Promise<void> {
+  const readerId = (charge.providerData as { readerId?: string }).readerId;
+  if (!charge.providerRef || !readerId) return;
 
-    const result = await getSumupReaderCheckoutStatus({ merchantCode: merchantId, apiKey, readerId, checkoutId: charge.providerRef });
-    if (result.status === 'pending') return;
+  const credential = await getDecryptedPaymentCredential(env, charge.orgId, 'sumup');
+  const merchantId = credential?.merchantId ? String(credential.merchantId) : '';
+  const apiKey = credential?.apiKey ? String(credential.apiKey) : '';
+  if (!merchantId || !apiKey) return;
 
-    await resolveCharge(this.env, charge.id, {
-      success: result.status === 'successful',
-      providerStatus: result.status,
-      errorMessage: result.paymentFailureReason,
-    });
-  }
+  const result = await getSumupReaderCheckoutStatus({ merchantCode: merchantId, apiKey, readerId, checkoutId: charge.providerRef });
+  if (result.status === 'pending') return;
 
-  private async pollBancontact(charge: ChargeRecord): Promise<void> {
-    if (!charge.providerRef) return;
+  await resolveCharge(env, charge.id, {
+    success: result.status === 'successful',
+    providerStatus: result.status,
+    errorMessage: result.paymentFailureReason,
+  });
+}
 
-    const result = await getBancontactPaymentStatus(this.env, charge.orgId, charge.providerRef);
-    if (!result || !BANCONTACT_TERMINAL_STATUSES.has(result.status)) return;
+async function pollBancontact(env: Env, charge: ChargeRecord): Promise<void> {
+  if (!charge.providerRef) return;
 
-    await resolveCharge(this.env, charge.id, {
-      success: result.status === 'SUCCEEDED',
-      providerStatus: result.status,
-    });
-  }
+  const result = await getBancontactPaymentStatus(env, charge.orgId, charge.providerRef);
+  if (!result || !BANCONTACT_TERMINAL_STATUSES.has(result.status)) return;
+
+  await resolveCharge(env, charge.id, {
+    success: result.status === 'SUCCEEDED',
+    providerStatus: result.status,
+  });
 }

@@ -29,6 +29,7 @@ import { dispatchCatalogRoute } from './catalog';
 import { dispatchCatalogImportRoute } from './catalog-import';
 import { dispatchReportsRoute } from './reports';
 import { dispatchOrgTransferRoute } from './org-transfer';
+import { QueryBudgetExceeded, withQueryBudget } from './query-budget';
 
 // Durable Object classes must be a named export of the Worker's main entry
 // file — re-exported here since it actually lives in payments/poller.ts.
@@ -36,6 +37,8 @@ export { ChargePoller };
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    // Free-plan D1 limit enforcement — only active when D1_QUERY_LIMIT is set (tests).
+    env = withQueryBudget(env);
     if (request.method === 'OPTIONS') {
       return new Response(null, { headers: CORS_HEADERS });
     }
@@ -108,6 +111,7 @@ export default {
 
       return json({ error: 'Not found' }, 404);
     } catch (err) {
+      if (err instanceof QueryBudgetExceeded) return json({ error: 'Query budget exceeded', details: err.message }, 500);
       return json({ error: 'Unexpected worker error', details: (err as Error).message }, 502);
     }
   },

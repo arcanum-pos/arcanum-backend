@@ -25,6 +25,7 @@ import type { Env } from './env';
 import { json } from './http';
 import { extractCaller, requireOrgRole } from './organizations/auth';
 import { displayName } from './catalog';
+import { jsonRowsStatement } from './sql-json';
 
 type TabStatus = 'open' | 'closed' | 'cancelled';
 
@@ -229,9 +230,10 @@ async function priceCatalogLines(env: Env, orgId: string, catalogId: string | nu
      LEFT JOIN categories c ON c.id = p.category_id
      LEFT JOIN prep_stations ps ON ps.id = p.prep_station_id
      WHERE e.catalog_id = ? AND e.visible = 1 AND v.archived_at IS NULL AND p.archived_at IS NULL
-       AND e.variant_id IN (${variantIds.map(() => '?').join(', ')})`
+       AND e.variant_id IN (SELECT value FROM json_each(?))`
   )
-    .bind(catalogId, ...variantIds)
+    // One JSON parameter, not one per line: D1 allows at most 100 bound parameters per query.
+    .bind(catalogId, JSON.stringify(variantIds))
     .all<{
       variant_id: string;
       price_cents: number;
@@ -270,34 +272,41 @@ async function prepareOrderLines(env: Env, orgId: string, body: Record<string, u
   return { lines, catalogId: lines.some((l) => l.variantId) ? catalogId : null };
 }
 
-// Every order_lines insert is conditional on its order row having been
-// inserted in the same batch — so a refused order (tab not open, payment
-// pending) leaves no orphan lines behind, all-or-nothing.
+// All lines of an order in ONE statement (Free-plan D1 limit: 50 queries per
+// request, every batch statement counting — see sql-json.ts), conditional on
+// its order row having been inserted in the same batch — so a refused order
+// (tab not open, payment pending) leaves no orphan lines behind,
+// all-or-nothing.
+const LINE_COLUMNS = [
+  'id', 'org_id', 'tab_id', 'order_id', 'item_code', 'variant_id', 'name', 'unit_price_cents', 'quantity', 'category', 'vat_rate_bp',
+  'prep_station_id', 'prep_station_name', 'note', 'created_at',
+];
+
 function lineInsertStatements(env: Env, orgId: string, tabId: string, orderId: string, lines: LineInput[], now: string): D1PreparedStatement[] {
-  return lines.map((line) =>
-    env.DB.prepare(
-      `INSERT INTO order_lines (id, org_id, tab_id, order_id, item_code, variant_id, name, unit_price_cents, quantity, category, vat_rate_bp,
-         prep_station_id, prep_station_name, note, created_at)
-       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM orders WHERE id = ?)`
-    ).bind(
-      crypto.randomUUID(),
-      orgId,
-      tabId,
-      orderId,
-      line.itemCode,
-      line.variantId,
-      line.name,
-      line.unitPriceCents,
-      line.quantity,
-      line.category,
-      line.vatRateBp,
-      line.prepStationId,
-      line.prepStationName,
-      line.note,
-      now,
-      orderId
-    )
+  const statement = jsonRowsStatement(
+    env.DB,
+    'order_lines',
+    LINE_COLUMNS,
+    lines.map((line) => ({
+      id: crypto.randomUUID(),
+      org_id: orgId,
+      tab_id: tabId,
+      order_id: orderId,
+      item_code: line.itemCode,
+      variant_id: line.variantId,
+      name: line.name,
+      unit_price_cents: line.unitPriceCents,
+      quantity: line.quantity,
+      category: line.category,
+      vat_rate_bp: line.vatRateBp,
+      prep_station_id: line.prepStationId,
+      prep_station_name: line.prepStationName,
+      note: line.note,
+      created_at: now,
+    })),
+    { where: { sql: 'EXISTS (SELECT 1 FROM orders WHERE id = ?)', params: [orderId] } }
   );
+  return statement ? [statement] : [];
 }
 
 async function loadTabSummary(env: Env, orgId: string, tabId: string) {

@@ -17,6 +17,7 @@
 import type { Env } from './env';
 import { json } from './http';
 import { extractCaller, requireOrgRole } from './organizations/auth';
+import { jsonRowsStatement, present } from './sql-json';
 
 // --- Rows ---
 
@@ -657,25 +658,35 @@ async function duplicateCatalog(request: Request, env: Env, orgId: string, catal
   const id = crypto.randomUUID();
   const t = now();
   const sectionIds = new Map<string, string>();
-  const statements = [
-    env.DB.prepare('INSERT INTO catalogs (id, org_id, name, is_default, created_at, updated_at) VALUES (?, ?, ?, 0, ?, ?)').bind(id, orgId, name.value, t, t),
-  ];
-  for (const s of (sections.results || []) as SectionRow[]) {
+  const sectionRows = ((sections.results || []) as SectionRow[]).map((s) => {
     const newId = crypto.randomUUID();
     sectionIds.set(s.id, newId);
-    statements.push(
-      env.DB.prepare('INSERT INTO catalog_sections (id, org_id, catalog_id, name, position) VALUES (?, ?, ?, ?, ?)').bind(newId, orgId, id, s.name, s.position)
-    );
-  }
-  for (const e of (entries.results || []) as EntryRow[]) {
-    statements.push(
-      env.DB.prepare(
-        `INSERT INTO catalog_entries (id, org_id, catalog_id, section_id, variant_id, price_cents, visible, position, quick_quantities)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      ).bind(crypto.randomUUID(), orgId, id, sectionIds.get(e.section_id)!, e.variant_id, e.price_cents, e.visible, e.position, e.quick_quantities)
-    );
-  }
-  await env.DB.batch(statements);
+    return { id: newId, org_id: orgId, catalog_id: id, name: s.name, position: s.position };
+  });
+  const entryRows = ((entries.results || []) as EntryRow[]).map((e) => ({
+    id: crypto.randomUUID(),
+    org_id: orgId,
+    catalog_id: id,
+    section_id: sectionIds.get(e.section_id)!,
+    variant_id: e.variant_id,
+    price_cents: e.price_cents,
+    visible: e.visible,
+    position: e.position,
+    quick_quantities: e.quick_quantities,
+  }));
+  // One statement per table, however big the menukaart (Free-plan D1 limit, see sql-json.ts).
+  await env.DB.batch(
+    present([
+      env.DB.prepare('INSERT INTO catalogs (id, org_id, name, is_default, created_at, updated_at) VALUES (?, ?, ?, 0, ?, ?)').bind(id, orgId, name.value, t, t),
+      jsonRowsStatement(env.DB, 'catalog_sections', ['id', 'org_id', 'catalog_id', 'name', 'position'], sectionRows),
+      jsonRowsStatement(
+        env.DB,
+        'catalog_entries',
+        ['id', 'org_id', 'catalog_id', 'section_id', 'variant_id', 'price_cents', 'visible', 'position', 'quick_quantities'],
+        entryRows
+      ),
+    ])
+  );
   return json(await loadCatalogDetail(env, orgId, id), 201);
 }
 
@@ -692,8 +703,10 @@ async function setLayout(request: Request, env: Env, orgId: string, catalogId: s
   }
 
   const [sections, entries] = await env.DB.batch([
-    env.DB.prepare('SELECT id FROM catalog_sections WHERE catalog_id = ?').bind(catalogId),
-    env.DB.prepare('SELECT id FROM catalog_entries WHERE catalog_id = ?').bind(catalogId),
+    env.DB.prepare('SELECT id, org_id, catalog_id, name, position FROM catalog_sections WHERE catalog_id = ?').bind(catalogId),
+    env.DB.prepare(
+      'SELECT id, org_id, catalog_id, section_id, variant_id, price_cents, visible, position, quick_quantities FROM catalog_entries WHERE catalog_id = ?'
+    ).bind(catalogId),
   ]);
   const sameSet = (given: string[], actual: { id: string }[]) =>
     given.length === actual.length && new Set(given).size === given.length && actual.every((row) => given.includes(row.id));
@@ -704,15 +717,29 @@ async function setLayout(request: Request, env: Env, orgId: string, catalogId: s
     return json({ error: 'De indeling is intussen gewijzigd — herlaad en probeer opnieuw' }, 400);
   }
 
-  const statements: D1PreparedStatement[] = [];
-  layout.forEach((s, sectionIndex) => {
-    statements.push(env.DB.prepare('UPDATE catalog_sections SET position = ? WHERE id = ?').bind(sectionIndex, s.id as string));
-    (s.entryIds as string[]).forEach((entryId, entryIndex) => {
-      statements.push(env.DB.prepare('UPDATE catalog_entries SET section_id = ?, position = ? WHERE id = ?').bind(s.id as string, entryIndex, entryId));
-    });
-  });
-  statements.push(touch(env, catalogId));
-  await env.DB.batch(statements);
+  // Rewritten as two upserts (full rows, only position/section changing) —
+  // one statement per table instead of one per section and entry.
+  const sectionById = new Map(((sections.results || []) as Record<string, unknown>[]).map((r) => [r.id as string, r]));
+  const entryById = new Map(((entries.results || []) as Record<string, unknown>[]).map((r) => [r.id as string, r]));
+  const sectionRows = layout.map((s, sectionIndex) => ({ ...sectionById.get(s.id as string)!, position: sectionIndex }));
+  const entryRows = layout.flatMap((s) =>
+    (s.entryIds as string[]).map((entryId, entryIndex) => ({ ...entryById.get(entryId)!, section_id: s.id as string, position: entryIndex }))
+  );
+  await env.DB.batch(
+    present([
+      jsonRowsStatement(env.DB, 'catalog_sections', ['id', 'org_id', 'catalog_id', 'name', 'position'], sectionRows, {
+        upsert: { conflict: 'id', update: ['position'] },
+      }),
+      jsonRowsStatement(
+        env.DB,
+        'catalog_entries',
+        ['id', 'org_id', 'catalog_id', 'section_id', 'variant_id', 'price_cents', 'visible', 'position', 'quick_quantities'],
+        entryRows,
+        { upsert: { conflict: 'id', update: ['section_id', 'position'] } }
+      ),
+      touch(env, catalogId),
+    ])
+  );
   return json(await loadCatalogDetail(env, orgId, catalogId));
 }
 

@@ -2,6 +2,9 @@ export interface Env {
   AUTH_SCHEME?: string;
   CHARGE_POLLER: DurableObjectNamespace;
   DB: D1Database;
+  // Test-only: max D1 queries per invocation, enforced by query-budget.ts
+  // (the suite sets 50, the Workers Free plan's limit). Unset in production.
+  D1_QUERY_LIMIT?: string;
   // arcanum-devicehub (separate Worker) — see devicehub-client.ts.
   INTERNAL_API_KEY: string;
   // arcanum-bff's calls to this Worker's own internal-only

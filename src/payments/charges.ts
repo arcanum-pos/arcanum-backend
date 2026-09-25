@@ -269,7 +269,7 @@ const DEFAULT_CHARGE_TTL_MS = 5 * 60 * 1000;
 // The actual guarantee that nothing stays 'pending' forever — neither
 // provider's docs confirm a callback fires for an expired/abandoned
 // checkout, so this doesn't wait to be told; it just stops waiting.
-export async function expireStaleCharges(env: Env): Promise<void> {
+export async function expireStaleCharges(env: Env, limit = 1000): Promise<{ expired: number; more: boolean }> {
   const now = new Date().toISOString();
   const defaultCutoff = new Date(Date.now() - DEFAULT_CHARGE_TTL_MS).toISOString();
 
@@ -277,23 +277,30 @@ export async function expireStaleCharges(env: Env): Promise<void> {
     `SELECT id FROM charges WHERE status = 'pending' AND (
        (expires_at IS NOT NULL AND expires_at < ?) OR
        (expires_at IS NULL AND created_at < ?)
-     )`
+     ) ORDER BY created_at LIMIT ?`
   )
-    .bind(now, defaultCutoff)
+    .bind(now, defaultCutoff, limit + 1)
     .all<{ id: string }>();
 
-  for (const { id } of results || []) {
+  const due = results || [];
+  for (const { id } of due.slice(0, limit)) {
     await resolveCharge(env, id, { success: false, providerStatus: 'TIMED_OUT', errorMessage: 'Betaling verlopen (time-out)' });
   }
+  return { expired: Math.min(due.length, limit), more: due.length > limit };
 }
 
 // What the ChargePoller DO's alarm sweeps — only charges actually dispatched
 // to a provider (cash, and a sumup charge with no reader linked, have
 // nothing to poll; they're only ever resolved by manual confirm or the
 // time-out backstop above).
-export async function listPendingChargesForPolling(env: Env): Promise<ChargeRecord[]> {
+// `after`/`limit` let the poller rotate through a large backlog a few at a
+// time (Free-plan D1 limit, see poller.ts).
+export async function listPendingChargesForPolling(env: Env, after = '', limit = 1000): Promise<ChargeRecord[]> {
   const { results } = await env.DB.prepare(
-    `SELECT * FROM charges WHERE status = 'pending' AND method IN ('sumup', 'bancontact') AND provider_ref IS NOT NULL`
-  ).all<ChargeRow>();
+    `SELECT * FROM charges WHERE status = 'pending' AND method IN ('sumup', 'bancontact') AND provider_ref IS NOT NULL AND id > ?
+     ORDER BY id LIMIT ?`
+  )
+    .bind(after, limit)
+    .all<ChargeRow>();
   return (results || []).map(rowToCharge);
 }

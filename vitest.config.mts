@@ -39,6 +39,8 @@ export default defineConfig({
       wrangler: { configPath: './wrangler.jsonc' },
       miniflare: {
         bindings: {
+          // The Workers Free plan's D1 limit per invocation — see src/query-budget.ts.
+          D1_QUERY_LIMIT: '50',
           TEST_SCHEMA: JSON.stringify(sqlStatements('./schema.sql')),
           // Its seed is org-specific — test/catalog-seed.test.ts runs it.
           TEST_MIGRATION_0013: JSON.stringify(sqlStatements('./migrations/0013_catalog.sql')),

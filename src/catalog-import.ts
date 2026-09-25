@@ -20,11 +20,14 @@
 //     whitespace-insensitive). A Code kept with a new name = a rename.
 //   - An import replaces the menukaart's groups, order and prices. It never
 //     deletes or archives products; history (order lines) is untouched.
-//   - dryRun previews every change; apply is one D1 batch — all or nothing.
+//   - dryRun previews every change; apply is one D1 batch — all or nothing —
+//     with one json_each statement per table, so the query count stays the
+//     same however long the sheet is (the Free plan allows 50 per request).
 import type { Env } from './env';
 import { json } from './http';
 import { displayName } from './catalog';
 import { extractCaller, requireOrgRole } from './organizations/auth';
+import { jsonRowsStatement, present } from './sql-json';
 
 type Cell = string | number | boolean | null | undefined;
 
@@ -387,7 +390,11 @@ async function importCatalog(request: Request, env: Env, orgId: string): Promise
 
   // --- Plan the changes ---
   const now = new Date().toISOString();
-  const statements: D1PreparedStatement[] = [];
+  // Rows to write, collected per table and written with one statement each.
+  const newCategoryRows: Record<string, unknown>[] = [];
+  const newStationRows: Record<string, unknown>[] = [];
+  const productRows: Record<string, unknown>[] = []; // new + changed, upserted
+  const variantRows: Record<string, unknown>[] = []; // new + renamed/recoded, upserted
   const categoryByName = new Map(existing.categories.map((c) => [norm(c.name), c]));
   const categoryName = new Map(existing.categories.map((c) => [c.id, c.name]));
   const summary: Summary = {
@@ -411,12 +418,7 @@ async function importCatalog(request: Request, env: Env, orgId: string): Promise
     categoryByName.set(norm(name), { id, name });
     categoryName.set(id, name);
     summary.newCategories.push(name);
-    statements.push(
-      env.DB.prepare(
-        `INSERT INTO categories (id, org_id, name, position, created_at)
-         SELECT ?, ?, ?, COALESCE((SELECT MAX(position) + 1 FROM categories WHERE org_id = ?), 0), ?`
-      ).bind(id, orgId, name, orgId, now)
-    );
+    newCategoryRows.push({ id, org_id: orgId, name, position: existing.categories.length + newCategoryRows.length, created_at: now });
     return id;
   };
 
@@ -429,12 +431,7 @@ async function importCatalog(request: Request, env: Env, orgId: string): Promise
     stationByName.set(norm(name), { id, name });
     stationName.set(id, name);
     summary.newStations.push(name);
-    statements.push(
-      env.DB.prepare(
-        `INSERT INTO prep_stations (id, org_id, name, position, created_at)
-         SELECT ?, ?, ?, COALESCE((SELECT MAX(position) + 1 FROM prep_stations WHERE org_id = ?), 0), ?`
-      ).bind(id, orgId, name, orgId, now)
-    );
+    newStationRows.push({ id, org_id: orgId, name, position: existing.stations.length + newStationRows.length, created_at: now });
     return id;
   };
 
@@ -449,17 +446,15 @@ async function importCatalog(request: Request, env: Env, orgId: string): Promise
       productIdFor.set(fp.key, id);
       finalName.set(fp.key, fp.name);
       summary.newProducts.push(fp.name);
-      statements.push(
-        env.DB.prepare('INSERT INTO products (id, org_id, category_id, prep_station_id, name, vat_rate_bp, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(
-          id,
-          orgId,
-          categoryId ?? null,
-          stationId ?? null,
-          fp.name,
-          fp.vat ? fp.vat.value : null,
-          now
-        )
-      );
+      productRows.push({
+        id,
+        org_id: orgId,
+        category_id: categoryId ?? null,
+        prep_station_id: stationId ?? null,
+        name: fp.name,
+        vat_rate_bp: fp.vat ? fp.vat.value : null,
+        created_at: now,
+      });
       continue;
     }
 
@@ -493,9 +488,7 @@ async function importCatalog(request: Request, env: Env, orgId: string): Promise
     }
     if (changes.length > 0) {
       summary.updatedProducts.push({ name, changes });
-      statements.push(
-        env.DB.prepare('UPDATE products SET name = ?, category_id = ?, prep_station_id = ?, vat_rate_bp = ? WHERE id = ?').bind(name, newCategoryId, newStationId, newVat, match.id)
-      );
+      productRows.push({ id: match.id, org_id: orgId, category_id: newCategoryId, prep_station_id: newStationId, name, vat_rate_bp: newVat, created_at: now });
     }
   }
 
@@ -510,10 +503,9 @@ async function importCatalog(request: Request, env: Env, orgId: string): Promise
       variantFor.set(r.row, r.variantId);
       const v = existing.variants.find((x) => x.id === r.variantId)!;
       const code = r.code ?? v.code; // empty Code = unchanged
-      if (v.name !== r.variant && norm(v.name) !== norm(r.variant)) {
-        statements.push(env.DB.prepare('UPDATE product_variants SET name = ?, code = ? WHERE id = ?').bind(r.variant, code, v.id));
-      } else if (code !== v.code) {
-        statements.push(env.DB.prepare('UPDATE product_variants SET code = ? WHERE id = ?').bind(code, v.id));
+      const renamed = v.name !== r.variant && norm(v.name) !== norm(r.variant);
+      if (renamed || code !== v.code) {
+        variantRows.push({ id: v.id, org_id: orgId, product_id: v.product_id, name: renamed ? r.variant : v.name, code, position: v.position, created_at: now });
       }
       continue;
     }
@@ -522,17 +514,7 @@ async function importCatalog(request: Request, env: Env, orgId: string): Promise
     const position = nextPosition.get(productId) ?? 0;
     nextPosition.set(productId, position + 1);
     if (resolvedProduct.get(key)) summary.newVariants.push(displayName(finalName.get(key)!, r.variant));
-    statements.push(
-      env.DB.prepare('INSERT INTO product_variants (id, org_id, product_id, name, code, position, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(
-        id,
-        orgId,
-        productId,
-        r.variant,
-        r.code,
-        position,
-        now
-      )
-    );
+    variantRows.push({ id, org_id: orgId, product_id: productId, name: r.variant, code: r.code, position, created_at: now });
   }
 
   // Menukaart diff: what the kassa will show vs. now.
@@ -554,40 +536,57 @@ async function importCatalog(request: Request, env: Env, orgId: string): Promise
 
   if (dryRun) return json({ ok: true, errors: [], summary });
 
-  // --- Apply: one batch, all or nothing ---
+  // --- Apply: one batch, all or nothing — one statement per table ---
   const targetId = catalogId ?? crypto.randomUUID();
-  if (!catalogId) {
-    statements.unshift(
-      env.DB.prepare(
-        `INSERT INTO catalogs (id, org_id, name, is_default, created_at, updated_at)
-         SELECT ?, ?, ?, CASE WHEN EXISTS (SELECT 1 FROM catalogs WHERE org_id = ? AND is_default = 1) THEN 0 ELSE 1 END, ?, ?`
-      ).bind(targetId, orgId, catalogName, orgId, now, now)
-    );
-  } else {
-    statements.push(
-      env.DB.prepare('DELETE FROM catalog_entries WHERE catalog_id = ?').bind(targetId),
-      env.DB.prepare('DELETE FROM catalog_sections WHERE catalog_id = ?').bind(targetId),
-      env.DB.prepare('UPDATE catalogs SET updated_at = ? WHERE id = ?').bind(now, targetId)
-    );
-  }
-
+  const sectionRows: Record<string, unknown>[] = [];
+  const entryRows: Record<string, unknown>[] = [];
   const sections = new Map<string, { id: string; count: number }>();
   for (const r of resolvedRows) {
     let section = sections.get(norm(r.groep));
     if (!section) {
       section = { id: crypto.randomUUID(), count: 0 };
       sections.set(norm(r.groep), section);
-      statements.push(
-        env.DB.prepare('INSERT INTO catalog_sections (id, org_id, catalog_id, name, position) VALUES (?, ?, ?, ?, ?)').bind(section.id, orgId, targetId, r.groep, sections.size - 1)
-      );
+      sectionRows.push({ id: section.id, org_id: orgId, catalog_id: targetId, name: r.groep, position: sections.size - 1 });
     }
-    statements.push(
-      env.DB.prepare(
-        `INSERT INTO catalog_entries (id, org_id, catalog_id, section_id, variant_id, price_cents, visible, position, quick_quantities)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      ).bind(crypto.randomUUID(), orgId, targetId, section.id, variantFor.get(r.row)!, r.priceCents, r.visible ? 1 : 0, section.count++, r.quick ? JSON.stringify(r.quick) : null)
-    );
+    entryRows.push({
+      id: crypto.randomUUID(),
+      org_id: orgId,
+      catalog_id: targetId,
+      section_id: section.id,
+      variant_id: variantFor.get(r.row)!,
+      price_cents: r.priceCents,
+      visible: r.visible ? 1 : 0,
+      position: section.count++,
+      quick_quantities: r.quick ? JSON.stringify(r.quick) : null,
+    });
   }
+
+  const statements = present([
+    catalogId
+      ? null
+      : env.DB.prepare(
+          `INSERT INTO catalogs (id, org_id, name, is_default, created_at, updated_at)
+           SELECT ?, ?, ?, CASE WHEN EXISTS (SELECT 1 FROM catalogs WHERE org_id = ? AND is_default = 1) THEN 0 ELSE 1 END, ?, ?`
+        ).bind(targetId, orgId, catalogName, orgId, now, now),
+    jsonRowsStatement(env.DB, 'categories', ['id', 'org_id', 'name', 'position', 'created_at'], newCategoryRows),
+    jsonRowsStatement(env.DB, 'prep_stations', ['id', 'org_id', 'name', 'position', 'created_at'], newStationRows),
+    jsonRowsStatement(env.DB, 'products', ['id', 'org_id', 'category_id', 'prep_station_id', 'name', 'vat_rate_bp', 'created_at'], productRows, {
+      upsert: { conflict: 'id', update: ['name', 'category_id', 'prep_station_id', 'vat_rate_bp'] },
+    }),
+    jsonRowsStatement(env.DB, 'product_variants', ['id', 'org_id', 'product_id', 'name', 'code', 'position', 'created_at'], variantRows, {
+      upsert: { conflict: 'id', update: ['name', 'code'] },
+    }),
+    catalogId ? env.DB.prepare('DELETE FROM catalog_entries WHERE catalog_id = ?').bind(targetId) : null,
+    catalogId ? env.DB.prepare('DELETE FROM catalog_sections WHERE catalog_id = ?').bind(targetId) : null,
+    catalogId ? env.DB.prepare('UPDATE catalogs SET updated_at = ? WHERE id = ?').bind(now, targetId) : null,
+    jsonRowsStatement(env.DB, 'catalog_sections', ['id', 'org_id', 'catalog_id', 'name', 'position'], sectionRows),
+    jsonRowsStatement(
+      env.DB,
+      'catalog_entries',
+      ['id', 'org_id', 'catalog_id', 'section_id', 'variant_id', 'price_cents', 'visible', 'position', 'quick_quantities'],
+      entryRows
+    ),
+  ]);
 
   try {
     await env.DB.batch(statements);
