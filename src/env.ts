@@ -45,6 +45,12 @@ export interface Env {
   // to force a specific enterprise connection) — most providers leave this
   // unset.
   DEFAULT_IDP_CONNECTION_NAME?: string;
+  // Optional overrides for the seeded default provider — Google needs both:
+  // scopes without `offline_access`, and a separate client for browser
+  // login (the primary client above then does the device login).
+  DEFAULT_IDP_SCOPES?: string;
+  DEFAULT_IDP_AUTH_CODE_CLIENT_ID?: string;
+  DEFAULT_IDP_AUTH_CODE_CLIENT_SECRET?: string;
   // Seeds the platform-default SMTP account (the fallback used by any org
   // that hasn't configured its own) — see organizations/smtp-credentials.ts
   // `ensureDefaultSmtpCredentials`. Consumed only once, at first seed; safe

@@ -189,6 +189,12 @@ export async function ensureDefaultOrganization(env: Env): Promise<void> {
   if (!actualDek) throw new Error('Failed to seed default organization');
 
   const encryptedSecret = await encryptWithKey(env.DEFAULT_IDP_CLIENT_SECRET, actualDek);
+  // Optional, for providers that need them (Google: no `offline_access`
+  // scope, and a separate "Web application" client for browser login next
+  // to the "TVs and Limited Input" client used for the kassa's device login).
+  // The browser-login client only counts with its secret.
+  const authCodeClientId = env.DEFAULT_IDP_AUTH_CODE_CLIENT_ID && env.DEFAULT_IDP_AUTH_CODE_CLIENT_SECRET ? env.DEFAULT_IDP_AUTH_CODE_CLIENT_ID : null;
+  const authCodeSecret = authCodeClientId ? await encryptWithKey(env.DEFAULT_IDP_AUTH_CODE_CLIENT_SECRET!, actualDek) : null;
 
   await env.DB.prepare(
     `INSERT INTO identity_providers (
@@ -211,10 +217,10 @@ export async function ensureDefaultOrganization(env: Env): Promise<void> {
       endpoints.userinfo_endpoint,
       endpoints.device_authorization_endpoint,
       endpoints.end_session_endpoint,
-      null,
-      null,
-      null,
-      null,
+      env.DEFAULT_IDP_SCOPES?.trim() || null,
+      authCodeClientId,
+      authCodeSecret?.ciphertext ?? null,
+      authCodeSecret?.iv ?? null,
       now
     )
     .run();

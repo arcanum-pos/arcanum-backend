@@ -20,6 +20,11 @@ DEFAULT_IDP_ISSUER_URL=
 DEFAULT_IDP_CLIENT_ID=
 DEFAULT_IDP_CLIENT_SECRET=
 DEFAULT_IDP_CONNECTION_NAME=
+# Optional (Google): scopes without offline_access, e.g. "openid profile email",
+# and a separate Web-application client for browser login.
+DEFAULT_IDP_SCOPES=
+DEFAULT_IDP_AUTH_CODE_CLIENT_ID=
+DEFAULT_IDP_AUTH_CODE_CLIENT_SECRET=
 
 # Local `wrangler dev` URL for the arcanum-mailer Worker (run it on a different port).
 MAILER_LOCAL_URL=http://localhost:8792
