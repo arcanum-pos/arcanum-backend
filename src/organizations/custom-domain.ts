@@ -40,7 +40,10 @@ import { extractCaller, requireOrgRole } from './auth';
 import { hasCompleteIdentityProvider } from './identity-providers';
 import type { OrganizationRow } from './types';
 
-const CNAME_TARGET = 'arcanum.kaboutersoft.be';
+// Where an org's own domain must point: this installation's own public
+// hostname (the bff's), derived — never hardcoded, so it's right on a
+// self-hosted installation too.
+const cnameTarget = (env: Env) => new URL(env.PUBLIC_BASE_URL).hostname;
 const WORKER_SCRIPT_NAME = 'arcanum-bff';
 
 // Conservative: lowercase letters/digits/hyphens per label, at least one dot,
@@ -99,12 +102,12 @@ async function deleteWorkerRoute(env: Env, routeId: string): Promise<void> {
   await cfRequest(env, `/workers/routes/${routeId}`, { method: 'DELETE' }).catch(() => {});
 }
 
-function rowToPublicCustomDomain(row: OrganizationRow) {
+function rowToPublicCustomDomain(row: OrganizationRow, env: Env) {
   return {
     customDomain: row.custom_domain,
     status: row.custom_domain_status,
     sslStatus: row.custom_domain_ssl_status,
-    cnameTarget: CNAME_TARGET,
+    cnameTarget: cnameTarget(env),
   };
 }
 
@@ -120,7 +123,7 @@ export async function getCustomDomain(request: Request, env: Env, orgId: string)
 
   const row = await env.DB.prepare('SELECT * FROM organizations WHERE id = ?').bind(orgId).first<OrganizationRow>();
   if (!row) return json({ error: 'Unknown organization' }, 404);
-  return json(rowToPublicCustomDomain(row));
+  return json(rowToPublicCustomDomain(row, env));
 }
 
 export async function setCustomDomain(request: Request, env: Env, orgId: string): Promise<Response> {
@@ -153,7 +156,7 @@ export async function setCustomDomain(request: Request, env: Env, orgId: string)
   // Re-submitting the exact hostname that's already registered — nothing to
   // do, just report current status (use Verify to refresh it).
   if (existing.custom_domain === hostname && existing.custom_domain_cf_id) {
-    return json(rowToPublicCustomDomain(existing));
+    return json(rowToPublicCustomDomain(existing, env));
   }
 
   const clash = await env.DB.prepare('SELECT id FROM organizations WHERE custom_domain = ? AND id != ?').bind(hostname, orgId).first();
@@ -195,7 +198,7 @@ export async function setCustomDomain(request: Request, env: Env, orgId: string)
     .run();
 
   const row = await env.DB.prepare('SELECT * FROM organizations WHERE id = ?').bind(orgId).first<OrganizationRow>();
-  return json(rowToPublicCustomDomain(row!));
+  return json(rowToPublicCustomDomain(row!, env));
 }
 
 export async function verifyCustomDomain(request: Request, env: Env, orgId: string): Promise<Response> {
@@ -223,7 +226,7 @@ export async function verifyCustomDomain(request: Request, env: Env, orgId: stri
 
   const updated = await env.DB.prepare('SELECT * FROM organizations WHERE id = ?').bind(orgId).first<OrganizationRow>();
   return json({
-    ...rowToPublicCustomDomain(updated!),
+    ...rowToPublicCustomDomain(updated!, env),
     verificationErrors: cf.verification_errors ?? [],
     sslValidationErrors: (cf.ssl?.validation_errors ?? []).map((e) => e.message),
   });

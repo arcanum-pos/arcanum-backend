@@ -443,3 +443,33 @@ CREATE TABLE IF NOT EXISTS prep_stations (
 
 CREATE INDEX IF NOT EXISTS idx_prep_stations_org ON prep_stations(org_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_prep_stations_org_name ON prep_stations(org_id, lower(name));
+
+-- --- Migration tracking ---
+-- wrangler's own table (`wrangler d1 migrations apply`), with the exact DDL
+-- wrangler uses. A database built from this file already contains every
+-- migration's effect, so all of them are marked as applied; test/
+-- installation.test.ts checks this list matches migrations/ and that this
+-- file really contains what the migrations add. A new migration = the new
+-- migrations/NNNN_*.sql file + the same change here + one line below.
+CREATE TABLE IF NOT EXISTS d1_migrations(
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  name       TEXT UNIQUE,
+  applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0001_add_org_support.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0002_multi_issuer_identity.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0003_smtp_credentials.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0004_events.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0005_org_slug.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0006_mail_provider.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0007_idp_scopes.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0008_auth_code_client.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0009_custom_domain.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0010_custom_domain_route.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0011_drop_org_slug.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0012_tabs.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0013_catalog.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0014_order_catalog.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0015_tips.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0016_prep_stations.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0017_org_import.sql');

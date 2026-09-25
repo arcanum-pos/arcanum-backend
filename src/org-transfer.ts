@@ -28,6 +28,7 @@ import { json } from './http';
 import { decryptWithKey, encryptWithKey, generateDataKey, wrapDataKey } from './organizations/crypto';
 import { extractCaller, requireOrgRole } from './organizations/auth';
 import { getOrgDataKey } from './organizations/organizations';
+import { mayCreateOrganizations, NOT_AN_INSTANCE_ADMIN } from './organizations/instance-admins';
 
 export const EXPORT_FORMAT = 'arcanum-org-export';
 export const EXPORT_VERSION = 1;
@@ -259,6 +260,7 @@ interface Manifest {
 async function startImport(request: Request, env: Env): Promise<Response> {
   const caller = extractCaller(request);
   if (!caller) return json({ error: 'Unauthorized' }, 401);
+  if (!mayCreateOrganizations(env, caller.email)) return json({ error: NOT_AN_INSTANCE_ADMIN }, 403);
   const body = ((await request.json().catch(() => null)) || {}) as { manifest?: any; name?: unknown };
   const manifest = body.manifest;
   if (!manifest || manifest.format !== EXPORT_FORMAT) return json({ error: 'Dit is geen Arcanum-exportbestand' }, 400);

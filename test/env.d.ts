@@ -7,6 +7,8 @@ declare global {
       TEST_SCHEMA: string;
       // migrations/0013_catalog.sql (tables + Scouts Elewijt seed), same shape.
       TEST_MIGRATION_0013: string;
+      // Every migrations/*.sql as { name, sql }, in order.
+      TEST_MIGRATIONS: string;
     }
   }
 }

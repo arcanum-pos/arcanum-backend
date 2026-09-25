@@ -1,6 +1,7 @@
 import type { Env } from '../env';
 import { json } from '../http';
 import { extractCaller, requireOrgRole } from './auth';
+import { mayCreateOrganizations, NOT_AN_INSTANCE_ADMIN } from './instance-admins';
 import { reconcilePendingInvites } from './invite-reconciliation';
 import { generateDataKey, wrapDataKey, unwrapDataKey } from './crypto';
 import type { OrganizationRow } from './types';
@@ -38,6 +39,8 @@ export async function resolveOrgId(env: Env, idOrHost: string): Promise<string |
 export async function createOrganization(request: Request, env: Env): Promise<Response> {
   const caller = extractCaller(request);
   if (!caller) return json({ error: 'Unauthorized' }, 401);
+
+  if (!mayCreateOrganizations(env, caller.email)) return json({ error: NOT_AN_INSTANCE_ADMIN }, 403);
 
   const body = (await request.json().catch(() => ({}))) as { name?: string };
   const name = (body.name || '').trim();

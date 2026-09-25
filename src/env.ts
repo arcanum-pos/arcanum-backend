@@ -28,6 +28,9 @@ export interface Env {
   // — used to build the callbackUrl/return_url handed to Bancontact/SumUp
   // at charge creation (see payments/bancontact.ts, payments/sumup.ts).
   PUBLIC_BASE_URL: string;
+  // Self-hosted installations: who may create/import orgs (see
+  // organizations/instance-admins.ts). Unset = anyone who can log in.
+  INSTANCE_ADMIN_EMAILS?: string;
   // Seeds the platform-default identity provider (the fallback used by any
   // org that hasn't configured its own, and by the very first bootstrap
   // admin before any org exists) — see organizations/idp-resolution.ts

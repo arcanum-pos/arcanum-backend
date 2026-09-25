@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { cloudflareTest } from '@cloudflare/vitest-pool-workers';
 import { defineConfig } from 'vitest/config';
 
@@ -44,6 +44,15 @@ export default defineConfig({
           TEST_SCHEMA: JSON.stringify(sqlStatements('./schema.sql')),
           // Its seed is org-specific — test/catalog-seed.test.ts runs it.
           TEST_MIGRATION_0013: JSON.stringify(sqlStatements('./migrations/0013_catalog.sql')),
+          // Every migration file, in order — see test/installation.test.ts.
+          TEST_MIGRATIONS: JSON.stringify(
+            readdirSync(new URL('./migrations/', import.meta.url))
+              .filter((f) => f.endsWith('.sql'))
+              .sort()
+              .map((name) => ({ name, sql: readFileSync(new URL(`./migrations/${name}`, import.meta.url), 'utf8') }))
+          ),
+          // A self-hosted installation's allowlist (see instance-admins.ts): test users are *@test.
+          INSTANCE_ADMIN_EMAILS: '*@test, boss@example.test',
           // Test-only values — never real secrets. ENCRYPTION_KEY must be
           // base64 of 32 bytes (see CLAUDE.md: hex silently breaks crypto).
           ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64'),

@@ -36,3 +36,21 @@ as `wrangler` — the pool's own bundled one can lag behind this Worker's
 
 **Rule: every change ships with its tests in the same commit.** Money, tab
 state and receipt-number rules are written test-first.
+
+## Database migrations
+
+Tracked by wrangler in the `d1_migrations` table (`migrations_dir` in
+wrangler.jsonc):
+
+```sh
+npx wrangler d1 migrations apply arcanum-backend --remote   # before pushing code that needs it
+npx wrangler d1 migrations list arcanum-backend --remote    # should say "No migrations to apply"
+```
+
+A new migration is three things in one commit: `migrations/NNNN_name.sql`,
+the same change in `schema.sql` (a fresh install is built from it), and its
+`INSERT OR IGNORE INTO d1_migrations` line at the end of `schema.sql`.
+`test/installation.test.ts` fails if either is forgotten. Migrations are
+forward-only and must work with the previous code version (they run before
+the new code is deployed). The "Run once via: wrangler d1 execute …" notes in
+migrations 0001–0017 predate this; all of those are marked as applied.

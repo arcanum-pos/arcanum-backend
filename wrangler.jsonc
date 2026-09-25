@@ -41,7 +41,11 @@
 		{
 			"binding": "DB",
 			"database_name": "arcanum-backend",
-			"database_id": "684e3e7c-2859-429e-a5d3-d8159b0bf86d"
+			"database_id": "684e3e7c-2859-429e-a5d3-d8159b0bf86d",
+			// `wrangler d1 migrations apply arcanum-backend --remote` — tracked in
+			// the d1_migrations table (schema.sql marks all of them applied for a
+			// fresh database).
+			"migrations_dir": "migrations"
 		}
 	],
 	"durable_objects": {
