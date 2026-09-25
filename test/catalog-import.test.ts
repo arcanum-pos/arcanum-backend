@@ -326,11 +326,11 @@ describe('export', () => {
     const { body } = await exportOf(org, id);
     expect(body.catalog.name).toBe('Restaurant');
     expect(body.rows).toEqual([
-      { groep: 'Drank', product: 'Pintje', variant: '', prijsCents: 250, categorie: 'Drank', btwBp: 2100, code: 'pintje', snelknoppen: null, zichtbaar: true },
-      { groep: 'Drank', product: 'Duvel', variant: '', prijsCents: 400, categorie: null, btwBp: null, code: null, snelknoppen: null, zichtbaar: true },
-      { groep: 'Menu', product: 'Steak', variant: 'normaal', prijsCents: 3400, categorie: 'Eten', btwBp: 1200, code: null, snelknoppen: null, zichtbaar: true },
-      { groep: 'Menu', product: 'Steak', variant: 'kind', prijsCents: 2600, categorie: 'Eten', btwBp: 1200, code: null, snelknoppen: null, zichtbaar: true },
-      { groep: 'Dessert', product: 'Dame blanche', variant: '', prijsCents: 800, categorie: 'Dessert', btwBp: 600, code: null, snelknoppen: null, zichtbaar: false },
+      { groep: 'Drank', product: 'Pintje', variant: '', prijsCents: 250, categorie: 'Drank', station: null, btwBp: 2100, code: 'pintje', snelknoppen: null, zichtbaar: true },
+      { groep: 'Drank', product: 'Duvel', variant: '', prijsCents: 400, categorie: null, station: null, btwBp: null, code: null, snelknoppen: null, zichtbaar: true },
+      { groep: 'Menu', product: 'Steak', variant: 'normaal', prijsCents: 3400, categorie: 'Eten', station: null, btwBp: 1200, code: null, snelknoppen: null, zichtbaar: true },
+      { groep: 'Menu', product: 'Steak', variant: 'kind', prijsCents: 2600, categorie: 'Eten', station: null, btwBp: 1200, code: null, snelknoppen: null, zichtbaar: true },
+      { groep: 'Dessert', product: 'Dame blanche', variant: '', prijsCents: 800, categorie: 'Dessert', station: null, btwBp: 600, code: null, snelknoppen: null, zichtbaar: false },
     ]);
   });
 

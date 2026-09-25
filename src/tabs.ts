@@ -72,6 +72,8 @@ interface LineRow {
   quantity: number;
   category: string | null;
   vat_rate_bp: number | null;
+  prep_station_id: string | null;
+  prep_station_name: string | null;
   note: string | null;
   voids_line_id: string | null;
   void_reason: string | null;
@@ -131,6 +133,8 @@ function rowToLine(row: LineRow) {
     quantity: row.quantity,
     category: row.category,
     vatRateBp: row.vat_rate_bp,
+    prepStationId: row.prep_station_id,
+    prepStationName: row.prep_station_name,
     note: row.note,
     voidsLineId: row.voids_line_id,
     voidReason: row.void_reason,
@@ -169,6 +173,8 @@ interface LineInput {
   variantId: string | null;
   category: string | null;
   vatRateBp: number | null;
+  prepStationId: string | null;
+  prepStationName: string | null;
 }
 
 const MAX_LINES_PER_ORDER = 100;
@@ -186,7 +192,18 @@ function parseLines(raw: unknown): LineInput[] | string {
     const quantity = Number(item.quantity);
     if (!Number.isInteger(quantity) || quantity < 1 || quantity > 999) return 'quantity must be an integer between 1 and 999';
     const note = typeof item.note === 'string' && item.note.trim() ? item.note.trim().slice(0, 200) : null;
-    lines.push({ variantId: item.variantId, quantity, note, itemCode: null, name: '', unitPriceCents: 0, category: null, vatRateBp: null });
+    lines.push({
+      variantId: item.variantId,
+      quantity,
+      note,
+      itemCode: null,
+      name: '',
+      unitPriceCents: 0,
+      category: null,
+      vatRateBp: null,
+      prepStationId: null,
+      prepStationName: null,
+    });
   }
   return lines;
 }
@@ -204,16 +221,28 @@ async function priceCatalogLines(env: Env, orgId: string, catalogId: string | nu
   if (!catalog) return 'Onbekende of gearchiveerde menukaart';
 
   const { results } = await env.DB.prepare(
-    `SELECT e.variant_id, e.price_cents, v.name AS variant_name, v.code, p.name AS product_name, p.vat_rate_bp, c.name AS category_name
+    `SELECT e.variant_id, e.price_cents, v.name AS variant_name, v.code, p.name AS product_name, p.vat_rate_bp, c.name AS category_name,
+       ps.id AS station_id, ps.name AS station_name
      FROM catalog_entries e
      JOIN product_variants v ON v.id = e.variant_id
      JOIN products p ON p.id = v.product_id
      LEFT JOIN categories c ON c.id = p.category_id
+     LEFT JOIN prep_stations ps ON ps.id = p.prep_station_id
      WHERE e.catalog_id = ? AND e.visible = 1 AND v.archived_at IS NULL AND p.archived_at IS NULL
        AND e.variant_id IN (${variantIds.map(() => '?').join(', ')})`
   )
     .bind(catalogId, ...variantIds)
-    .all<{ variant_id: string; price_cents: number; variant_name: string; code: string | null; product_name: string; vat_rate_bp: number | null; category_name: string | null }>();
+    .all<{
+      variant_id: string;
+      price_cents: number;
+      variant_name: string;
+      code: string | null;
+      product_name: string;
+      vat_rate_bp: number | null;
+      category_name: string | null;
+      station_id: string | null;
+      station_name: string | null;
+    }>();
 
   const byVariant = new Map((results || []).map((r) => [r.variant_id, r]));
   for (const line of lines) {
@@ -225,6 +254,8 @@ async function priceCatalogLines(env: Env, orgId: string, catalogId: string | nu
     line.itemCode = entry.code;
     line.category = entry.category_name;
     line.vatRateBp = entry.vat_rate_bp;
+    line.prepStationId = entry.station_id;
+    line.prepStationName = entry.station_name;
   }
   return null;
 }
@@ -245,8 +276,9 @@ async function prepareOrderLines(env: Env, orgId: string, body: Record<string, u
 function lineInsertStatements(env: Env, orgId: string, tabId: string, orderId: string, lines: LineInput[], now: string): D1PreparedStatement[] {
   return lines.map((line) =>
     env.DB.prepare(
-      `INSERT INTO order_lines (id, org_id, tab_id, order_id, item_code, variant_id, name, unit_price_cents, quantity, category, vat_rate_bp, note, created_at)
-       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM orders WHERE id = ?)`
+      `INSERT INTO order_lines (id, org_id, tab_id, order_id, item_code, variant_id, name, unit_price_cents, quantity, category, vat_rate_bp,
+         prep_station_id, prep_station_name, note, created_at)
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM orders WHERE id = ?)`
     ).bind(
       crypto.randomUUID(),
       orgId,
@@ -259,6 +291,8 @@ function lineInsertStatements(env: Env, orgId: string, tabId: string, orderId: s
       line.quantity,
       line.category,
       line.vatRateBp,
+      line.prepStationId,
+      line.prepStationName,
       line.note,
       now,
       orderId
@@ -468,8 +502,9 @@ async function voidLine(request: Request, env: Env, orgId: string, tabId: string
        SELECT ?, ?, ?, 'kassa', ?, ?, ?, ?, ? WHERE ${voidable}`
     ).bind(orderId, orgId, tabId, who.deviceId, who.deviceName, who.userName, who.userEmail, now, tabId, orgId, tabId, lineId, quantity),
     env.DB.prepare(
-      `INSERT INTO order_lines (id, org_id, tab_id, order_id, item_code, variant_id, name, unit_price_cents, quantity, category, vat_rate_bp, voids_line_id, void_reason, created_at)
-       SELECT ?, org_id, tab_id, ?, item_code, variant_id, name, unit_price_cents, ?, category, vat_rate_bp, id, ?, ?
+      `INSERT INTO order_lines (id, org_id, tab_id, order_id, item_code, variant_id, name, unit_price_cents, quantity, category, vat_rate_bp,
+         prep_station_id, prep_station_name, voids_line_id, void_reason, created_at)
+       SELECT ?, org_id, tab_id, ?, item_code, variant_id, name, unit_price_cents, ?, category, vat_rate_bp, prep_station_id, prep_station_name, id, ?, ?
        FROM order_lines WHERE id = ? AND EXISTS (SELECT 1 FROM orders WHERE id = ?)`
     ).bind(crypto.randomUUID(), orderId, -quantity, reason, now, lineId, orderId),
   ]);

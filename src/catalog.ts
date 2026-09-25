@@ -1,6 +1,7 @@
 // Catalogs — step 3a (DOMAIN_MODEL.md "Build order" / "Step 3 decisions").
 //
 //   categories ──< products ──< product_variants       (org-level, shared)
+//   prep_stations ──< products                          (who prepares it)
 //   catalogs ──< catalog_sections ──< catalog_entries  (variant + price + position + visible)
 //
 // Products and variants are defined once per org; the price lives on the
@@ -28,6 +29,7 @@ interface CategoryRow {
 interface ProductRow {
   id: string;
   category_id: string | null;
+  prep_station_id: string | null;
   name: string;
   vat_rate_bp: number | null;
   archived_at: string | null;
@@ -111,6 +113,7 @@ function toProduct(row: ProductRow, variants: VariantRow[]) {
     id: row.id,
     name: row.name,
     categoryId: row.category_id,
+    prepStationId: row.prep_station_id,
     vatRateBp: row.vat_rate_bp,
     archived: !!row.archived_at,
     variants: variants.filter((v) => v.product_id === row.id).map(toVariant),
@@ -256,6 +259,77 @@ async function deleteCategory(env: Env, orgId: string, categoryId: string) {
   return exists ? json({ error: 'Deze categorie wordt nog gebruikt door producten' }, 409) : json({ error: 'Categorie niet gevonden' }, 404);
 }
 
+// --- Prep stations ---
+// Who prepares a product (Bar, Keuken, …). Names are unique per org,
+// case-insensitively (idx_prep_stations_org_name).
+
+const STATION_NAME_CONFLICT = /prep_stations\.(org_id|name)|idx_prep_stations_org_name|lower\(name\)/;
+
+async function listStations(env: Env, orgId: string) {
+  const { results } = await env.DB.prepare('SELECT id, name, position FROM prep_stations WHERE org_id = ? ORDER BY position, created_at')
+    .bind(orgId)
+    .all<CategoryRow>();
+  return json((results || []).map(toCategory));
+}
+
+async function createStation(request: Request, env: Env, orgId: string) {
+  const name = parseName((await readBody(request)).name, 60);
+  if (!name.ok) return json({ error: name.error }, 400);
+  const id = crypto.randomUUID();
+  try {
+    await env.DB.prepare(
+      `INSERT INTO prep_stations (id, org_id, name, position, created_at)
+       SELECT ?, ?, ?, COALESCE((SELECT MAX(position) + 1 FROM prep_stations WHERE org_id = ?), 0), ?`
+    )
+      .bind(id, orgId, name.value, orgId, now())
+      .run();
+  } catch (err) {
+    if (isUniqueViolation(err, STATION_NAME_CONFLICT)) return json({ error: 'Er bestaat al een station met die naam' }, 409);
+    throw err;
+  }
+  const row = await env.DB.prepare('SELECT id, name, position FROM prep_stations WHERE id = ?').bind(id).first<CategoryRow>();
+  return json(toCategory(row!), 201);
+}
+
+async function updateStation(request: Request, env: Env, orgId: string, stationId: string) {
+  const body = await readBody(request);
+  const existing = await env.DB.prepare('SELECT id, name, position FROM prep_stations WHERE id = ? AND org_id = ?').bind(stationId, orgId).first<CategoryRow>();
+  if (!existing) return json({ error: 'Station niet gevonden' }, 404);
+
+  let name = existing.name;
+  if (body.name !== undefined) {
+    const parsed = parseName(body.name, 60);
+    if (!parsed.ok) return json({ error: parsed.error }, 400);
+    name = parsed.value;
+  }
+  let position = existing.position;
+  if (body.position !== undefined) {
+    if (!Number.isInteger(body.position)) return json({ error: 'position must be an integer' }, 400);
+    position = body.position as number;
+  }
+  try {
+    await env.DB.prepare('UPDATE prep_stations SET name = ?, position = ? WHERE id = ?').bind(name, position, stationId).run();
+  } catch (err) {
+    if (isUniqueViolation(err, STATION_NAME_CONFLICT)) return json({ error: 'Er bestaat al een station met die naam' }, 409);
+    throw err;
+  }
+  return json(toCategory({ id: stationId, name, position }));
+}
+
+async function deleteStation(env: Env, orgId: string, stationId: string) {
+  const result = await env.DB.prepare('DELETE FROM prep_stations WHERE id = ? AND org_id = ? AND NOT EXISTS (SELECT 1 FROM products WHERE prep_station_id = ?)')
+    .bind(stationId, orgId, stationId)
+    .run();
+  if ((result.meta.changes || 0) > 0) return json({ ok: true });
+  const exists = await env.DB.prepare('SELECT 1 FROM prep_stations WHERE id = ? AND org_id = ?').bind(stationId, orgId).first();
+  return exists ? json({ error: 'Dit station wordt nog gebruikt door producten' }, 409) : json({ error: 'Station niet gevonden' }, 404);
+}
+
+async function stationBelongsToOrg(env: Env, orgId: string, stationId: string | null): Promise<boolean> {
+  if (!stationId) return true;
+  return !!(await env.DB.prepare('SELECT 1 FROM prep_stations WHERE id = ? AND org_id = ?').bind(stationId, orgId).first());
+}
+
 // --- Products & variants ---
 
 async function categoryBelongsToOrg(env: Env, orgId: string, categoryId: string | null): Promise<boolean> {
@@ -264,7 +338,7 @@ async function categoryBelongsToOrg(env: Env, orgId: string, categoryId: string 
 }
 
 async function loadProduct(env: Env, orgId: string, productId: string) {
-  const row = await env.DB.prepare('SELECT id, category_id, name, vat_rate_bp, archived_at FROM products WHERE id = ? AND org_id = ?')
+  const row = await env.DB.prepare('SELECT id, category_id, prep_station_id, name, vat_rate_bp, archived_at FROM products WHERE id = ? AND org_id = ?')
     .bind(productId, orgId)
     .first<ProductRow>();
   if (!row) return null;
@@ -280,7 +354,7 @@ async function listProducts(request: Request, env: Env, orgId: string) {
   const includeArchived = new URL(request.url).searchParams.has('includeArchived');
   const [products, variants] = await env.DB.batch([
     env.DB.prepare(
-      `SELECT id, category_id, name, vat_rate_bp, archived_at FROM products WHERE org_id = ? ${includeArchived ? '' : 'AND archived_at IS NULL'} ORDER BY name`
+      `SELECT id, category_id, prep_station_id, name, vat_rate_bp, archived_at FROM products WHERE org_id = ? ${includeArchived ? '' : 'AND archived_at IS NULL'} ORDER BY name`
     ).bind(orgId),
     env.DB.prepare('SELECT id, product_id, name, code, position, archived_at FROM product_variants WHERE org_id = ? ORDER BY position, created_at').bind(orgId),
   ]);
@@ -310,6 +384,8 @@ async function createProduct(request: Request, env: Env, orgId: string) {
   if (!vat.ok) return json({ error: vat.error }, 400);
   const categoryId = body.categoryId ? String(body.categoryId) : null;
   if (!(await categoryBelongsToOrg(env, orgId, categoryId))) return json({ error: 'Onbekende categorie' }, 400);
+  const prepStationId = body.prepStationId ? String(body.prepStationId) : null;
+  if (!(await stationBelongsToOrg(env, orgId, prepStationId))) return json({ error: 'Onbekend station' }, 400);
 
   // Every product has at least one variant; a single-version product gets
   // one with an empty name.
@@ -326,10 +402,11 @@ async function createProduct(request: Request, env: Env, orgId: string) {
   const createdAt = now();
   try {
     await env.DB.batch([
-      env.DB.prepare('INSERT INTO products (id, org_id, category_id, name, vat_rate_bp, created_at) VALUES (?, ?, ?, ?, ?, ?)').bind(
+      env.DB.prepare('INSERT INTO products (id, org_id, category_id, prep_station_id, name, vat_rate_bp, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(
         productId,
         orgId,
         categoryId,
+        prepStationId,
         name.value,
         vat.value,
         createdAt
@@ -355,12 +432,12 @@ async function createProduct(request: Request, env: Env, orgId: string) {
 
 async function updateProduct(request: Request, env: Env, orgId: string, productId: string) {
   const body = await readBody(request);
-  const existing = await env.DB.prepare('SELECT id, category_id, name, vat_rate_bp, archived_at FROM products WHERE id = ? AND org_id = ?')
+  const existing = await env.DB.prepare('SELECT id, category_id, prep_station_id, name, vat_rate_bp, archived_at FROM products WHERE id = ? AND org_id = ?')
     .bind(productId, orgId)
     .first<ProductRow>();
   if (!existing) return json({ error: 'Product niet gevonden' }, 404);
 
-  let { name, category_id: categoryId, vat_rate_bp: vatRateBp, archived_at: archivedAt } = existing;
+  let { name, category_id: categoryId, prep_station_id: prepStationId, vat_rate_bp: vatRateBp, archived_at: archivedAt } = existing;
   if (body.name !== undefined) {
     const parsed = parseName(body.name, 100);
     if (!parsed.ok) return json({ error: parsed.error }, 400);
@@ -370,6 +447,10 @@ async function updateProduct(request: Request, env: Env, orgId: string, productI
     categoryId = body.categoryId ? String(body.categoryId) : null;
     if (!(await categoryBelongsToOrg(env, orgId, categoryId))) return json({ error: 'Onbekende categorie' }, 400);
   }
+  if (body.prepStationId !== undefined) {
+    prepStationId = body.prepStationId ? String(body.prepStationId) : null;
+    if (!(await stationBelongsToOrg(env, orgId, prepStationId))) return json({ error: 'Onbekend station' }, 400);
+  }
   if (body.vatRateBp !== undefined) {
     const parsed = parseVat(body.vatRateBp);
     if (!parsed.ok) return json({ error: parsed.error }, 400);
@@ -378,9 +459,10 @@ async function updateProduct(request: Request, env: Env, orgId: string, productI
   if (body.archived !== undefined) archivedAt = body.archived ? archivedAt || now() : null;
 
   const statements = [
-    env.DB.prepare('UPDATE products SET name = ?, category_id = ?, vat_rate_bp = ?, archived_at = ? WHERE id = ?').bind(
+    env.DB.prepare('UPDATE products SET name = ?, category_id = ?, prep_station_id = ?, vat_rate_bp = ?, archived_at = ? WHERE id = ?').bind(
       name,
       categoryId,
+      prepStationId,
       vatRateBp,
       archivedAt,
       productId
@@ -844,6 +926,14 @@ export async function dispatchCatalogRoute(request: Request, env: Env, pathname:
     if (kind === 'categories' && id && !sub) {
       if (method === 'PATCH') return updateCategory(request, env, orgId, id);
       if (method === 'DELETE') return deleteCategory(env, orgId, id);
+    }
+    if (kind === 'stations' && !id) {
+      if (method === 'GET') return listStations(env, orgId);
+      if (method === 'POST') return createStation(request, env, orgId);
+    }
+    if (kind === 'stations' && id && !sub) {
+      if (method === 'PATCH') return updateStation(request, env, orgId, id);
+      if (method === 'DELETE') return deleteStation(env, orgId, id);
     }
     if (kind === 'products' && !id) {
       if (method === 'GET') return listProducts(request, env, orgId);

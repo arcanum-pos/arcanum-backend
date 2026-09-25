@@ -317,6 +317,9 @@ CREATE TABLE IF NOT EXISTS order_lines (
   quantity INTEGER NOT NULL,
   category TEXT,
   vat_rate_bp INTEGER, -- basis points (2100 = 21%); NULL until the catalog sets it
+  -- The product's prep station at sale time (snapshot, no foreign key).
+  prep_station_id TEXT,
+  prep_station_name TEXT,
   note TEXT,
   voids_line_id TEXT REFERENCES order_lines(id),
   void_reason TEXT,
@@ -349,6 +352,8 @@ CREATE TABLE IF NOT EXISTS products (
   category_id TEXT REFERENCES categories(id),
   name TEXT NOT NULL,
   vat_rate_bp INTEGER, -- basis points (2100 = 21%); NULL = not set yet
+  -- Who prepares it (Bar, Keuken, …); NULL = nothing to prepare.
+  prep_station_id TEXT REFERENCES prep_stations(id),
   archived_at TEXT,
   created_at TEXT NOT NULL
 );
@@ -419,3 +424,16 @@ CREATE TABLE IF NOT EXISTS catalog_entries (
 
 CREATE INDEX IF NOT EXISTS idx_catalog_entries_section ON catalog_entries(section_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_catalog_entries_catalog_variant ON catalog_entries(catalog_id, variant_id);
+
+-- Prep stations: who prepares a product (Bar, Keuken, CoffeeCorner, …) —
+-- separate from categories (reporting) and catalog sections (kassa layout).
+CREATE TABLE IF NOT EXISTS prep_stations (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES organizations(id),
+  name TEXT NOT NULL,
+  position INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_prep_stations_org ON prep_stations(org_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_prep_stations_org_name ON prep_stations(org_id, lower(name));

@@ -8,7 +8,7 @@
 // here, so there's one tested source of truth:
 //
 //   - Groep and Product: empty = the row above.
-//   - Categorie and BTW belong to the product: stating them on any one row
+//   - Categorie, Station and BTW belong to the product: stating them on any one row
 //     of that product is enough; two different values = error. Empty
 //     everywhere (and an empty Code) = not set for a new product/variant,
 //     unchanged for an existing one — products are shared across
@@ -35,6 +35,7 @@ interface RawRow {
   variant?: Cell;
   prijs?: Cell;
   categorie?: Cell;
+  station?: Cell;
   btw?: Cell;
   code?: Cell;
   snelknoppen?: Cell;
@@ -48,6 +49,7 @@ interface ParsedRow {
   variant: string;
   priceCents: number;
   categorie: string | null; // null = empty cell
+  station: string | null; // null = empty cell
   vatBp: number | null | undefined; // undefined = empty cell
   code: string | null;
   quick: number[] | null;
@@ -156,6 +158,7 @@ function parseRows(raw: RawRow[], errors: ImportError[]): ParsedRow[] {
     if (typeof visible === 'string') errors.push({ row, message: visible });
 
     const categorie = text(r.categorie);
+    const station = text(r.station);
     const code = text(r.code);
     const entry: ParsedRow = {
       row,
@@ -164,6 +167,7 @@ function parseRows(raw: RawRow[], errors: ImportError[]): ParsedRow[] {
       variant: limit(text(r.variant), 60, 'Variant', errors, row),
       priceCents: typeof price === 'number' ? price : 0,
       categorie: categorie ? limit(categorie, 60, 'Categorie', errors, row) : null,
+      station: station ? limit(station, 60, 'Station', errors, row) : null,
       vatBp: typeof vat === 'string' ? undefined : vat,
       code: code ? limit(code, 40, 'Code', errors, row) : null,
       quick: typeof quick === 'string' ? null : quick,
@@ -181,6 +185,7 @@ interface ExistingProduct {
   id: string;
   name: string;
   category_id: string | null;
+  prep_station_id: string | null;
   vat_rate_bp: number | null;
 }
 
@@ -202,8 +207,8 @@ interface ExistingEntry {
 }
 
 async function loadOrgCatalogData(env: Env, orgId: string, catalogId: string | null) {
-  const [products, variants, categories, entries] = await env.DB.batch([
-    env.DB.prepare('SELECT id, name, category_id, vat_rate_bp FROM products WHERE org_id = ? AND archived_at IS NULL ORDER BY created_at').bind(orgId),
+  const [products, variants, categories, entries, stations] = await env.DB.batch([
+    env.DB.prepare('SELECT id, name, category_id, prep_station_id, vat_rate_bp FROM products WHERE org_id = ? AND archived_at IS NULL ORDER BY created_at').bind(orgId),
     env.DB.prepare(
       `SELECT v.id, v.product_id, v.name, v.code, v.position FROM product_variants v JOIN products p ON p.id = v.product_id
        WHERE v.org_id = ? AND v.archived_at IS NULL AND p.archived_at IS NULL ORDER BY v.position, v.created_at`
@@ -215,12 +220,14 @@ async function loadOrgCatalogData(env: Env, orgId: string, catalogId: string | n
        JOIN catalog_sections s ON s.id = e.section_id
        WHERE e.catalog_id = ? ORDER BY s.position, s.rowid, e.position, e.rowid`
     ).bind(catalogId ?? ''),
+    env.DB.prepare('SELECT id, name FROM prep_stations WHERE org_id = ? ORDER BY position, created_at').bind(orgId),
   ]);
   return {
     products: (products.results || []) as ExistingProduct[],
     variants: (variants.results || []) as ExistingVariant[],
     categories: (categories.results || []) as { id: string; name: string }[],
     entries: (entries.results || []) as ExistingEntry[],
+    stations: (stations.results || []) as { id: string; name: string }[],
   };
 }
 
@@ -230,6 +237,7 @@ interface Summary {
   rows: number;
   groups: number;
   newCategories: string[];
+  newStations: string[];
   newProducts: string[];
   newVariants: string[];
   updatedProducts: { name: string; changes: string[] }[];
@@ -271,6 +279,7 @@ async function importCatalog(request: Request, env: Env, orgId: string): Promise
     name: string;
     rows: ParsedRow[];
     categorie: { value: string; row: number } | null;
+    station: { value: string; row: number } | null;
     vat: { value: number | null; row: number } | undefined;
   }
   const fileProducts = new Map<string, FileProduct>();
@@ -279,7 +288,7 @@ async function importCatalog(request: Request, env: Env, orgId: string): Promise
     if (!key) continue;
     let fp = fileProducts.get(key);
     if (!fp) {
-      fp = { key, name: r.product, rows: [], categorie: null, vat: undefined };
+      fp = { key, name: r.product, rows: [], categorie: null, station: null, vat: undefined };
       fileProducts.set(key, fp);
     }
     fp.rows.push(r);
@@ -288,6 +297,11 @@ async function importCatalog(request: Request, env: Env, orgId: string): Promise
       if (fp.categorie && norm(fp.categorie.value) !== norm(r.categorie)) {
         errors.push({ row, message: `${fp.name}: andere categorie ("${r.categorie}") dan op rij ${fp.categorie.row} ("${fp.categorie.value}") — rijen ${fp.categorie.row} en ${row}` });
       } else if (!fp.categorie) fp.categorie = { value: r.categorie, row };
+    }
+    if (r.station) {
+      if (fp.station && norm(fp.station.value) !== norm(r.station)) {
+        errors.push({ row, message: `${fp.name}: ander station ("${r.station}") dan op rij ${fp.station.row} ("${fp.station.value}") — rijen ${fp.station.row} en ${row}` });
+      } else if (!fp.station) fp.station = { value: r.station, row };
     }
     if (r.vatBp !== undefined) {
       if (fp.vat && fp.vat.value !== r.vatBp) {
@@ -380,6 +394,7 @@ async function importCatalog(request: Request, env: Env, orgId: string): Promise
     rows: resolvedRows.length,
     groups: new Set(resolvedRows.map((r) => norm(r.groep))).size,
     newCategories: [],
+    newStations: [],
     newProducts: [],
     newVariants: [],
     updatedProducts: [],
@@ -405,21 +420,41 @@ async function importCatalog(request: Request, env: Env, orgId: string): Promise
     return id;
   };
 
+  const stationByName = new Map(existing.stations.map((st) => [norm(st.name), st]));
+  const stationName = new Map(existing.stations.map((st) => [st.id, st.name]));
+  const stationIdFor = (name: string): string => {
+    const known = stationByName.get(norm(name));
+    if (known) return known.id;
+    const id = crypto.randomUUID();
+    stationByName.set(norm(name), { id, name });
+    stationName.set(id, name);
+    summary.newStations.push(name);
+    statements.push(
+      env.DB.prepare(
+        `INSERT INTO prep_stations (id, org_id, name, position, created_at)
+         SELECT ?, ?, ?, COALESCE((SELECT MAX(position) + 1 FROM prep_stations WHERE org_id = ?), 0), ?`
+      ).bind(id, orgId, name, orgId, now)
+    );
+    return id;
+  };
+
   const finalName = new Map<string, string>(); // file product key -> product name after import
   const productIdFor = new Map<string, string>(); // file product key -> product id
   for (const fp of fileProducts.values()) {
     const match = resolvedProduct.get(fp.key) ?? null;
     const categoryId = fp.categorie ? categoryIdFor(fp.categorie.value) : undefined;
+    const stationId = fp.station ? stationIdFor(fp.station.value) : undefined;
     if (!match) {
       const id = crypto.randomUUID();
       productIdFor.set(fp.key, id);
       finalName.set(fp.key, fp.name);
       summary.newProducts.push(fp.name);
       statements.push(
-        env.DB.prepare('INSERT INTO products (id, org_id, category_id, name, vat_rate_bp, created_at) VALUES (?, ?, ?, ?, ?, ?)').bind(
+        env.DB.prepare('INSERT INTO products (id, org_id, category_id, prep_station_id, name, vat_rate_bp, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(
           id,
           orgId,
           categoryId ?? null,
+          stationId ?? null,
           fp.name,
           fp.vat ? fp.vat.value : null,
           now
@@ -440,6 +475,11 @@ async function importCatalog(request: Request, env: Env, orgId: string): Promise
       changes.push(`categorie: ${match.category_id ? categoryName.get(match.category_id) : '(geen)'} → ${fp.categorie!.value}`);
       newCategoryId = categoryId;
     }
+    let newStationId = match.prep_station_id;
+    if (stationId !== undefined && stationId !== match.prep_station_id) {
+      changes.push(`station: ${match.prep_station_id ? stationName.get(match.prep_station_id) : '(geen)'} → ${fp.station!.value}`);
+      newStationId = stationId;
+    }
     let newVat = match.vat_rate_bp;
     if (fp.vat && fp.vat.value !== match.vat_rate_bp) {
       changes.push(`btw: ${vatLabel(match.vat_rate_bp)} → ${vatLabel(fp.vat.value)}`);
@@ -453,7 +493,9 @@ async function importCatalog(request: Request, env: Env, orgId: string): Promise
     }
     if (changes.length > 0) {
       summary.updatedProducts.push({ name, changes });
-      statements.push(env.DB.prepare('UPDATE products SET name = ?, category_id = ?, vat_rate_bp = ? WHERE id = ?').bind(name, newCategoryId, newVat, match.id));
+      statements.push(
+        env.DB.prepare('UPDATE products SET name = ?, category_id = ?, prep_station_id = ?, vat_rate_bp = ? WHERE id = ?').bind(name, newCategoryId, newStationId, newVat, match.id)
+      );
     }
   }
 
@@ -568,17 +610,18 @@ async function exportCatalog(env: Env, orgId: string, catalogId: string): Promis
   // re-import (matching is on active products), so exporting it would
   // silently create a duplicate.
   const { results } = await env.DB.prepare(
-    `SELECT s.name AS groep, p.name AS product, v.name AS variant, e.price_cents, c.name AS categorie, p.vat_rate_bp, v.code, e.quick_quantities, e.visible
+    `SELECT s.name AS groep, p.name AS product, v.name AS variant, e.price_cents, c.name AS categorie, ps.name AS station, p.vat_rate_bp, v.code, e.quick_quantities, e.visible
      FROM catalog_entries e
      JOIN catalog_sections s ON s.id = e.section_id
      JOIN product_variants v ON v.id = e.variant_id
      JOIN products p ON p.id = v.product_id
      LEFT JOIN categories c ON c.id = p.category_id
+     LEFT JOIN prep_stations ps ON ps.id = p.prep_station_id
      WHERE e.catalog_id = ? AND v.archived_at IS NULL AND p.archived_at IS NULL
      ORDER BY s.position, s.rowid, e.position, e.rowid`
   )
     .bind(catalogId)
-    .all<{ groep: string; product: string; variant: string; price_cents: number; categorie: string | null; vat_rate_bp: number | null; code: string | null; quick_quantities: string | null; visible: number }>();
+    .all<{ groep: string; product: string; variant: string; price_cents: number; categorie: string | null; station: string | null; vat_rate_bp: number | null; code: string | null; quick_quantities: string | null; visible: number }>();
 
   return json({
     catalog,
@@ -588,6 +631,7 @@ async function exportCatalog(env: Env, orgId: string, catalogId: string): Promis
       variant: r.variant,
       prijsCents: r.price_cents,
       categorie: r.categorie,
+      station: r.station,
       btwBp: r.vat_rate_bp,
       code: r.code,
       snelknoppen: r.quick_quantities ? JSON.parse(r.quick_quantities) : null,
