@@ -22,6 +22,7 @@ import { getDecryptedPaymentCredential } from '../organizations/payment-credenti
 import { createSumupReaderCheckout, SumupCloudApiError, listSumupReaders } from './sumup-cloud-api';
 import { createCharge, getCharge, setChargeProviderRef, resolveCharge, type ChargeRecord } from './charges';
 import { ensureChargePolling } from './charge-poller-client';
+import { isPendingTabChargeConflict, prepareTabCharge } from '../tabs';
 
 // Called by the settings page to populate the "SumUp Solo-readers" panel
 // with the org's actual paired readers, fetched live from SumUp — nothing is
@@ -62,6 +63,8 @@ interface CreateChargeBody {
   // 'pending' for a manual confirm (cash always takes that path; sumup does
   // too when no reader is linked, e.g. testing via the simulator).
   readerId?: string;
+  // The tab this charge settles — see tabs.ts.
+  tabId?: string;
 }
 
 export async function createSumupCharge(request: Request, env: Env): Promise<Response> {
@@ -81,21 +84,38 @@ export async function createSumupCharge(request: Request, env: Env): Promise<Res
   const method = (body.method ? String(body.method) : 'sumup') as ChargeRecord['method'];
   const orgId = String(body.orgId);
 
-  const charge = await createCharge(env, {
-    orgId,
-    method,
-    amountCents,
-    description: body.description ? String(body.description).slice(0, 140) : '',
-    posTerminalId,
-    items: body.items || {},
-    slotId: body.slotId ? String(body.slotId) : null,
-    deviceId: body.deviceId ? String(body.deviceId) : null,
-    deviceName: body.deviceName ? String(body.deviceName) : null,
-    // From the BFF's session (serviceProxy.ts's setIdentityHeaders) — not
-    // from the client body, since the client could claim to be anyone.
-    userName: request.headers.get('X-User-Name') || null,
-    userEmail: request.headers.get('X-User-Email') || null,
-  });
+  const tabId = body.tabId ? String(body.tabId) : null;
+  let items = body.items || {};
+  let description = body.description ? String(body.description).slice(0, 140) : '';
+  if (tabId) {
+    const prepared = await prepareTabCharge(request, env, orgId, tabId, amountCents);
+    if (!prepared.ok) return prepared.response;
+    items = prepared.context.items;
+    description = description || prepared.context.description;
+  }
+
+  let charge;
+  try {
+    charge = await createCharge(env, {
+      orgId,
+      method,
+      amountCents,
+      description,
+      posTerminalId,
+      items,
+      slotId: body.slotId ? String(body.slotId) : null,
+      deviceId: body.deviceId ? String(body.deviceId) : null,
+      deviceName: body.deviceName ? String(body.deviceName) : null,
+      // From the BFF's session (serviceProxy.ts's setIdentityHeaders) — not
+      // from the client body, since the client could claim to be anyone.
+      userName: request.headers.get('X-User-Name') || null,
+      userEmail: request.headers.get('X-User-Email') || null,
+      tabId,
+    });
+  } catch (err) {
+    if (isPendingTabChargeConflict(err)) return json({ error: 'Er loopt al een betaling voor deze rekening' }, 409);
+    throw err;
+  }
 
   if (method === 'sumup' && body.readerId) {
     await dispatchToReader(env, charge, String(body.readerId));

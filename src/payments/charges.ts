@@ -9,6 +9,7 @@
 import type { Env } from '../env';
 import { broadcastPaymentEvent } from '../devicehub-client';
 import { recordChargeTransaction } from '../transactions';
+import { settleTab } from '../tabs';
 
 export type ChargeMethod = 'cash' | 'sumup' | 'bancontact';
 export type ChargeStatus = 'pending' | 'succeeded' | 'failed';
@@ -35,6 +36,7 @@ export interface ChargeRecord {
   providerRef: string | null;
   providerData: Record<string, unknown>;
   expiresAt: string | null;
+  tabId: string | null;
 }
 
 interface ChargeRow {
@@ -59,6 +61,7 @@ interface ChargeRow {
   provider_ref: string | null;
   provider_data: string | null;
   expires_at: string | null;
+  tab_id: string | null;
 }
 
 function rowToCharge(row: ChargeRow): ChargeRecord {
@@ -84,6 +87,7 @@ function rowToCharge(row: ChargeRow): ChargeRecord {
     providerRef: row.provider_ref,
     providerData: row.provider_data ? JSON.parse(row.provider_data) : {},
     expiresAt: row.expires_at,
+    tabId: row.tab_id,
   };
 }
 
@@ -107,6 +111,10 @@ export interface CreateChargeFields {
   providerRef?: string | null;
   providerData?: Record<string, unknown> | null;
   expiresAt?: string | null;
+  // The tab this charge settles — see tabs.ts. At most one pending charge
+  // per tab (idx_charges_one_pending_per_tab): a second insert throws, see
+  // tabs.ts's isPendingTabChargeConflict.
+  tabId?: string | null;
 }
 
 export async function createCharge(env: Env, fields: CreateChargeFields): Promise<ChargeRecord> {
@@ -119,8 +127,8 @@ export async function createCharge(env: Env, fields: CreateChargeFields): Promis
 
   await env.DB.prepare(
     `INSERT INTO charges
-      (id, org_id, method, status, provider_status, amount_cents, description, pos_terminal_id, items, slot_id, device_id, device_name, user_name, user_email, created_at, provider_ref, provider_data, expires_at)
-     VALUES (?, ?, ?, 'pending', NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      (id, org_id, method, status, provider_status, amount_cents, description, pos_terminal_id, items, slot_id, device_id, device_name, user_name, user_email, created_at, provider_ref, provider_data, expires_at, tab_id)
+     VALUES (?, ?, ?, 'pending', NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       id,
@@ -138,7 +146,8 @@ export async function createCharge(env: Env, fields: CreateChargeFields): Promis
       createdAt,
       fields.providerRef || null,
       JSON.stringify(fields.providerData || {}),
-      fields.expiresAt || null
+      fields.expiresAt || null,
+      fields.tabId || null
     )
     .run();
 
@@ -231,6 +240,7 @@ export async function resolveCharge(env: Env, id: string, outcome: ResolveOutcom
     }
     if (record.status === 'succeeded') {
       await recordChargeTransaction(env, record);
+      if (record.tabId) await settleTab(env, record.tabId);
     }
   }
 

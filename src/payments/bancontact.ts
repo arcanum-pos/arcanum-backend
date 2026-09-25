@@ -15,6 +15,7 @@ import { broadcastPaymentEvent } from '../devicehub-client';
 import { getDecryptedPaymentCredential } from '../organizations/payment-credentials';
 import { verifyBancontactCallback } from './bancontact-jws';
 import { createCharge, getCharge, resolveCharge, updateChargeProviderStatus } from './charges';
+import { isPendingTabChargeConflict, prepareTabCharge } from '../tabs';
 import { ensureChargePolling } from './charge-poller-client';
 
 export const BASE_URLS: Record<string, string> = {
@@ -58,6 +59,7 @@ export async function createPayment(request: Request, env: Env): Promise<Respons
     slotId?: string;
     deviceId?: string;
     deviceName?: string;
+    tabId?: string;
   };
   const amountCents = Number(body.amount);
 
@@ -68,6 +70,18 @@ export async function createPayment(request: Request, env: Env): Promise<Respons
     return json({ error: 'orgId is required' }, 400);
   }
   const orgId = String(body.orgId);
+
+  // Checked before calling Bancontact, so a refused tab payment never leaves
+  // a provider-side payment behind (see tabs.ts's prepareTabCharge).
+  const tabId = body.tabId ? String(body.tabId) : null;
+  let items = body.items || {};
+  let description = body.description ? String(body.description).slice(0, 140) : '';
+  if (tabId) {
+    const prepared = await prepareTabCharge(request, env, orgId, tabId, amountCents);
+    if (!prepared.ok) return prepared.response;
+    items = prepared.context.items;
+    description = description || prepared.context.description;
+  }
 
   const credential = await resolveCredential(env, orgId);
   if (!credential) {
@@ -81,7 +95,6 @@ export async function createPayment(request: Request, env: Env): Promise<Respons
   // limit, one short of a canonical UUID's 36.
   const chargeId = crypto.randomUUID().replace(/-/g, '');
   const posTerminalId = body.posTerminalId ? String(body.posTerminalId) : null;
-  const description = body.description ? String(body.description).slice(0, 140) : '';
 
   const baseUrl = BASE_URLS[credential.environment];
   const payload = {
@@ -104,26 +117,35 @@ export async function createPayment(request: Request, env: Env): Promise<Respons
     return json({ error: 'Bancontact API error', details: data }, response.status);
   }
 
-  const charge = await createCharge(env, {
-    id: chargeId,
-    orgId,
-    method: 'bancontact',
-    amountCents,
-    description,
-    posTerminalId,
-    items: body.items || {},
-    slotId: body.slotId ? String(body.slotId) : null,
-    deviceId: body.deviceId ? String(body.deviceId) : null,
-    deviceName: body.deviceName ? String(body.deviceName) : null,
-    userName: request.headers.get('X-User-Name') || null,
-    userEmail: request.headers.get('X-User-Email') || null,
-    providerRef: data.paymentId || null,
-    // Stored so a linked CFD — same-device or a genuinely separate one —
-    // can render the actual QR code from the payment_updated push, not
-    // just the plain "please pay" text cash/sumup get. See getSumupStatus.
-    providerData: { qrCodeUrl: data._links?.qrcode?.href || null, deeplinkUrl: data._links?.deeplink?.href || null },
-    expiresAt: data.expiresAt || null,
-  });
+  let charge;
+  try {
+    charge = await createCharge(env, {
+      id: chargeId,
+      orgId,
+      method: 'bancontact',
+      amountCents,
+      description,
+      posTerminalId,
+      items,
+      slotId: body.slotId ? String(body.slotId) : null,
+      deviceId: body.deviceId ? String(body.deviceId) : null,
+      deviceName: body.deviceName ? String(body.deviceName) : null,
+      userName: request.headers.get('X-User-Name') || null,
+      userEmail: request.headers.get('X-User-Email') || null,
+      tabId,
+      providerRef: data.paymentId || null,
+      // Stored so a linked CFD — same-device or a genuinely separate one —
+      // can render the actual QR code from the payment_updated push, not
+      // just the plain "please pay" text cash/sumup get. See getSumupStatus.
+      providerData: { qrCodeUrl: data._links?.qrcode?.href || null, deeplinkUrl: data._links?.deeplink?.href || null },
+      expiresAt: data.expiresAt || null,
+    });
+  } catch (err) {
+    // Lost the race against another kassa paying the same tab — the
+    // Bancontact payment just created is never shown and simply expires.
+    if (isPendingTabChargeConflict(err)) return json({ error: 'Er loopt al een betaling voor deze rekening' }, 409);
+    throw err;
+  }
 
   await ensureChargePolling(env); // fallback sweep in case the callback above never arrives
 

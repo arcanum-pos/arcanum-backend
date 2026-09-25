@@ -26,6 +26,7 @@ interface TransactionFields {
   // a later step. Accepted here already so that step is just "start
   // sending eventId", not another migration.
   eventId?: string | null;
+  tabId?: string | null;
   completedAt?: string;
 }
 
@@ -35,8 +36,8 @@ async function insertTransaction(env: Env, fields: TransactionFields): Promise<{
 
   await env.DB.prepare(
     `INSERT INTO transactions
-      (id, amount_cents, description, method, items, slot_id, device_id, device_name, user_name, user_email, org_id, event_id, completed_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      (id, amount_cents, description, method, items, slot_id, device_id, device_name, user_name, user_email, org_id, event_id, tab_id, completed_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       id,
@@ -51,6 +52,7 @@ async function insertTransaction(env: Env, fields: TransactionFields): Promise<{
       fields.userEmail ? String(fields.userEmail) : null,
       fields.orgId,
       fields.eventId ? String(fields.eventId) : null,
+      fields.tabId ? String(fields.tabId) : null,
       completedAt
     )
     .run();
@@ -74,6 +76,7 @@ export interface RecordableCharge {
   userName: string | null;
   userEmail: string | null;
   orgId: string | null;
+  tabId: string | null;
 }
 
 export async function recordChargeTransaction(env: Env, charge: RecordableCharge): Promise<void> {
@@ -93,6 +96,7 @@ export async function recordChargeTransaction(env: Env, charge: RecordableCharge
     userName: charge.userName,
     userEmail: charge.userEmail,
     orgId: charge.orgId || '',
+    tabId: charge.tabId,
   });
 }
 
@@ -112,7 +116,9 @@ export async function createTransaction(request: Request, env: Env): Promise<Res
     return json({ error: 'orgId is required' }, 400);
   }
 
-  const result = await insertTransaction(env, { ...body, amountCents, method, orgId });
+  // tabId deliberately dropped: a tab's sales are only ever recorded via its
+  // charge resolving (recordChargeTransaction), which is also what settles it.
+  const result = await insertTransaction(env, { ...body, amountCents, method, orgId, tabId: null });
   return json(result, 201);
 }
 
