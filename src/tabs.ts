@@ -683,7 +683,8 @@ export interface TabChargeContext {
 
 // Pre-check before creating a charge for a tab: caller is a member, tab is
 // open, nothing else is in flight for it, and the amount (minus tip) is
-// at most what's outstanding — all of it, or a part (split payments). The pending-charge part is re-enforced atomically by
+// exactly what the kassa means to pay: all that's outstanding, the next
+// split part, or — deliberately — any part of it. The pending-charge part is re-enforced atomically by
 // idx_charges_one_pending_per_tab at insert time — this check just avoids
 // creating a provider-side payment (Bancontact) that's doomed to lose that
 // race in the common case.
@@ -693,7 +694,12 @@ export async function prepareTabCharge(
   orgId: string,
   tabId: string,
   amountCents: number,
-  tipCents = 0
+  tipCents = 0,
+  // What the kassa means to pay — checked exactly, so a kassa with a stale
+  // view (a line added elsewhere, a split changed) gets a 409 instead of
+  // silently paying the wrong amount: the whole tab (default), the next
+  // part of its split, or deliberately any part of it.
+  intent: { splitPart?: boolean; partial?: boolean } = {}
 ): Promise<{ ok: true; context: TabChargeContext } | { ok: false; response: Response }> {
   const refusal = await authorize(request, env, orgId);
   if (refusal) return { ok: false, response: refusal };
@@ -703,10 +709,14 @@ export async function prepareTabCharge(
   if (tab.status !== 'open') return { ok: false, response: json({ error: 'Rekening is niet meer open', tab }, 409) };
   if (tab.paymentPending) return { ok: false, response: json({ error: 'Er loopt al een betaling voor deze rekening', tab }, 409) };
   if (tab.outstandingCents < 1) return { ok: false, response: json({ error: 'Niets te betalen op deze rekening', tab }, 409) };
-  // Any part of what's open (split payments), never more: amount − tip is
-  // what pays off the tab.
+  // amount − tip is what pays off the tab.
   const paysCents = amountCents - tipCents;
-  if (paysCents < 1 || paysCents > tab.outstandingCents) {
+  const expected = intent.splitPart
+    ? paysCents === tab.split?.nextCents
+    : intent.partial
+      ? paysCents >= 1 && paysCents <= tab.outstandingCents
+      : paysCents === tab.outstandingCents;
+  if (!expected) {
     return { ok: false, response: json({ error: 'Rekening is gewijzigd, herlaad en probeer opnieuw', tab }, 409) };
   }
   const settlesTab = paysCents === tab.outstandingCents;

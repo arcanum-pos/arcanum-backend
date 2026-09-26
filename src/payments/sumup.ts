@@ -68,6 +68,7 @@ interface CreateChargeBody {
   // Fooi, part of amount — see charges.ts parseTipCents.
   tipCents?: number;
   splitPart?: boolean;
+  partial?: boolean;
 }
 
 export async function createSumupCharge(request: Request, env: Env): Promise<Response> {
@@ -94,7 +95,7 @@ export async function createSumupCharge(request: Request, env: Env): Promise<Res
   let description = body.description ? String(body.description).slice(0, 140) : '';
   let splitPart = 0;
   if (tabId) {
-    const prepared = await prepareTabCharge(request, env, orgId, tabId, amountCents, tipCents);
+    const prepared = await prepareTabCharge(request, env, orgId, tabId, amountCents, tipCents, { splitPart: body.splitPart === true, partial: body.partial === true });
     if (!prepared.ok) return prepared.response;
     items = prepared.context.items;
     description = description || prepared.context.description;

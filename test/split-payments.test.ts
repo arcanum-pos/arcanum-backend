@@ -6,8 +6,9 @@ import { api, chargeCash, confirmCharge, createTab, DEVICE, getTab, line, orderB
 
 const split = (org: TestOrg, tabId: string, parts: number | null) => api('POST', tabsPath(org.orgId, `/${tabId}/split`), { user: org.cashier, body: { parts } });
 
+// A deliberate partial payment unless it's a split part.
 async function pay(org: TestOrg, tabId: string, amount: number, extra: Record<string, unknown> = {}) {
-  const res = await chargeCash(org, tabId, amount, extra);
+  const res = await chargeCash(org, tabId, amount, extra.splitPart ? extra : { partial: true, ...extra });
   expect(res.status, JSON.stringify(res.body)).toBe(201);
   await confirmCharge(org, res.body.chargeId);
   return res.body.chargeId as string;
@@ -132,13 +133,20 @@ describe('"Gelijk verdelen"', () => {
 });
 
 describe('split part bookkeeping', () => {
-  it('asking for a split part without a plan records none', async () => {
+  it('a split part without a plan (stopped on another kassa), or of a different amount, is refused (409)', async () => {
     const org = await seedOrg();
     const tab = await createTab(org, { label: 'Tafel 2', lines: [line('bon', 'Bonnen', 100, 30)] });
-    await pay(org, tab.id, 1000, { splitPart: true });
-    const [c] = await rows<{ split_part: number }>('SELECT split_part FROM charges WHERE tab_id = ?', tab.id);
-    expect(c.split_part).toBe(0);
-    expect((await getTab(org, tab.id)).split).toBeNull();
+    expect((await chargeCash(org, tab.id, 1000, { splitPart: true })).status).toBe(409);
+    await split(org, tab.id, 3);
+    expect((await chargeCash(org, tab.id, 999, { splitPart: true })).status).toBe(409);
+    expect((await chargeCash(org, tab.id, 1000, { splitPart: true })).status).toBe(201);
+  });
+
+  it('without an intent it must still be exactly what is open — a stale kassa gets a 409, not a partial payment', async () => {
+    const org = await seedOrg();
+    const tab = await createTab(org, { label: 'Tafel 2', lines: [line('bon', 'Bonnen', 100, 30)] });
+    expect((await chargeCash(org, tab.id, 2000)).status).toBe(409);
+    expect((await chargeCash(org, tab.id, 2000, { partial: true })).status).toBe(201);
   });
 
   it('the customer display sees the plan with the order', async () => {
