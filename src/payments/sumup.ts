@@ -22,7 +22,7 @@ import { getDecryptedPaymentCredential } from '../organizations/payment-credenti
 import { createSumupReaderCheckout, SumupCloudApiError, listSumupReaders } from './sumup-cloud-api';
 import { createCharge, getCharge, parseTipCents, setChargeProviderRef, resolveCharge, type ChargeRecord } from './charges';
 import { ensureChargePolling } from './charge-poller-client';
-import { isPendingTabChargeConflict, prepareTabCharge } from '../tabs';
+import { customerOrder, isPendingTabChargeConflict, prepareTabCharge } from '../tabs';
 
 // Called by the settings page to populate the "SumUp Solo-readers" panel
 // with the org's actual paired readers, fetched live from SumUp — nothing is
@@ -231,5 +231,7 @@ export async function getSumupStatus(chargeId: string, env: Env): Promise<Respon
     // Only ever set for bancontact — see createPayment in bancontact.ts.
     qrCodeUrl: (charge.providerData as { qrCodeUrl?: string | null }).qrCodeUrl || null,
     expiresAt: charge.expiresAt,
+    // The order being paid, for the customer display (null: not a tab charge).
+    order: charge.tabId ? await customerOrder(env, charge.orgId, charge.tabId) : null,
   });
 }

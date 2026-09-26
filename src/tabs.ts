@@ -359,6 +359,29 @@ async function loadTabDetail(env: Env, orgId: string, tabId: string) {
   };
 }
 
+// What the customer display shows for a charge on this tab: the tab's name
+// and its lines net of voids (fully voided ones left out). Read by the
+// charge status endpoint, so a CFD on another device shows the order too —
+// not just the amount. No prices beyond what's on the kassa's own ticket.
+export async function customerOrder(env: Env, orgId: string, tabId: string) {
+  const tab = await loadTabSummary(env, orgId, tabId);
+  if (!tab) return null;
+  const { results } = await env.DB.prepare('SELECT id, name, unit_price_cents, quantity, voids_line_id FROM order_lines WHERE tab_id = ? ORDER BY created_at, rowid')
+    .bind(tabId)
+    .all<Pick<LineRow, 'id' | 'name' | 'unit_price_cents' | 'quantity' | 'voids_line_id'>>();
+  const rows = results || [];
+  const voided = new Map<string, number>();
+  for (const l of rows) if (l.voids_line_id) voided.set(l.voids_line_id, (voided.get(l.voids_line_id) || 0) - l.quantity);
+  return {
+    label: tab.label,
+    number: tab.number,
+    lines: rows
+      .filter((l) => !l.voids_line_id)
+      .map((l) => ({ name: l.name, quantity: l.quantity - (voided.get(l.id) || 0), unitPriceCents: l.unit_price_cents }))
+      .filter((l) => l.quantity > 0),
+  };
+}
+
 // Distinguishes *why* a conditional write touched nothing, for a useful error.
 async function refusalResponse(env: Env, orgId: string, tabId: string): Promise<Response> {
   const tab = await loadTabSummary(env, orgId, tabId);
