@@ -129,6 +129,13 @@ export const EXPORT_TABLES: TableSpec[] = [
     orderBy: 'created_at, rowid',
   },
   {
+    table: 'charge_lines',
+    columns: ['charge_id', 'tab_id', 'line_id', 'quantity'],
+    excluded: ORG,
+    remap: ['charge_id', 'tab_id', 'line_id'],
+    orderBy: 'charge_id, line_id',
+  },
+  {
     table: 'transactions',
     columns: [
       'id', 'amount_cents', 'description', 'method', 'items', 'slot_id', 'device_id', 'device_name', 'user_name', 'user_email', 'event_id', 'tab_id',

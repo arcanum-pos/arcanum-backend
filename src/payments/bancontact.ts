@@ -63,6 +63,7 @@ export async function createPayment(request: Request, env: Env): Promise<Respons
     tipCents?: number;
     splitPart?: boolean;
     partial?: boolean;
+    lines?: unknown;
   };
   const amountCents = Number(body.amount);
 
@@ -82,12 +83,14 @@ export async function createPayment(request: Request, env: Env): Promise<Respons
   let items = body.items || {};
   let description = body.description ? String(body.description).slice(0, 140) : '';
   let splitPart = 0;
+  let lines: { lineId: string; quantity: number }[] = [];
   if (tabId) {
-    const prepared = await prepareTabCharge(request, env, orgId, tabId, amountCents, tipCents, { splitPart: body.splitPart === true, partial: body.partial === true });
+    const prepared = await prepareTabCharge(request, env, orgId, tabId, amountCents, tipCents, { splitPart: body.splitPart === true, partial: body.partial === true, lines: body.lines });
     if (!prepared.ok) return prepared.response;
     items = prepared.context.items;
     description = description || prepared.context.description;
     splitPart = prepared.context.splitPart;
+    lines = prepared.context.lines;
   }
 
   const credential = await resolveCredential(env, orgId);
@@ -142,6 +145,7 @@ export async function createPayment(request: Request, env: Env): Promise<Respons
       tabId,
       tipCents,
       splitPart: body.splitPart === true ? splitPart : 0,
+      lines,
       providerRef: data.paymentId || null,
       // Stored so a linked CFD — same-device or a genuinely separate one —
       // can render the actual QR code from the payment_updated push, not

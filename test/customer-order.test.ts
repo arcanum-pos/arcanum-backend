@@ -23,6 +23,7 @@ describe('customer order on the charge status', () => {
       eventName: null,
       split: null,
       paidCents: 0,
+      paying: null,
       lines: [
         { name: 'Bonnen', quantity: 10, unitPriceCents: 100 },
         { name: 'Fietstocht', quantity: 1, unitPriceCents: 800 },

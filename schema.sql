@@ -254,6 +254,19 @@ CREATE INDEX IF NOT EXISTS idx_charges_org ON charges(org_id);
 -- At most one in-flight payment per tab — the actual guard against two
 -- kassas paying the same tab at once (a second pending insert fails).
 CREATE UNIQUE INDEX IF NOT EXISTS idx_charges_one_pending_per_tab ON charges(tab_id) WHERE status = 'pending' AND tab_id IS NOT NULL;
+
+-- Which units of which order line a payment covers (split per item, 0019).
+CREATE TABLE IF NOT EXISTS charge_lines (
+  charge_id TEXT NOT NULL REFERENCES charges(id),
+  org_id TEXT NOT NULL REFERENCES organizations(id),
+  tab_id TEXT NOT NULL REFERENCES tabs(id),
+  line_id TEXT NOT NULL REFERENCES order_lines(id),
+  quantity INTEGER NOT NULL CHECK (quantity > 0),
+  PRIMARY KEY (charge_id, line_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_charge_lines_tab ON charge_lines(tab_id);
+CREATE INDEX IF NOT EXISTS idx_charge_lines_line ON charge_lines(line_id);
 CREATE INDEX IF NOT EXISTS idx_charges_status ON charges(status);
 CREATE INDEX IF NOT EXISTS idx_charges_method_provider_ref ON charges(method, provider_ref);
 
@@ -479,3 +492,4 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0015_tips.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0016_prep_stations.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0017_org_import.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0018_split_payments.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0019_charge_lines.sql');

@@ -10,6 +10,7 @@ import type { Env } from '../env';
 import { broadcastPaymentEvent } from '../devicehub-client';
 import { recordChargeTransaction } from '../transactions';
 import { settleTab } from '../tabs';
+import { jsonRowsStatement, present } from '../sql-json';
 
 export type ChargeMethod = 'cash' | 'sumup' | 'bancontact';
 export type ChargeStatus = 'pending' | 'succeeded' | 'failed';
@@ -127,6 +128,9 @@ export interface CreateChargeFields {
   // Which part of the tab's "Gelijk verdelen" plan this pays — from
   // prepareTabCharge, never the client (counts toward split_paid once it succeeds).
   splitPart?: number;
+  // Per item: the units this payment covers — written with the charge, in
+  // the same batch (see tabs.ts checkItemLines).
+  lines?: { lineId: string; quantity: number }[];
 }
 
 // A tip (fooi) on a payment: an integer 0..100000 cents, part of the charged
@@ -145,7 +149,7 @@ export async function createCharge(env: Env, fields: CreateChargeFields): Promis
   const id = fields.id || crypto.randomUUID().replace(/-/g, '');
   const createdAt = new Date().toISOString();
 
-  await env.DB.prepare(
+  const insertCharge = env.DB.prepare(
     `INSERT INTO charges
       (id, org_id, method, status, provider_status, amount_cents, description, pos_terminal_id, items, slot_id, device_id, device_name, user_name, user_email, created_at, provider_ref, provider_data, expires_at, tab_id, tip_cents, split_part)
      VALUES (?, ?, ?, 'pending', NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
@@ -170,8 +174,17 @@ export async function createCharge(env: Env, fields: CreateChargeFields): Promis
       fields.tabId || null,
       fields.tipCents || 0,
       fields.tabId && fields.splitPart ? fields.splitPart : 0
-    )
-    .run();
+    );
+  const insertLines =
+    fields.tabId && fields.lines?.length
+      ? jsonRowsStatement(
+          env.DB,
+          'charge_lines',
+          ['charge_id', 'org_id', 'tab_id', 'line_id', 'quantity'],
+          fields.lines.map((l) => ({ charge_id: id, org_id: fields.orgId, tab_id: fields.tabId, line_id: l.lineId, quantity: l.quantity }))
+        )
+      : null;
+  await env.DB.batch(present([insertCharge, insertLines]));
 
   return (await getCharge(env, id)) as ChargeRecord;
 }

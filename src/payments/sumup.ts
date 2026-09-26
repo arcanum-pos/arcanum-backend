@@ -69,6 +69,8 @@ interface CreateChargeBody {
   tipCents?: number;
   splitPart?: boolean;
   partial?: boolean;
+  // Per item: [{ lineId, quantity }] — the units this payment covers.
+  lines?: unknown;
 }
 
 export async function createSumupCharge(request: Request, env: Env): Promise<Response> {
@@ -94,12 +96,14 @@ export async function createSumupCharge(request: Request, env: Env): Promise<Res
   let items = body.items || {};
   let description = body.description ? String(body.description).slice(0, 140) : '';
   let splitPart = 0;
+  let lines: { lineId: string; quantity: number }[] = [];
   if (tabId) {
-    const prepared = await prepareTabCharge(request, env, orgId, tabId, amountCents, tipCents, { splitPart: body.splitPart === true, partial: body.partial === true });
+    const prepared = await prepareTabCharge(request, env, orgId, tabId, amountCents, tipCents, { splitPart: body.splitPart === true, partial: body.partial === true, lines: body.lines });
     if (!prepared.ok) return prepared.response;
     items = prepared.context.items;
     description = description || prepared.context.description;
     splitPart = prepared.context.splitPart;
+    lines = prepared.context.lines;
   }
 
   let charge;
@@ -121,6 +125,7 @@ export async function createSumupCharge(request: Request, env: Env): Promise<Res
       tabId,
       tipCents,
       splitPart: body.splitPart === true ? splitPart : 0,
+      lines,
     });
   } catch (err) {
     if (isPendingTabChargeConflict(err)) return json({ error: 'Er loopt al een betaling voor deze rekening' }, 409);
@@ -237,7 +242,7 @@ export async function getSumupStatus(chargeId: string, env: Env): Promise<Respon
     qrCodeUrl: (charge.providerData as { qrCodeUrl?: string | null }).qrCodeUrl || null,
     expiresAt: charge.expiresAt,
     // The order being paid, for the customer display (null: not a tab charge).
-    order: charge.tabId ? await customerOrder(env, charge.orgId, charge.tabId) : null,
+    order: charge.tabId ? await customerOrder(env, charge.orgId, charge.tabId, charge.id) : null,
     // Which part of an equal split this payment is (null: not a part).
     splitPart: charge.splitPart || null,
   });

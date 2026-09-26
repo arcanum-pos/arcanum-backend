@@ -158,3 +158,103 @@ describe('split part bookkeeping', () => {
     expect([status.body.splitPart, status.body.order.split]).toEqual([1, { parts: 3, paid: 0 }]);
   });
 });
+
+describe('per item', () => {
+  async function tafel(org: TestOrg) {
+    const tab = await createTab(org, { label: 'Tafel 5', lines: [line('pintje', 'Pintje', 250, 3), line('steak', 'Steak', 3400, 1), line('water', 'Water', 200, 2)] }); // 4550
+    const id = (code: string) => tab.lines.find((l: any) => l.itemCode === code).id as string;
+    return { tab, id };
+  }
+  const payItems = (org: TestOrg, tabId: string, amount: number, lines: { lineId: string; quantity: number }[], extra: Record<string, unknown> = {}) =>
+    chargeCash(org, tabId, amount, { lines, ...extra });
+
+  it('pays exactly the selected units; they show as paid on the tab', async () => {
+    const org = await seedOrg();
+    const { tab, id } = await tafel(org);
+    const res = await payItems(org, tab.id, 250 + 3400 + 100, [{ lineId: id('pintje'), quantity: 1 }, { lineId: id('steak'), quantity: 1 }], { tipCents: 100 });
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    await confirmCharge(org, res.body.chargeId);
+
+    const now = await getTab(org, tab.id);
+    expect(now.outstandingCents).toBe(4550 - 3650);
+    expect(now.lines.map((l: any) => [l.name, l.paidQuantity])).toEqual([['Pintje', 1], ['Steak', 1], ['Water', 0]]);
+    const [tx] = await rows<{ items: string; description: string }>('SELECT items, description FROM transactions WHERE tab_id = ?', tab.id);
+    expect([JSON.parse(tx.items), tx.description.endsWith('(deel)')]).toEqual([{}, true]);
+  });
+
+  it('never pays a unit twice, nor more units than a line has, nor another amount than the units cost', async () => {
+    const org = await seedOrg();
+    const { tab, id } = await tafel(org);
+    const first = await payItems(org, tab.id, 500, [{ lineId: id('pintje'), quantity: 2 }]);
+    await confirmCharge(org, first.body.chargeId);
+    expect((await payItems(org, tab.id, 500, [{ lineId: id('pintje'), quantity: 2 }])).status).toBe(409); // only 1 left
+    expect((await payItems(org, tab.id, 400, [{ lineId: id('water'), quantity: 3 }])).status).toBe(409); // only 2
+    expect((await payItems(org, tab.id, 199, [{ lineId: id('water'), quantity: 1 }])).status).toBe(409); // costs 200
+    expect((await payItems(org, tab.id, 250, [{ lineId: id('pintje'), quantity: 1 }])).status).toBe(201);
+  });
+
+  it('refuses malformed selections (400) and lines of another tab (409)', async () => {
+    const org = await seedOrg();
+    const { tab, id } = await tafel(org);
+    const other = await createTab(org, { label: 'X', lines: [line('bon', 'Bonnen', 100, 5)] });
+    for (const lines of [[], [{ lineId: id('water'), quantity: 0 }], [{ lineId: 5, quantity: 1 }], 'water']) {
+      expect((await chargeCash(org, tab.id, 200, { lines })).status, JSON.stringify(lines)).toBe(400);
+    }
+    expect((await payItems(org, tab.id, 100, [{ lineId: other.lines[0].id, quantity: 1 }])).status).toBe(409);
+  });
+
+  it('a failed item payment frees its units again', async () => {
+    const org = await seedOrg();
+    const { tab, id } = await tafel(org);
+    const failed = await payItems(org, tab.id, 3400, [{ lineId: id('steak'), quantity: 1 }]);
+    await confirmCharge(org, failed.body.chargeId, false);
+    expect((await getTab(org, tab.id)).lines.find((l: any) => l.name === 'Steak').paidQuantity).toBe(0);
+    expect((await payItems(org, tab.id, 3400, [{ lineId: id('steak'), quantity: 1 }])).status).toBe(201);
+  });
+
+  it('paid units cannot be voided; the unpaid ones still can', async () => {
+    const org = await seedOrg();
+    const { tab, id } = await tafel(org);
+    const paid = await payItems(org, tab.id, 500, [{ lineId: id('pintje'), quantity: 2 }]);
+    await confirmCharge(org, paid.body.chargeId);
+    const voidLine = (lineId: string, quantity: number) =>
+      api('POST', tabsPath(org.orgId, `/${tab.id}/lines/${lineId}/void`), { user: org.cashier, body: { ...DEVICE, reason: 'fout', quantity } });
+    const refused = await voidLine(id('pintje'), 2);
+    expect(refused.status).toBe(409);
+    expect(refused.body.error).toMatch(/al betaald — ze kunnen niet meer geannuleerd/);
+    expect((await voidLine(id('pintje'), 1)).status).toBe(201); // the third, unpaid one
+  });
+
+  it('the last selection that covers all that is open closes the tab, with the items JSON', async () => {
+    const org = await seedOrg();
+    const { tab, id } = await tafel(org);
+    const a = await payItems(org, tab.id, 3400 + 250, [{ lineId: id('steak'), quantity: 1 }, { lineId: id('pintje'), quantity: 1 }]);
+    await confirmCharge(org, a.body.chargeId);
+    const b = await payItems(org, tab.id, 500 + 400, [{ lineId: id('pintje'), quantity: 2 }, { lineId: id('water'), quantity: 2 }]);
+    await confirmCharge(org, b.body.chargeId);
+    const closed = await getTab(org, tab.id);
+    expect([closed.status, closed.receiptNumber]).toEqual(['closed', 1]);
+    const txs = await rows<{ items: string }>('SELECT items FROM transactions WHERE tab_id = ? ORDER BY completed_at, rowid', tab.id);
+    expect(txs.map((t) => JSON.parse(t.items))).toEqual([{}, { pintje: 3, steak: 1, water: 2 }]);
+  });
+
+  it('the customer display sees what this payment covers', async () => {
+    const org = await seedOrg();
+    const { tab, id } = await tafel(org);
+    const res = await payItems(org, tab.id, 3650, [{ lineId: id('steak'), quantity: 1 }, { lineId: id('pintje'), quantity: 1 }]);
+    const status = await api('GET', `/sumup/status/${res.body.chargeId}`, { user: org.cashier });
+    expect(status.body.order.paying).toEqual([
+      { name: 'Pintje', quantity: 1, unitPriceCents: 250 },
+      { name: 'Steak', quantity: 1, unitPriceCents: 3400 },
+    ]);
+  });
+
+  it('mixes with "Gelijk verdelen": items first, then the rest in equal parts', async () => {
+    const org = await seedOrg();
+    const { tab, id } = await tafel(org);
+    const steak = await payItems(org, tab.id, 3400, [{ lineId: id('steak'), quantity: 1 }]);
+    await confirmCharge(org, steak.body.chargeId);
+    const res = await split(org, tab.id, 2);
+    expect(res.body.split).toEqual({ parts: 2, paid: 0, nextCents: 575 }); // 1150 / 2
+  });
+});

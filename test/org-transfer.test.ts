@@ -36,7 +36,10 @@ async function richOrg() {
 
   const paid = await createTab(org, { label: 'Tafel 1', catalogId, lines: [{ variantId: pintje.variantId, quantity: 4 }, { variantId: steak.variantId, quantity: 2 }] });
   await api('POST', tabsPath(org.orgId, `/${paid.id}/lines/${paid.lines[1].id}/void`), { user: org.cashier, body: { ...DEVICE, reason: 'test', quantity: 1 } });
-  const charge = await chargeCash(org, paid.id, 1000 + 3400 + 200, { tipCents: 200 });
+  // Paid in two: 2 pintjes per item (charge_lines), then the rest with a tip.
+  const items = await chargeCash(org, paid.id, 500, { lines: [{ lineId: paid.lines[0].id, quantity: 2 }] });
+  await confirmCharge(org, items.body.chargeId);
+  const charge = await chargeCash(org, paid.id, 1000 + 3400 - 500 + 200, { tipCents: 200 });
   await confirmCharge(org, charge.body.chargeId);
   const open = await createTab(org, { label: 'Jan', catalogId, lines: [{ variantId: pintje.variantId, quantity: 1 }] });
   const pending = await chargeCash(org, open.id, 250);
@@ -183,6 +186,8 @@ describe('import', () => {
       order_id: 'orders',
       event_id: 'events',
       voids_line_id: 'order_lines',
+      charge_id: 'charges',
+      line_id: 'order_lines',
     };
     const source = await richOrg();
     const user = importer();
@@ -246,7 +251,7 @@ describe('import', () => {
       'SELECT status, provider_data, pos_terminal_id FROM charges WHERE org_id = ? ORDER BY created_at',
       orgId
     );
-    expect(charges.map((c) => c.status)).toEqual(['succeeded', 'failed']);
+    expect(charges.map((c) => c.status)).toEqual(['succeeded', 'succeeded', 'failed']);
     for (const c of charges) expect([c.provider_data, c.pos_terminal_id]).toEqual(['{}', null]);
   });
 

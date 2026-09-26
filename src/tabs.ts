@@ -102,6 +102,10 @@ const TOTAL_SQL = `(SELECT COALESCE(SUM(unit_price_cents * quantity), 0) FROM or
 const PAID_SQL = `(SELECT COALESCE(SUM(amount_cents - tip_cents), 0) FROM charges WHERE tab_id = tabs.id AND status = 'succeeded')`;
 const PENDING_SQL = `EXISTS (SELECT 1 FROM charges WHERE tab_id = tabs.id AND status = 'pending')`;
 
+// Units of an order line covered by a *succeeded* item payment (split per item).
+const PAID_UNITS_SQL = (lineRef: string) =>
+  `(SELECT COALESCE(SUM(cl.quantity), 0) FROM charge_lines cl JOIN charges c ON c.id = cl.charge_id WHERE cl.line_id = ${lineRef} AND c.status = 'succeeded')`;
+
 const SUMMARY_SELECT = `SELECT tabs.*, ${TOTAL_SQL} AS total_cents, ${PAID_SQL} AS paid_cents, ${PENDING_SQL} AS payment_pending, (SELECT name FROM events WHERE events.id = tabs.event_id) AS event_name FROM tabs`;
 
 // "Gelijk verdelen": the next part is what's open ÷ parts left, rounded
@@ -337,14 +341,19 @@ async function loadTabDetail(env: Env, orgId: string, tabId: string) {
   const tab = await loadTabSummary(env, orgId, tabId);
   if (!tab) return null;
 
-  const [orders, lines, charges] = await env.DB.batch([
+  const [orders, lines, charges, paidUnits] = await env.DB.batch([
     env.DB.prepare('SELECT id, source, device_id, device_name, user_name, user_email, submitted_at FROM orders WHERE tab_id = ? ORDER BY submitted_at').bind(tabId),
     env.DB.prepare('SELECT * FROM order_lines WHERE tab_id = ? ORDER BY created_at, rowid').bind(tabId),
     env.DB.prepare(
       'SELECT id, method, status, amount_cents, tip_cents, device_name, user_name, created_at, resolved_at FROM charges WHERE tab_id = ? ORDER BY created_at'
     ).bind(tabId),
+    env.DB.prepare(
+      `SELECT cl.line_id, SUM(cl.quantity) AS quantity FROM charge_lines cl JOIN charges c ON c.id = cl.charge_id
+       WHERE cl.tab_id = ? AND c.status = 'succeeded' GROUP BY cl.line_id`
+    ).bind(tabId),
   ]);
 
+  const paid = new Map(((paidUnits.results || []) as { line_id: string; quantity: number }[]).map((r) => [r.line_id, r.quantity]));
   const lineRows = (lines.results || []) as LineRow[];
   // How much of each original line is already voided — so the kassa can
   // show "2 × Pils (1 geannuleerd)" and knows what's still voidable.
@@ -363,7 +372,8 @@ async function loadTabDetail(env: Env, orgId: string, tabId: string) {
       userName: o.user_name,
       submittedAt: o.submitted_at,
     })),
-    lines: lineRows.map((l) => ({ ...rowToLine(l), voidedQuantity: voided.get(l.id) || 0 })),
+    // paidQuantity: units already paid by an item payment (split per item).
+    lines: lineRows.map((l) => ({ ...rowToLine(l), voidedQuantity: voided.get(l.id) || 0, paidQuantity: paid.get(l.id) || 0 })),
     payments: ((charges.results || []) as TabChargeRow[]).map((c) => ({
       id: c.id,
       method: c.method,
@@ -382,9 +392,19 @@ async function loadTabDetail(env: Env, orgId: string, tabId: string) {
 // and its lines net of voids (fully voided ones left out). Read by the
 // charge status endpoint, so a CFD on another device shows the order too —
 // not just the amount. No prices beyond what's on the kassa's own ticket.
-export async function customerOrder(env: Env, orgId: string, tabId: string) {
+export async function customerOrder(env: Env, orgId: string, tabId: string, chargeId?: string) {
   const tab = await loadTabSummary(env, orgId, tabId);
   if (!tab) return null;
+  // Per item: the units this payment covers — what the customer pays now.
+  const paying = chargeId
+    ? ((
+        await env.DB.prepare(
+          `SELECT l.name, cl.quantity, l.unit_price_cents FROM charge_lines cl JOIN order_lines l ON l.id = cl.line_id WHERE cl.charge_id = ? ORDER BY l.created_at, l.rowid`
+        )
+          .bind(chargeId)
+          .all<{ name: string; quantity: number; unit_price_cents: number }>()
+      ).results || []).map((r) => ({ name: r.name, quantity: r.quantity, unitPriceCents: r.unit_price_cents }))
+    : [];
   const { results } = await env.DB.prepare('SELECT id, name, unit_price_cents, quantity, voids_line_id FROM order_lines WHERE tab_id = ? ORDER BY created_at, rowid')
     .bind(tabId)
     .all<Pick<LineRow, 'id' | 'name' | 'unit_price_cents' | 'quantity' | 'voids_line_id'>>();
@@ -398,6 +418,7 @@ export async function customerOrder(env: Env, orgId: string, tabId: string) {
     split: tab.split ? { parts: tab.split.parts, paid: tab.split.paid } : null,
     // Paid on the tab so far (while a part is pending: before it).
     paidCents: tab.paidCents,
+    paying: paying.length ? paying : null,
     lines: rows
       .filter((l) => !l.voids_line_id)
       .map((l) => ({ name: l.name, quantity: l.quantity - (voided.get(l.id) || 0), unitPriceCents: l.unit_price_cents }))
@@ -560,7 +581,7 @@ async function voidLine(request: Request, env: Env, orgId: string, tabId: string
   // voiding the same line at once can't over-void it.
   const voidable = `EXISTS (SELECT 1 FROM tabs WHERE id = ? AND org_id = ? AND status = 'open')
     AND NOT EXISTS (SELECT 1 FROM charges WHERE tab_id = ? AND status = 'pending')
-    AND (SELECT l.quantity + COALESCE((SELECT SUM(v.quantity) FROM order_lines v WHERE v.voids_line_id = l.id), 0)
+    AND (SELECT l.quantity + COALESCE((SELECT SUM(v.quantity) FROM order_lines v WHERE v.voids_line_id = l.id), 0) - ${PAID_UNITS_SQL('l.id')}
          FROM order_lines l WHERE l.id = ?) >= ?
     AND (SELECT COALESCE(SUM(unit_price_cents * quantity), 0) FROM order_lines WHERE tab_id = ?)
         - ? * (SELECT unit_price_cents FROM order_lines WHERE id = ?)
@@ -584,6 +605,10 @@ async function voidLine(request: Request, env: Env, orgId: string, tabId: string
     // take the total below that: a refund, which doesn't exist yet.
     const tab = await loadTabSummary(env, orgId, tabId);
     if (tab && tab.status === 'open' && !tab.paymentPending && tab.paidCents > 0 && quantity <= original.remaining) {
+      const paidUnits = await env.DB.prepare(`SELECT ${PAID_UNITS_SQL('?')} AS n`).bind(lineId).first<{ n: number }>();
+      if ((paidUnits?.n || 0) > 0 && quantity > original.remaining - (paidUnits?.n || 0)) {
+        return json({ error: 'Deze stuks zijn al betaald — ze kunnen niet meer geannuleerd worden', tab }, 409);
+      }
       return json({ error: 'Er is al een deel betaald — annuleren zou meer terugbetalen dan er open staat', tab }, 409);
     }
     return refusalResponse(env, orgId, tabId);
@@ -670,6 +695,8 @@ export async function dispatchTabsRoute(request: Request, env: Env, pathname: st
 // --- Payment integration (called from payments/bancontact.ts, payments/sumup.ts, payments/charges.ts) ---
 
 export interface TabChargeContext {
+  // Per item: the units this payment covers (empty otherwise).
+  lines: { lineId: string; quantity: number }[];
   // The part this payment would be of the tab's "Gelijk verdelen" plan
   // (next unpaid, 1-based), 0 without a plan.
   splitPart: number;
@@ -699,7 +726,7 @@ export async function prepareTabCharge(
   // view (a line added elsewhere, a split changed) gets a 409 instead of
   // silently paying the wrong amount: the whole tab (default), the next
   // part of its split, or deliberately any part of it.
-  intent: { splitPart?: boolean; partial?: boolean } = {}
+  intent: { splitPart?: boolean; partial?: boolean; lines?: unknown } = {}
 ): Promise<{ ok: true; context: TabChargeContext } | { ok: false; response: Response }> {
   const refusal = await authorize(request, env, orgId);
   if (refusal) return { ok: false, response: refusal };
@@ -711,7 +738,19 @@ export async function prepareTabCharge(
   if (tab.outstandingCents < 1) return { ok: false, response: json({ error: 'Niets te betalen op deze rekening', tab }, 409) };
   // amount − tip is what pays off the tab.
   const paysCents = amountCents - tipCents;
-  const expected = intent.splitPart
+
+  // Per item: exactly these units of these lines, none paid yet.
+  let itemLines: { lineId: string; quantity: number }[] = [];
+  if (intent.lines !== undefined) {
+    const picked = await checkItemLines(env, tabId, intent.lines);
+    if (typeof picked === 'string') return { ok: false, response: json({ error: picked, tab }, picked.startsWith('lines') ? 400 : 409) };
+    if (picked.cents !== paysCents) return { ok: false, response: json({ error: 'Rekening is gewijzigd, herlaad en probeer opnieuw', tab }, 409) };
+    itemLines = picked.lines;
+  }
+
+  const expected = intent.lines !== undefined
+    ? paysCents >= 1 && paysCents <= tab.outstandingCents
+    : intent.splitPart
     ? paysCents === tab.split?.nextCents
     : intent.partial
       ? paysCents >= 1 && paysCents <= tab.outstandingCents
@@ -743,8 +782,37 @@ export async function prepareTabCharge(
     context: {
       ...(settlesTab ? { items, description } : { items: {}, description: `${description} (deel)` }),
       splitPart: tab.split ? tab.split.paid + 1 : 0,
+      lines: itemLines,
     },
   };
+}
+
+// Validates an item selection [{ lineId, quantity }] against the tab: each
+// an original (non-void) line of this tab, quantity ≥ 1 and at most its
+// units not voided and not paid yet. Returns the lines and what they cost,
+// or an error (a 400 for malformed input, a 409 — stale view — otherwise).
+async function checkItemLines(env: Env, tabId: string, raw: unknown): Promise<{ lines: { lineId: string; quantity: number }[]; cents: number } | string> {
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > 200) return 'lines must be a non-empty array of { lineId, quantity }';
+  const wanted = new Map<string, number>();
+  for (const item of raw as { lineId?: unknown; quantity?: unknown }[]) {
+    if (typeof item?.lineId !== 'string' || !Number.isInteger(item.quantity) || (item.quantity as number) < 1) return 'lines must be a non-empty array of { lineId, quantity }';
+    wanted.set(item.lineId, (wanted.get(item.lineId) || 0) + (item.quantity as number));
+  }
+  const { results } = await env.DB.prepare(
+    `SELECT l.id, l.unit_price_cents,
+       l.quantity + COALESCE((SELECT SUM(v.quantity) FROM order_lines v WHERE v.voids_line_id = l.id), 0) - ${PAID_UNITS_SQL('l.id')} AS payable
+     FROM order_lines l WHERE l.tab_id = ? AND l.voids_line_id IS NULL`
+  )
+    .bind(tabId)
+    .all<{ id: string; unit_price_cents: number; payable: number }>();
+  const byId = new Map((results || []).map((r) => [r.id, r]));
+  let cents = 0;
+  for (const [lineId, quantity] of wanted) {
+    const line = byId.get(lineId);
+    if (!line || quantity > line.payable) return 'Rekening is gewijzigd, herlaad en probeer opnieuw';
+    cents += quantity * line.unit_price_cents;
+  }
+  return { lines: [...wanted].map(([lineId, quantity]) => ({ lineId, quantity })), cents };
 }
 
 export function isPendingTabChargeConflict(err: unknown): boolean {
