@@ -245,7 +245,9 @@ CREATE TABLE IF NOT EXISTS charges (
   tab_id TEXT REFERENCES tabs(id),
   -- Part of amount_cents (the customer pays it in the same payment), never
   -- counted toward the tab's paid amount — see tabs.ts PAID_SQL.
-  tip_cents INTEGER NOT NULL DEFAULT 0
+  tip_cents INTEGER NOT NULL DEFAULT 0,
+  -- Which part of the tab's "Gelijk verdelen" plan this pays (1-based; 0 = not a part) (0018).
+  split_part INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_charges_org ON charges(org_id);
@@ -282,7 +284,10 @@ CREATE TABLE IF NOT EXISTS tabs (
   opened_at TEXT NOT NULL,
   closed_at TEXT,
   receipt_number INTEGER,
-  cancel_reason TEXT
+  cancel_reason TEXT,
+  -- "Gelijk verdelen": what was open divided over split_parts; split_paid of them paid (0018).
+  split_parts INTEGER,
+  split_paid INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tabs_org_number ON tabs(org_id, number);
@@ -473,3 +478,4 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0014_order_catalog.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0015_tips.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0016_prep_stations.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0017_org_import.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0018_split_payments.sql');

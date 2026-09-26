@@ -90,7 +90,7 @@ export const EXPORT_TABLES: TableSpec[] = [
     table: 'tabs',
     columns: [
       'id', 'number', 'label', 'status', 'slot_id', 'event_id', 'opened_device_id', 'opened_device_name', 'opened_by_name', 'opened_by_email',
-      'opened_at', 'closed_at', 'receipt_number', 'cancel_reason',
+      'opened_at', 'closed_at', 'receipt_number', 'cancel_reason', 'split_parts', 'split_paid',
     ],
     excluded: ORG,
     remap: ['id', 'event_id'],
@@ -118,7 +118,7 @@ export const EXPORT_TABLES: TableSpec[] = [
     table: 'charges',
     columns: [
       'id', 'method', 'status', 'provider_status', 'amount_cents', 'description', 'items', 'slot_id', 'device_id', 'device_name', 'user_name',
-      'user_email', 'created_at', 'resolved_at', 'transaction_code', 'error_message', 'provider_ref', 'expires_at', 'tab_id', 'tip_cents',
+      'user_email', 'created_at', 'resolved_at', 'transaction_code', 'error_message', 'provider_ref', 'expires_at', 'tab_id', 'tip_cents', 'split_part',
     ],
     excluded: {
       ...ORG,

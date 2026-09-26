@@ -34,11 +34,12 @@ describe('tips on tab payments', () => {
     expect(status.body.tipCents).toBe(250);
   });
 
-  it("refuses an amount that doesn't equal outstanding + tip (409)", async () => {
+  it('refuses an amount that pays more than outstanding, or only a tip (409)', async () => {
     const org = await seedOrg();
     const tab = await openTab(org);
-    expect((await chargeCash(org, tab.id, 1000, { tipCents: 250 })).status).toBe(409);
+    expect((await chargeCash(org, tab.id, 1300, { tipCents: 250 })).status).toBe(409);
     expect((await chargeCash(org, tab.id, 1250)).status).toBe(409);
+    expect((await chargeCash(org, tab.id, 250, { tipCents: 250 })).status).toBe(409);
   });
 
   it('refuses an invalid tip (400)', async () => {

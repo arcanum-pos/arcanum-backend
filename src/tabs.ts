@@ -38,6 +38,8 @@ interface TabRow {
   slot_id: string | null;
   event_id: string | null;
   event_name?: string | null;
+  split_parts?: number | null;
+  split_paid?: number;
   opened_device_id: string | null;
   opened_device_name: string | null;
   opened_by_name: string | null;
@@ -102,6 +104,20 @@ const PENDING_SQL = `EXISTS (SELECT 1 FROM charges WHERE tab_id = tabs.id AND st
 
 const SUMMARY_SELECT = `SELECT tabs.*, ${TOTAL_SQL} AS total_cents, ${PAID_SQL} AS paid_cents, ${PENDING_SQL} AS payment_pending, (SELECT name FROM events WHERE events.id = tabs.event_id) AS event_name FROM tabs`;
 
+// "Gelijk verdelen": the next part is what's open ÷ parts left, rounded
+// down — the last part is whatever remains, so rounding never leaves a cent
+// open and a line added halfway spreads over the remaining parts.
+function splitState(row: TabSummaryRow) {
+  if (!row.split_parts) return null;
+  const left = Math.max(1, row.split_parts - (row.split_paid || 0));
+  const outstanding = row.total_cents - row.paid_cents;
+  return {
+    parts: row.split_parts,
+    paid: Math.min(row.split_paid || 0, row.split_parts),
+    nextCents: left === 1 ? outstanding : Math.floor(outstanding / left),
+  };
+}
+
 function rowToTabSummary(row: TabSummaryRow) {
   return {
     id: row.id,
@@ -122,6 +138,7 @@ function rowToTabSummary(row: TabSummaryRow) {
     paidCents: row.paid_cents,
     outstandingCents: row.total_cents - row.paid_cents,
     paymentPending: !!row.payment_pending,
+    split: splitState(row),
   };
 }
 
@@ -378,6 +395,7 @@ export async function customerOrder(env: Env, orgId: string, tabId: string) {
     label: tab.label,
     number: tab.number,
     eventName: tab.eventName,
+    split: tab.split ? { parts: tab.split.parts, paid: tab.split.paid } : null,
     lines: rows
       .filter((l) => !l.voids_line_id)
       .map((l) => ({ name: l.name, quantity: l.quantity - (voided.get(l.id) || 0), unitPriceCents: l.unit_price_cents }))
@@ -541,13 +559,16 @@ async function voidLine(request: Request, env: Env, orgId: string, tabId: string
   const voidable = `EXISTS (SELECT 1 FROM tabs WHERE id = ? AND org_id = ? AND status = 'open')
     AND NOT EXISTS (SELECT 1 FROM charges WHERE tab_id = ? AND status = 'pending')
     AND (SELECT l.quantity + COALESCE((SELECT SUM(v.quantity) FROM order_lines v WHERE v.voids_line_id = l.id), 0)
-         FROM order_lines l WHERE l.id = ?) >= ?`;
+         FROM order_lines l WHERE l.id = ?) >= ?
+    AND (SELECT COALESCE(SUM(unit_price_cents * quantity), 0) FROM order_lines WHERE tab_id = ?)
+        - ? * (SELECT unit_price_cents FROM order_lines WHERE id = ?)
+        >= (SELECT COALESCE(SUM(amount_cents - tip_cents), 0) FROM charges WHERE tab_id = ? AND status = 'succeeded')`;
 
   const [orderResult] = await env.DB.batch([
     env.DB.prepare(
       `INSERT INTO orders (id, org_id, tab_id, source, device_id, device_name, user_name, user_email, submitted_at)
        SELECT ?, ?, ?, 'kassa', ?, ?, ?, ?, ? WHERE ${voidable}`
-    ).bind(orderId, orgId, tabId, who.deviceId, who.deviceName, who.userName, who.userEmail, now, tabId, orgId, tabId, lineId, quantity),
+    ).bind(orderId, orgId, tabId, who.deviceId, who.deviceName, who.userName, who.userEmail, now, tabId, orgId, tabId, lineId, quantity, tabId, quantity, lineId, tabId),
     env.DB.prepare(
       `INSERT INTO order_lines (id, org_id, tab_id, order_id, item_code, variant_id, name, unit_price_cents, quantity, category, vat_rate_bp,
          prep_station_id, prep_station_name, voids_line_id, void_reason, created_at)
@@ -556,8 +577,39 @@ async function voidLine(request: Request, env: Env, orgId: string, tabId: string
     ).bind(crypto.randomUUID(), orderId, -quantity, reason, now, lineId, orderId),
   ]);
 
-  if ((orderResult.meta.changes || 0) === 0) return refusalResponse(env, orgId, tabId);
+  if ((orderResult.meta.changes || 0) === 0) {
+    // Part of the tab is already paid (split payments) and this void would
+    // take the total below that: a refund, which doesn't exist yet.
+    const tab = await loadTabSummary(env, orgId, tabId);
+    if (tab && tab.status === 'open' && !tab.paymentPending && tab.paidCents > 0 && quantity <= original.remaining) {
+      return json({ error: 'Er is al een deel betaald — annuleren zou meer terugbetalen dan er open staat', tab }, 409);
+    }
+    return refusalResponse(env, orgId, tabId);
+  }
   return json(await loadTabDetail(env, orgId, tabId), 201);
+}
+
+// POST /organizations/:orgId/tabs/:tabId/split { parts: 2..50 | null } —
+// "Gelijk verdelen": split what's open now over `parts` payments (null
+// stops splitting). Starting again restarts the count from what's open
+// then. Only while open with something left and no payment in flight.
+async function setSplit(request: Request, env: Env, orgId: string, tabId: string): Promise<Response> {
+  const body = (await request.json().catch(() => ({}))) as { parts?: unknown };
+  const parts = body.parts === null ? null : Number(body.parts);
+  if (parts !== null && (!Number.isInteger(parts) || parts < 2 || parts > 50)) return json({ error: 'parts must be an integer 2–50, or null' }, 400);
+
+  const result = await env.DB.prepare(
+    `UPDATE tabs SET split_parts = ?, split_paid = 0
+     WHERE id = ? AND org_id = ? AND status = 'open' AND NOT ${PENDING_SQL} AND (? IS NULL OR ${TOTAL_SQL} - ${PAID_SQL} >= ?)`
+  )
+    .bind(parts, tabId, orgId, parts, parts ?? 0)
+    .run();
+  if ((result.meta.changes || 0) === 0) {
+    const tab = await loadTabSummary(env, orgId, tabId);
+    if (tab && tab.status === 'open' && !tab.paymentPending) return json({ error: 'Te weinig open om zo te verdelen', tab }, 409);
+    return refusalResponse(env, orgId, tabId);
+  }
+  return json(await loadTabDetail(env, orgId, tabId));
 }
 
 // POST /organizations/:orgId/tabs/:tabId/cancel { reason? } — only for a
@@ -588,7 +640,7 @@ async function cancelTab(request: Request, env: Env, orgId: string, tabId: strin
 // Handles /organizations/:orgId/tabs[/...]. Returns null for anything it
 // doesn't recognize.
 export async function dispatchTabsRoute(request: Request, env: Env, pathname: string): Promise<Response | null> {
-  const match = pathname.match(/^\/organizations\/([^/]+)\/tabs(?:\/([^/]+))?(?:\/(orders|cancel|lines\/([^/]+)\/void))?$/);
+  const match = pathname.match(/^\/organizations\/([^/]+)\/tabs(?:\/([^/]+))?(?:\/(orders|cancel|split|lines\/([^/]+)\/void))?$/);
   if (!match) return null;
   const [, orgId, tabId, action, lineId] = match;
 
@@ -608,6 +660,7 @@ export async function dispatchTabsRoute(request: Request, env: Env, pathname: st
   if (request.method !== 'POST') return null;
   if (action === 'orders') return addOrder(request, env, orgId, tabId);
   if (action === 'cancel') return cancelTab(request, env, orgId, tabId);
+  if (action === 'split') return setSplit(request, env, orgId, tabId);
   if (lineId) return voidLine(request, env, orgId, tabId, lineId);
   return null;
 }
@@ -615,6 +668,9 @@ export async function dispatchTabsRoute(request: Request, env: Env, pathname: st
 // --- Payment integration (called from payments/bancontact.ts, payments/sumup.ts, payments/charges.ts) ---
 
 export interface TabChargeContext {
+  // The part this payment would be of the tab's "Gelijk verdelen" plan
+  // (next unpaid, 1-based), 0 without a plan.
+  splitPart: number;
   // The legacy `items` JSON (bon/fietstocht/.../fooi) derived from the tab's
   // net lines — what transactions.items and every report built on it still
   // expect until reports move to order_lines. Derived here, not taken from
@@ -624,8 +680,8 @@ export interface TabChargeContext {
 }
 
 // Pre-check before creating a charge for a tab: caller is a member, tab is
-// open, nothing else is in flight for it, and the amount is exactly what's
-// outstanding. The pending-charge part is re-enforced atomically by
+// open, nothing else is in flight for it, and the amount (minus tip) is
+// at most what's outstanding — all of it, or a part (split payments). The pending-charge part is re-enforced atomically by
 // idx_charges_one_pending_per_tab at insert time — this check just avoids
 // creating a provider-side payment (Bancontact) that's doomed to lose that
 // race in the common case.
@@ -645,9 +701,13 @@ export async function prepareTabCharge(
   if (tab.status !== 'open') return { ok: false, response: json({ error: 'Rekening is niet meer open', tab }, 409) };
   if (tab.paymentPending) return { ok: false, response: json({ error: 'Er loopt al een betaling voor deze rekening', tab }, 409) };
   if (tab.outstandingCents < 1) return { ok: false, response: json({ error: 'Niets te betalen op deze rekening', tab }, 409) };
-  if (amountCents !== tab.outstandingCents + tipCents) {
+  // Any part of what's open (split payments), never more: amount − tip is
+  // what pays off the tab.
+  const paysCents = amountCents - tipCents;
+  if (paysCents < 1 || paysCents > tab.outstandingCents) {
     return { ok: false, response: json({ error: 'Rekening is gewijzigd, herlaad en probeer opnieuw', tab }, 409) };
   }
+  const settlesTab = paysCents === tab.outstandingCents;
 
   const { results } = await env.DB.prepare(
     `SELECT item_code, SUM(quantity) AS quantity, SUM(unit_price_cents * quantity) AS amount_cents
@@ -663,9 +723,15 @@ export async function prepareTabCharge(
     if (value > 0) items[row.item_code] = value;
   }
 
+  const description = tab.label ? `Rekening #${tab.number} ${tab.label}` : `Rekening #${tab.number}`;
   return {
     ok: true,
-    context: { items, description: tab.label ? `Rekening #${tab.number} ${tab.label}` : `Rekening #${tab.number}` },
+    // The legacy items JSON only on the payment that settles the tab — a
+    // partial payment carrying all items would count them twice.
+    context: {
+      ...(settlesTab ? { items, description } : { items: {}, description: `${description} (deel)` }),
+      splitPart: tab.split ? tab.split.paid + 1 : 0,
+    },
   };
 }
 
@@ -679,12 +745,15 @@ export function isPendingTabChargeConflict(err: unknown): boolean {
 // no receipt number is ever skipped. The paid >= total check lives inside
 // the SQL too, not just in a read beforehand. Idempotent — a second call on
 // an already-closed tab changes nothing.
-export async function settleTab(env: Env, tabId: string): Promise<void> {
+export async function settleTab(env: Env, tabId: string, splitPart = false): Promise<void> {
   const closable = `status = 'open' AND ${PAID_SQL} >= ${TOTAL_SQL}`;
   const tab = await env.DB.prepare('SELECT org_id FROM tabs WHERE id = ?').bind(tabId).first<{ org_id: string }>();
   if (!tab) return;
 
   await env.DB.batch([
+    // One more part of a "Gelijk verdelen" plan paid (the charge is only
+    // resolved once — resolveCharge's pending → succeeded — so this can't double count).
+    ...(splitPart ? [env.DB.prepare(`UPDATE tabs SET split_paid = split_paid + 1 WHERE id = ? AND split_parts IS NOT NULL`).bind(tabId)] : []),
     env.DB.prepare(`INSERT OR IGNORE INTO org_counters (org_id, name, value) VALUES (?, 'receipt', 0)`).bind(tab.org_id),
     env.DB.prepare(
       `UPDATE org_counters SET value = value + 1

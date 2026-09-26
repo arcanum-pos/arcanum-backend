@@ -71,10 +71,10 @@ describe('bancontact tab payments', () => {
     expect(charge).toEqual({ tip_cents: 200, amount_cents: 1350 });
   });
 
-  it('refuses a tip that does not add up before calling Bancontact (409)', async () => {
+  it('refuses paying more than what is open (tip aside) before calling Bancontact (409)', async () => {
     const org = await orgWithBancontact();
     const tab = await openTab(org);
-    const res = await api('POST', '/payments', { user: org.cashier, body: { orgId: org.orgId, tabId: tab.id, amount: 1150, tipCents: 200, ...DEVICE } });
+    const res = await api('POST', '/payments', { user: org.cashier, body: { orgId: org.orgId, tabId: tab.id, amount: 1400, tipCents: 200, ...DEVICE } });
     expect(res.status).toBe(409);
     expect(bancontactRequests).toHaveLength(0);
   });
@@ -82,8 +82,8 @@ describe('bancontact tab payments', () => {
   it('refuses a wrong amount before calling Bancontact at all', async () => {
     const org = await orgWithBancontact();
     const tab = await openTab(org);
-    const res = await payBancontact(org, tab.id, 999);
-    expect(res.status).toBe(409);
+    expect((await payBancontact(org, tab.id, 1151)).status).toBe(409); // more than open
+    expect((await api('POST', '/payments', { user: org.cashier, body: { orgId: org.orgId, tabId: tab.id, amount: 200, tipCents: 200, ...DEVICE } })).status).toBe(409); // only a tip
     expect(bancontactRequests).toHaveLength(0);
   });
 

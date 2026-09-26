@@ -12,10 +12,11 @@ async function openTab(org: TestOrg, lines = [line('bon', 'Bonnen', 100, 10), li
 }
 
 describe('tab payments: charge rules', () => {
-  it('refuses a charge for a different amount than outstanding (409)', async () => {
+  it('refuses a charge for more than outstanding, or for nothing (409)', async () => {
     const org = await seedOrg();
     const tab = await openTab(org);
-    expect((await chargeCash(org, tab.id, 999)).status).toBe(409);
+    expect((await chargeCash(org, tab.id, 1151)).status).toBe(409);
+    expect((await chargeCash(org, tab.id, 0)).status).not.toBe(201);
   });
 
   it("refuses a charge for another org's tab", async () => {

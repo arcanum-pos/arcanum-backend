@@ -38,6 +38,8 @@ export interface ChargeRecord {
   expiresAt: string | null;
   tabId: string | null;
   tipCents: number;
+  // Which part of the tab's "Gelijk verdelen" plan this pays (1-based; 0 = not a part).
+  splitPart: number;
 }
 
 interface ChargeRow {
@@ -64,6 +66,7 @@ interface ChargeRow {
   expires_at: string | null;
   tab_id: string | null;
   tip_cents: number;
+  split_part?: number;
 }
 
 function rowToCharge(row: ChargeRow): ChargeRecord {
@@ -91,6 +94,7 @@ function rowToCharge(row: ChargeRow): ChargeRecord {
     expiresAt: row.expires_at,
     tabId: row.tab_id,
     tipCents: row.tip_cents || 0,
+    splitPart: row.split_part || 0,
   };
 }
 
@@ -120,6 +124,9 @@ export interface CreateChargeFields {
   tabId?: string | null;
   // Part of amountCents — see parseTipCents.
   tipCents?: number;
+  // Which part of the tab's "Gelijk verdelen" plan this pays — from
+  // prepareTabCharge, never the client (counts toward split_paid once it succeeds).
+  splitPart?: number;
 }
 
 // A tip (fooi) on a payment: an integer 0..100000 cents, part of the charged
@@ -140,8 +147,8 @@ export async function createCharge(env: Env, fields: CreateChargeFields): Promis
 
   await env.DB.prepare(
     `INSERT INTO charges
-      (id, org_id, method, status, provider_status, amount_cents, description, pos_terminal_id, items, slot_id, device_id, device_name, user_name, user_email, created_at, provider_ref, provider_data, expires_at, tab_id, tip_cents)
-     VALUES (?, ?, ?, 'pending', NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      (id, org_id, method, status, provider_status, amount_cents, description, pos_terminal_id, items, slot_id, device_id, device_name, user_name, user_email, created_at, provider_ref, provider_data, expires_at, tab_id, tip_cents, split_part)
+     VALUES (?, ?, ?, 'pending', NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       id,
@@ -161,7 +168,8 @@ export async function createCharge(env: Env, fields: CreateChargeFields): Promis
       JSON.stringify(fields.providerData || {}),
       fields.expiresAt || null,
       fields.tabId || null,
-      fields.tipCents || 0
+      fields.tipCents || 0,
+      fields.tabId && fields.splitPart ? fields.splitPart : 0
     )
     .run();
 
@@ -254,7 +262,7 @@ export async function resolveCharge(env: Env, id: string, outcome: ResolveOutcom
     }
     if (record.status === 'succeeded') {
       await recordChargeTransaction(env, record);
-      if (record.tabId) await settleTab(env, record.tabId);
+      if (record.tabId) await settleTab(env, record.tabId, record.splitPart > 0);
     }
   }
 
