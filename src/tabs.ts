@@ -396,6 +396,8 @@ export async function customerOrder(env: Env, orgId: string, tabId: string) {
     number: tab.number,
     eventName: tab.eventName,
     split: tab.split ? { parts: tab.split.parts, paid: tab.split.paid } : null,
+    // Paid on the tab so far (while a part is pending: before it).
+    paidCents: tab.paidCents,
     lines: rows
       .filter((l) => !l.voids_line_id)
       .map((l) => ({ name: l.name, quantity: l.quantity - (voided.get(l.id) || 0), unitPriceCents: l.unit_price_cents }))
