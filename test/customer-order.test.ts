@@ -20,6 +20,7 @@ describe('customer order on the charge status', () => {
     expect(status.body.order).toEqual({
       label: 'Tafel 4',
       number: tab.number,
+      eventName: null,
       lines: [
         { name: 'Bonnen', quantity: 10, unitPriceCents: 100 },
         { name: 'Fietstocht', quantity: 1, unitPriceCents: 800 },

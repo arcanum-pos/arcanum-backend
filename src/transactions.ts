@@ -23,9 +23,8 @@ interface TransactionFields {
   userName?: string | null;
   userEmail?: string | null;
   orgId: string;
-  // Nothing sets this yet — needs the kassa to know which event is active,
-  // a later step. Accepted here already so that step is just "start
-  // sending eventId", not another migration.
+  // Explicit, or else the event of the tab it was paid on (set when the
+  // kassa opened the tab — see tabs.ts createTab).
   eventId?: string | null;
   tabId?: string | null;
   tipCents?: number;
@@ -39,7 +38,7 @@ async function insertTransaction(env: Env, fields: TransactionFields): Promise<{
   await env.DB.prepare(
     `INSERT INTO transactions
       (id, amount_cents, description, method, items, slot_id, device_id, device_name, user_name, user_email, org_id, event_id, tab_id, tip_cents, completed_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, (SELECT event_id FROM tabs WHERE id = ?)), ?, ?, ?)`
   )
     .bind(
       id,
@@ -54,6 +53,7 @@ async function insertTransaction(env: Env, fields: TransactionFields): Promise<{
       fields.userEmail ? String(fields.userEmail) : null,
       fields.orgId,
       fields.eventId ? String(fields.eventId) : null,
+      fields.tabId ? String(fields.tabId) : null,
       fields.tabId ? String(fields.tabId) : null,
       Number.isInteger(fields.tipCents) && (fields.tipCents as number) > 0 ? fields.tipCents : 0,
       completedAt

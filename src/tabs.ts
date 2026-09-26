@@ -37,6 +37,7 @@ interface TabRow {
   status: TabStatus;
   slot_id: string | null;
   event_id: string | null;
+  event_name?: string | null;
   opened_device_id: string | null;
   opened_device_name: string | null;
   opened_by_name: string | null;
@@ -99,7 +100,7 @@ const TOTAL_SQL = `(SELECT COALESCE(SUM(unit_price_cents * quantity), 0) FROM or
 const PAID_SQL = `(SELECT COALESCE(SUM(amount_cents - tip_cents), 0) FROM charges WHERE tab_id = tabs.id AND status = 'succeeded')`;
 const PENDING_SQL = `EXISTS (SELECT 1 FROM charges WHERE tab_id = tabs.id AND status = 'pending')`;
 
-const SUMMARY_SELECT = `SELECT tabs.*, ${TOTAL_SQL} AS total_cents, ${PAID_SQL} AS paid_cents, ${PENDING_SQL} AS payment_pending FROM tabs`;
+const SUMMARY_SELECT = `SELECT tabs.*, ${TOTAL_SQL} AS total_cents, ${PAID_SQL} AS paid_cents, ${PENDING_SQL} AS payment_pending, (SELECT name FROM events WHERE events.id = tabs.event_id) AS event_name FROM tabs`;
 
 function rowToTabSummary(row: TabSummaryRow) {
   return {
@@ -109,6 +110,7 @@ function rowToTabSummary(row: TabSummaryRow) {
     status: row.status,
     slotId: row.slot_id,
     eventId: row.event_id,
+    eventName: row.event_name ?? null,
     openedDeviceId: row.opened_device_id,
     openedDeviceName: row.opened_device_name,
     openedByName: row.opened_by_name,
@@ -375,6 +377,7 @@ export async function customerOrder(env: Env, orgId: string, tabId: string) {
   return {
     label: tab.label,
     number: tab.number,
+    eventName: tab.eventName,
     lines: rows
       .filter((l) => !l.voids_line_id)
       .map((l) => ({ name: l.name, quantity: l.quantity - (voided.get(l.id) || 0), unitPriceCents: l.unit_price_cents }))
@@ -402,12 +405,23 @@ async function listTabs(request: Request, env: Env, orgId: string): Promise<Resp
   return json((results || []).map(rowToTabSummary));
 }
 
-// POST /organizations/:orgId/tabs { label?, slotId?, deviceId?, deviceName?, lines?, catalogId? }
+// POST /organizations/:orgId/tabs { label?, slotId?, eventId?, deviceId?, deviceName?, lines?, catalogId? }
 // Optional `lines` submits a first order in the same batch — the Toog
 // quick sale (open + order + pay) is then two round trips, not three.
+// Optional `eventId` tags the tab (and so every sale paid on it) with one
+// of this org's events — a reporting tag only (DOMAIN_MODEL.md decision 1),
+// set once when the tab opens.
 async function createTab(request: Request, env: Env, orgId: string): Promise<Response> {
   const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
   const label = typeof body.label === 'string' ? body.label.trim().slice(0, 60) : '';
+
+  let eventId: string | null = null;
+  if (body.eventId !== undefined && body.eventId !== null) {
+    if (typeof body.eventId !== 'string') return json({ error: 'eventId must be a string or null' }, 400);
+    const event = await env.DB.prepare('SELECT id FROM events WHERE id = ? AND org_id = ?').bind(body.eventId, orgId).first<{ id: string }>();
+    if (!event) return json({ error: 'Onbekend evenement — kies het opnieuw in de instellingen van de kassa' }, 400);
+    eventId = event.id;
+  }
 
   let lines: LineInput[] = [];
   let catalogId: string | null = null;
@@ -425,13 +439,14 @@ async function createTab(request: Request, env: Env, orgId: string): Promise<Res
     env.DB.prepare(`INSERT OR IGNORE INTO org_counters (org_id, name, value) VALUES (?, 'tab', 0)`).bind(orgId),
     env.DB.prepare(`UPDATE org_counters SET value = value + 1 WHERE org_id = ? AND name = 'tab'`).bind(orgId),
     env.DB.prepare(
-      `INSERT INTO tabs (id, org_id, number, label, status, slot_id, opened_device_id, opened_device_name, opened_by_name, opened_by_email, opened_at)
-       SELECT ?, ?, value, ?, 'open', ?, ?, ?, ?, ?, ? FROM org_counters WHERE org_id = ? AND name = 'tab'`
+      `INSERT INTO tabs (id, org_id, number, label, status, slot_id, event_id, opened_device_id, opened_device_name, opened_by_name, opened_by_email, opened_at)
+       SELECT ?, ?, value, ?, 'open', ?, ?, ?, ?, ?, ?, ? FROM org_counters WHERE org_id = ? AND name = 'tab'`
     ).bind(
       tabId,
       orgId,
       label,
       body.slotId ? String(body.slotId).slice(0, 100) : null,
+      eventId,
       who.deviceId,
       who.deviceName,
       who.userName,
