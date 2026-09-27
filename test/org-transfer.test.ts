@@ -272,12 +272,14 @@ describe('import', () => {
     expect((await rows('SELECT id FROM order_lines WHERE org_id = ?', orgId)).length).toBe(file.tables.order_lines.length);
   });
 
+  // One row per request: hundreds of round trips — ~1.3 s locally, several
+  // times that on a CI runner, so past vitest's 5 s default there.
   it('works in small chunks too', async () => {
     const source = await richOrg();
     const user = importer();
     const { finish } = await importFile((await exportOf(source.org)).body, user, 1);
     expect(finish.body.ok).toBe(true);
-  });
+  }, 30_000);
 
   it('reports missing rows at finish and keeps the org in import mode', async () => {
     const source = await richOrg();
@@ -305,6 +307,7 @@ describe('import', () => {
     }
   });
 
+  // Many requests (every refusal is its own round trip) — slow on a CI runner.
   it('refuses bad input and out-of-order calls', async () => {
     const source = await richOrg();
     const file = (await exportOf(source.org)).body;
@@ -323,7 +326,7 @@ describe('import', () => {
     expect((await api('POST', `/organizations/${start.body.orgId}/import/chunk`, { user: other, body: { table: 'categories', rows: [] } })).status).toBe(403);
     expect((await api('POST', `/organizations/${start.body.orgId}/import/chunk`, { user, body: { table: 'organizations', rows: [] } })).status).toBe(400);
     expect((await api('POST', `/organizations/${start.body.orgId}/import/chunk`, { user, body: { table: 'categories', rows: 'x' } })).status).toBe(400);
-  });
+  }, 30_000);
 
   it('can import into the same installation while the source org still exists', async () => {
     const source = await richOrg();
