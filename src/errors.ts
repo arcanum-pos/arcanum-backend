@@ -96,7 +96,7 @@ export const ERROR_TEXTS = {
 
   // --- Custom domain, identity provider, mail ---
   invalid_domain: 'Vul een geldige domeinnaam in (bv. pos.mijnorganisatie.be)',
-  domain_requires_idp: 'Configureer eerst een eigen identity provider voor deze organisatie (zie Authentication) voordat je een aangepast domein instelt.',
+  domain_requires_idp: 'Configureer eerst een eigen identity provider voor deze organisatie (zie Aanmelding) voordat je een aangepast domein instelt.',
   domain_in_use: 'Dit domein is al in gebruik door een andere organisatie',
   // Both: `error` is Cloudflare's own (English) message when it gave one —
   // then also in params.detail — else this text.
