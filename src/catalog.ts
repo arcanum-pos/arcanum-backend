@@ -16,6 +16,7 @@
 // any member (a kassa/cashier needs them); every write is admin-only.
 import type { Env } from './env';
 import { json } from './http';
+import { errorJson } from './errors';
 import { extractCaller, requireOrgRole } from './organizations/auth';
 import { jsonRowsStatement, present } from './sql-json';
 
@@ -234,7 +235,7 @@ async function createCategory(request: Request, env: Env, orgId: string) {
 async function updateCategory(request: Request, env: Env, orgId: string, categoryId: string) {
   const body = await readBody(request);
   const existing = await env.DB.prepare('SELECT id, name, position FROM categories WHERE id = ? AND org_id = ?').bind(categoryId, orgId).first<CategoryRow>();
-  if (!existing) return json({ error: 'Categorie niet gevonden' }, 404);
+  if (!existing) return errorJson('category_not_found', 404);
 
   let name = existing.name;
   if (body.name !== undefined) {
@@ -257,7 +258,7 @@ async function deleteCategory(env: Env, orgId: string, categoryId: string) {
     .run();
   if ((result.meta.changes || 0) > 0) return json({ ok: true });
   const exists = await env.DB.prepare('SELECT 1 FROM categories WHERE id = ? AND org_id = ?').bind(categoryId, orgId).first();
-  return exists ? json({ error: 'Deze categorie wordt nog gebruikt door producten' }, 409) : json({ error: 'Categorie niet gevonden' }, 404);
+  return exists ? errorJson('category_in_use', 409) : errorJson('category_not_found', 404);
 }
 
 // --- Prep stations ---
@@ -285,7 +286,7 @@ async function createStation(request: Request, env: Env, orgId: string) {
       .bind(id, orgId, name.value, orgId, now())
       .run();
   } catch (err) {
-    if (isUniqueViolation(err, STATION_NAME_CONFLICT)) return json({ error: 'Er bestaat al een station met die naam' }, 409);
+    if (isUniqueViolation(err, STATION_NAME_CONFLICT)) return errorJson('station_name_taken', 409);
     throw err;
   }
   const row = await env.DB.prepare('SELECT id, name, position FROM prep_stations WHERE id = ?').bind(id).first<CategoryRow>();
@@ -295,7 +296,7 @@ async function createStation(request: Request, env: Env, orgId: string) {
 async function updateStation(request: Request, env: Env, orgId: string, stationId: string) {
   const body = await readBody(request);
   const existing = await env.DB.prepare('SELECT id, name, position FROM prep_stations WHERE id = ? AND org_id = ?').bind(stationId, orgId).first<CategoryRow>();
-  if (!existing) return json({ error: 'Station niet gevonden' }, 404);
+  if (!existing) return errorJson('station_not_found', 404);
 
   let name = existing.name;
   if (body.name !== undefined) {
@@ -311,7 +312,7 @@ async function updateStation(request: Request, env: Env, orgId: string, stationI
   try {
     await env.DB.prepare('UPDATE prep_stations SET name = ?, position = ? WHERE id = ?').bind(name, position, stationId).run();
   } catch (err) {
-    if (isUniqueViolation(err, STATION_NAME_CONFLICT)) return json({ error: 'Er bestaat al een station met die naam' }, 409);
+    if (isUniqueViolation(err, STATION_NAME_CONFLICT)) return errorJson('station_name_taken', 409);
     throw err;
   }
   return json(toCategory({ id: stationId, name, position }));
@@ -323,7 +324,7 @@ async function deleteStation(env: Env, orgId: string, stationId: string) {
     .run();
   if ((result.meta.changes || 0) > 0) return json({ ok: true });
   const exists = await env.DB.prepare('SELECT 1 FROM prep_stations WHERE id = ? AND org_id = ?').bind(stationId, orgId).first();
-  return exists ? json({ error: 'Dit station wordt nog gebruikt door producten' }, 409) : json({ error: 'Station niet gevonden' }, 404);
+  return exists ? errorJson('station_in_use', 409) : errorJson('station_not_found', 404);
 }
 
 async function stationBelongsToOrg(env: Env, orgId: string, stationId: string | null): Promise<boolean> {
@@ -384,9 +385,9 @@ async function createProduct(request: Request, env: Env, orgId: string) {
   const vat = parseVat(body.vatRateBp);
   if (!vat.ok) return json({ error: vat.error }, 400);
   const categoryId = body.categoryId ? String(body.categoryId) : null;
-  if (!(await categoryBelongsToOrg(env, orgId, categoryId))) return json({ error: 'Onbekende categorie' }, 400);
+  if (!(await categoryBelongsToOrg(env, orgId, categoryId))) return errorJson('unknown_category', 400);
   const prepStationId = body.prepStationId ? String(body.prepStationId) : null;
-  if (!(await stationBelongsToOrg(env, orgId, prepStationId))) return json({ error: 'Onbekend station' }, 400);
+  if (!(await stationBelongsToOrg(env, orgId, prepStationId))) return errorJson('unknown_station', 400);
 
   // Every product has at least one variant; a single-version product gets
   // one with an empty name.
@@ -425,7 +426,7 @@ async function createProduct(request: Request, env: Env, orgId: string) {
       ),
     ]);
   } catch (err) {
-    if (isUniqueViolation(err, VARIANT_CODE_CONFLICT)) return json({ error: 'Deze code wordt al gebruikt' }, 409);
+    if (isUniqueViolation(err, VARIANT_CODE_CONFLICT)) return errorJson('code_in_use', 409);
     throw err;
   }
   return json(await loadProduct(env, orgId, productId), 201);
@@ -436,7 +437,7 @@ async function updateProduct(request: Request, env: Env, orgId: string, productI
   const existing = await env.DB.prepare('SELECT id, category_id, prep_station_id, name, vat_rate_bp, archived_at FROM products WHERE id = ? AND org_id = ?')
     .bind(productId, orgId)
     .first<ProductRow>();
-  if (!existing) return json({ error: 'Product niet gevonden' }, 404);
+  if (!existing) return errorJson('product_not_found', 404);
 
   let { name, category_id: categoryId, prep_station_id: prepStationId, vat_rate_bp: vatRateBp, archived_at: archivedAt } = existing;
   if (body.name !== undefined) {
@@ -446,11 +447,11 @@ async function updateProduct(request: Request, env: Env, orgId: string, productI
   }
   if (body.categoryId !== undefined) {
     categoryId = body.categoryId ? String(body.categoryId) : null;
-    if (!(await categoryBelongsToOrg(env, orgId, categoryId))) return json({ error: 'Onbekende categorie' }, 400);
+    if (!(await categoryBelongsToOrg(env, orgId, categoryId))) return errorJson('unknown_category', 400);
   }
   if (body.prepStationId !== undefined) {
     prepStationId = body.prepStationId ? String(body.prepStationId) : null;
-    if (!(await stationBelongsToOrg(env, orgId, prepStationId))) return json({ error: 'Onbekend station' }, 400);
+    if (!(await stationBelongsToOrg(env, orgId, prepStationId))) return errorJson('unknown_station', 400);
   }
   if (body.vatRateBp !== undefined) {
     const parsed = parseVat(body.vatRateBp);
@@ -480,7 +481,7 @@ async function updateProduct(request: Request, env: Env, orgId: string, productI
   try {
     await env.DB.batch(statements);
   } catch (err) {
-    if (isUniqueViolation(err, VARIANT_CODE_CONFLICT)) return json({ error: 'Een code van dit product wordt intussen door een ander product gebruikt' }, 409);
+    if (isUniqueViolation(err, VARIANT_CODE_CONFLICT)) return errorJson('product_code_taken', 409);
     throw err;
   }
   return json(await loadProduct(env, orgId, productId));
@@ -490,7 +491,7 @@ async function createVariant(request: Request, env: Env, orgId: string, productI
   const parsed = parseVariant(await readBody(request));
   if (!parsed.ok) return json({ error: parsed.error }, 400);
   if (!(await env.DB.prepare('SELECT 1 FROM products WHERE id = ? AND org_id = ?').bind(productId, orgId).first())) {
-    return json({ error: 'Product niet gevonden' }, 404);
+    return errorJson('product_not_found', 404);
   }
 
   const id = crypto.randomUUID();
@@ -502,7 +503,7 @@ async function createVariant(request: Request, env: Env, orgId: string, productI
       .bind(id, orgId, productId, parsed.value.name, parsed.value.code, productId, now())
       .run();
   } catch (err) {
-    if (isUniqueViolation(err, VARIANT_CODE_CONFLICT)) return json({ error: 'Deze code wordt al gebruikt' }, 409);
+    if (isUniqueViolation(err, VARIANT_CODE_CONFLICT)) return errorJson('code_in_use', 409);
     throw err;
   }
   const row = await env.DB.prepare('SELECT id, product_id, name, code, position, archived_at FROM product_variants WHERE id = ?').bind(id).first<VariantRow>();
@@ -514,7 +515,7 @@ async function updateVariant(request: Request, env: Env, orgId: string, variantI
   const existing = await env.DB.prepare('SELECT id, product_id, name, code, position, archived_at FROM product_variants WHERE id = ? AND org_id = ?')
     .bind(variantId, orgId)
     .first<VariantRow>();
-  if (!existing) return json({ error: 'Variant niet gevonden' }, 404);
+  if (!existing) return errorJson('variant_not_found', 404);
 
   let { name, code, position } = existing;
   if (body.name !== undefined || body.code !== undefined) {
@@ -535,7 +536,7 @@ async function updateVariant(request: Request, env: Env, orgId: string, variantI
   try {
     await env.DB.batch(statements);
   } catch (err) {
-    if (isUniqueViolation(err, VARIANT_CODE_CONFLICT)) return json({ error: 'Deze code wordt al gebruikt' }, 409);
+    if (isUniqueViolation(err, VARIANT_CODE_CONFLICT)) return errorJson('code_in_use', 409);
     throw err;
   }
 
@@ -548,7 +549,7 @@ async function updateVariant(request: Request, env: Env, orgId: string, variantI
       .bind(now(), variantId)
       .run();
     if ((result.meta.changes || 0) === 0) {
-      return json({ error: 'Een product heeft minstens één actieve variant nodig — archiveer dan het product' }, 409);
+      return errorJson('last_active_variant', 409);
     }
   }
 
@@ -618,13 +619,13 @@ async function renameCatalog(request: Request, env: Env, orgId: string, catalogI
   const name = parseName((await readBody(request)).name, 60);
   if (!name.ok) return json({ error: name.error }, 400);
   const result = await env.DB.prepare('UPDATE catalogs SET name = ?, updated_at = ? WHERE id = ? AND org_id = ?').bind(name.value, now(), catalogId, orgId).run();
-  if ((result.meta.changes || 0) === 0) return json({ error: 'Menukaart niet gevonden' }, 404);
+  if ((result.meta.changes || 0) === 0) return errorJson('catalog_not_found', 404);
   return json(await loadCatalogDetail(env, orgId, catalogId));
 }
 
 async function setDefaultCatalog(env: Env, orgId: string, catalogId: string) {
   const row = await loadCatalogRow(env, orgId, catalogId);
-  if (!row || row.archived_at) return json({ error: 'Menukaart niet gevonden' }, 404);
+  if (!row || row.archived_at) return errorJson('catalog_not_found', 404);
   // One transaction: clear the old default, set the new one.
   await env.DB.batch([
     env.DB.prepare('UPDATE catalogs SET is_default = 0 WHERE org_id = ? AND is_default = 1 AND id != ?').bind(orgId, catalogId),
@@ -639,13 +640,13 @@ async function archiveCatalog(env: Env, orgId: string, catalogId: string) {
     .run();
   if ((result.meta.changes || 0) > 0) return json({ ok: true });
   const row = await loadCatalogRow(env, orgId, catalogId);
-  if (!row || row.archived_at) return json({ error: 'Menukaart niet gevonden' }, 404);
-  return json({ error: 'De standaardmenukaart kan niet gearchiveerd worden — maak eerst een andere standaard' }, 409);
+  if (!row || row.archived_at) return errorJson('catalog_not_found', 404);
+  return errorJson('default_catalog_not_archivable', 409);
 }
 
 async function duplicateCatalog(request: Request, env: Env, orgId: string, catalogId: string) {
   const source = await loadCatalogRow(env, orgId, catalogId);
-  if (!source) return json({ error: 'Menukaart niet gevonden' }, 404);
+  if (!source) return errorJson('catalog_not_found', 404);
   const body = await readBody(request);
   const name = parseName(body.name ?? `${source.name} (kopie)`, 60);
   if (!name.ok) return json({ error: name.error }, 400);
@@ -695,7 +696,7 @@ async function duplicateCatalog(request: Request, env: Env, orgId: string, catal
 // move between sections). Must name every section and entry exactly once,
 // so a stale editor can't silently drop or duplicate anything.
 async function setLayout(request: Request, env: Env, orgId: string, catalogId: string) {
-  if (!(await loadCatalogRow(env, orgId, catalogId))) return json({ error: 'Menukaart niet gevonden' }, 404);
+  if (!(await loadCatalogRow(env, orgId, catalogId))) return errorJson('catalog_not_found', 404);
   const body = await readBody(request);
   const layout = Array.isArray(body.sections) ? (body.sections as { id?: unknown; entryIds?: unknown }[]) : null;
   if (!layout || !layout.every((s) => typeof s?.id === 'string' && Array.isArray(s.entryIds) && s.entryIds.every((e) => typeof e === 'string'))) {
@@ -714,7 +715,7 @@ async function setLayout(request: Request, env: Env, orgId: string, catalogId: s
   const givenSections = layout.map((s) => s.id as string);
   const givenEntries = layout.flatMap((s) => s.entryIds as string[]);
   if (!sameSet(givenSections, (sections.results || []) as { id: string }[]) || !sameSet(givenEntries, (entries.results || []) as { id: string }[])) {
-    return json({ error: 'De indeling is intussen gewijzigd — herlaad en probeer opnieuw' }, 400);
+    return errorJson('catalog_layout_changed', 400);
   }
 
   // Rewritten as two upserts (full rows, only position/section changing) —
@@ -746,7 +747,7 @@ async function setLayout(request: Request, env: Env, orgId: string, catalogId: s
 // --- Sections ---
 
 async function createSection(request: Request, env: Env, orgId: string, catalogId: string) {
-  if (!(await loadCatalogRow(env, orgId, catalogId))) return json({ error: 'Menukaart niet gevonden' }, 404);
+  if (!(await loadCatalogRow(env, orgId, catalogId))) return errorJson('catalog_not_found', 404);
   const name = parseName((await readBody(request)).name, 60);
   if (!name.ok) return json({ error: name.error }, 400);
   const id = crypto.randomUUID();
@@ -768,13 +769,13 @@ async function renameSection(request: Request, env: Env, orgId: string, catalogI
     env.DB.prepare('UPDATE catalog_sections SET name = ? WHERE id = ? AND catalog_id = ? AND org_id = ?').bind(name.value, sectionId, catalogId, orgId),
     touch(env, catalogId),
   ]);
-  if ((result.meta.changes || 0) === 0) return json({ error: 'Groep niet gevonden' }, 404);
+  if ((result.meta.changes || 0) === 0) return errorJson('section_not_found', 404);
   return json({ ok: true });
 }
 
 async function deleteSection(env: Env, orgId: string, catalogId: string, sectionId: string) {
   if (!(await env.DB.prepare('SELECT 1 FROM catalog_sections WHERE id = ? AND catalog_id = ? AND org_id = ?').bind(sectionId, catalogId, orgId).first())) {
-    return json({ error: 'Groep niet gevonden' }, 404);
+    return errorJson('section_not_found', 404);
   }
   await env.DB.batch([
     env.DB.prepare('DELETE FROM catalog_entries WHERE section_id = ?').bind(sectionId),
@@ -796,7 +797,7 @@ async function loadEntry(env: Env, entryId: string) {
 }
 
 async function createEntry(request: Request, env: Env, orgId: string, catalogId: string) {
-  if (!(await loadCatalogRow(env, orgId, catalogId))) return json({ error: 'Menukaart niet gevonden' }, 404);
+  if (!(await loadCatalogRow(env, orgId, catalogId))) return errorJson('catalog_not_found', 404);
   const body = await readBody(request);
   const price = parsePrice(body.priceCents);
   if (!price.ok) return json({ error: price.error }, 400);
@@ -804,14 +805,14 @@ async function createEntry(request: Request, env: Env, orgId: string, catalogId:
   if (!quick.ok) return json({ error: quick.error }, 400);
   const sectionId = String(body.sectionId || '');
   const variantId = String(body.variantId || '');
-  if (!(await sectionInCatalog(env, catalogId, sectionId))) return json({ error: 'Onbekende groep voor deze menukaart' }, 400);
+  if (!(await sectionInCatalog(env, catalogId, sectionId))) return errorJson('unknown_section', 400);
   const variant = await env.DB.prepare(
     `SELECT 1 FROM product_variants v JOIN products p ON p.id = v.product_id
      WHERE v.id = ? AND v.org_id = ? AND v.archived_at IS NULL AND p.archived_at IS NULL`
   )
     .bind(variantId, orgId)
     .first();
-  if (!variant) return json({ error: 'Onbekend of gearchiveerd product' }, 400);
+  if (!variant) return errorJson('unknown_product', 400);
 
   const id = crypto.randomUUID();
   try {
@@ -823,7 +824,7 @@ async function createEntry(request: Request, env: Env, orgId: string, catalogId:
       touch(env, catalogId),
     ]);
   } catch (err) {
-    if (isUniqueViolation(err, ENTRY_VARIANT_CONFLICT)) return json({ error: 'Dit product staat al op deze menukaart' }, 409);
+    if (isUniqueViolation(err, ENTRY_VARIANT_CONFLICT)) return errorJson('product_already_on_catalog', 409);
     throw err;
   }
   return json(await loadEntry(env, id), 201);
@@ -833,7 +834,7 @@ async function updateEntry(request: Request, env: Env, orgId: string, catalogId:
   const existing = await env.DB.prepare('SELECT id, section_id, price_cents, visible, quick_quantities FROM catalog_entries WHERE id = ? AND catalog_id = ? AND org_id = ?')
     .bind(entryId, catalogId, orgId)
     .first<{ id: string; section_id: string; price_cents: number; visible: number; quick_quantities: string | null }>();
-  if (!existing) return json({ error: 'Lijn niet gevonden' }, 404);
+  if (!existing) return errorJson('line_not_found', 404);
   const body = await readBody(request);
 
   let { price_cents: priceCents, visible, quick_quantities: quickQuantities, section_id: sectionId } = existing;
@@ -850,7 +851,7 @@ async function updateEntry(request: Request, env: Env, orgId: string, catalogId:
   }
   if (body.sectionId !== undefined) {
     sectionId = String(body.sectionId);
-    if (!(await sectionInCatalog(env, catalogId, sectionId))) return json({ error: 'Onbekende groep voor deze menukaart' }, 400);
+    if (!(await sectionInCatalog(env, catalogId, sectionId))) return errorJson('unknown_section', 400);
   }
 
   await env.DB.batch([
@@ -871,7 +872,7 @@ async function deleteEntry(env: Env, orgId: string, catalogId: string, entryId: 
     env.DB.prepare('DELETE FROM catalog_entries WHERE id = ? AND catalog_id = ? AND org_id = ?').bind(entryId, catalogId, orgId),
     touch(env, catalogId),
   ]);
-  if ((result.meta.changes || 0) === 0) return json({ error: 'Lijn niet gevonden' }, 404);
+  if ((result.meta.changes || 0) === 0) return errorJson('line_not_found', 404);
   return json({ ok: true });
 }
 
@@ -887,7 +888,7 @@ async function kassaView(env: Env, orgId: string, catalogIdOrDefault: string) {
           .bind(orgId)
           .first<CatalogRow>()
       : await loadCatalogRow(env, orgId, catalogIdOrDefault);
-  if (!row || row.archived_at) return json({ error: 'Geen menukaart gevonden' }, 404);
+  if (!row || row.archived_at) return errorJson('no_catalog', 404);
 
   const [sections, entries] = await env.DB.batch([
     env.DB.prepare('SELECT id, name, position FROM catalog_sections WHERE catalog_id = ? ORDER BY position, rowid').bind(row.id),
@@ -984,7 +985,7 @@ export async function dispatchCatalogRoute(request: Request, env: Env, pathname:
   if (!action) {
     if (method === 'GET') {
       const detail = await loadCatalogDetail(env, orgId, catalogId);
-      return detail ? json(detail) : json({ error: 'Menukaart niet gevonden' }, 404);
+      return detail ? json(detail) : errorJson('catalog_not_found', 404);
     }
     if (method === 'PATCH') return renameCatalog(request, env, orgId, catalogId);
     return null;

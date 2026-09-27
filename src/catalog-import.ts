@@ -25,6 +25,7 @@
 //     same however long the sheet is (the Free plan allows 50 per request).
 import type { Env } from './env';
 import { json } from './http';
+import { codedError, errorJson, type CodedError, type ErrorCode, type ErrorParams } from './errors';
 import { displayName } from './catalog';
 import { extractCaller, requireOrgRole } from './organizations/auth';
 import { jsonRowsStatement, present } from './sql-json';
@@ -59,9 +60,22 @@ interface ParsedRow {
   visible: boolean;
 }
 
+// `message` is the Dutch text; `code` + `params` the same error for a
+// frontend to show in its own language (see errors.ts).
 interface ImportError {
   row: number | null;
   message: string;
+  code: ErrorCode;
+  params?: ErrorParams;
+}
+
+function rowError(row: number | null, code: ErrorCode, params?: ErrorParams): ImportError {
+  const { error, ...coded } = codedError(code, params);
+  return { row, message: error, ...coded };
+}
+
+function isCoded(value: unknown): value is CodedError {
+  return typeof value === 'object' && value !== null && 'code' in value;
 }
 
 const MAX_ROWS = 500;
@@ -78,60 +92,60 @@ function norm(value: string): string {
   return value.replace(/\s+/g, ' ').trim().toLocaleLowerCase('nl-BE');
 }
 
-function parsePrice(cell: Cell): number | string {
+function parsePrice(cell: Cell): number | CodedError {
   if (typeof cell === 'number') {
-    if (!Number.isFinite(cell) || cell < 0) return 'Prijs moet 0 of meer zijn';
+    if (!Number.isFinite(cell) || cell < 0) return codedError('import_price_negative');
     const cents = Math.round(cell * 100);
-    return cents <= 1_000_000 ? cents : 'Prijs is te hoog (max € 10.000)';
+    return cents <= 1_000_000 ? cents : codedError('import_price_too_high');
   }
   let s = text(cell).replace(/€/g, '').replace(/\s/g, '');
-  if (!s) return 'Prijs ontbreekt';
+  if (!s) return codedError('import_price_missing');
   if (s.includes(',') && s.includes('.')) s = s.replace(/\./g, ''); // 1.234,50
   s = s.replace(',', '.');
-  if (!/^\d+(\.\d{1,2})?$/.test(s)) return `Prijs "${text(cell)}" is geen geldig bedrag`;
+  if (!/^\d+(\.\d{1,2})?$/.test(s)) return codedError('import_price_invalid', { value: text(cell) });
   const cents = Math.round(Number(s) * 100);
-  return cents <= 1_000_000 ? cents : 'Prijs is te hoog (max € 10.000)';
+  return cents <= 1_000_000 ? cents : codedError('import_price_too_high');
 }
 
 // Accepts 21, "21", "21%", and 0.21 (a %-formatted Excel cell's value).
-function parseVat(cell: Cell): number | undefined | string {
+function parseVat(cell: Cell): number | undefined | CodedError {
   let n: number;
   if (typeof cell === 'number') n = cell;
   else {
     const s = text(cell).replace('%', '').replace(',', '.').trim();
     if (!s) return undefined;
     n = Number(s);
-    if (!Number.isFinite(n)) return `BTW "${text(cell)}" is geen getal`;
+    if (!Number.isFinite(n)) return codedError('import_vat_not_a_number', { value: text(cell) });
   }
   if (n > 0 && n < 1) n = n * 100;
   n = Math.round(n * 100) / 100;
-  if (!VAT_RATES.includes(n)) return `BTW ${n}% bestaat niet — gebruik ${VAT_RATES.join(', ')}`;
+  if (!VAT_RATES.includes(n)) return codedError('import_vat_unknown', { value: n, allowed: VAT_RATES.join(', ') });
   return n * 100;
 }
 
-function parseQuick(cell: Cell): number[] | null | string {
+function parseQuick(cell: Cell): number[] | null | CodedError {
   if (typeof cell === 'number') cell = String(cell);
   const s = text(cell);
   if (!s) return null;
   const parts = s.split(/[,;\s]+/).filter(Boolean);
   const numbers = parts.map(Number);
   if (parts.length > 10 || !numbers.every((n) => Number.isInteger(n) && n >= 1 && n <= 999)) {
-    return `Snelknoppen "${s}" — gebruik hele getallen tussen 1 en 999, bv. 5, 10, 20 (max 10)`;
+    return codedError('import_quick_invalid', { value: s });
   }
   return numbers;
 }
 
-function parseVisible(cell: Cell): boolean | string {
+function parseVisible(cell: Cell): boolean | CodedError {
   if (typeof cell === 'boolean') return cell;
-  if (typeof cell === 'number') return cell === 1 ? true : cell === 0 ? false : `Zichtbaar "${cell}" — gebruik ja of nee`;
+  if (typeof cell === 'number') return cell === 1 ? true : cell === 0 ? false : codedError('import_visible_invalid', { value: String(cell) });
   const s = norm(text(cell));
   if (!s || ['ja', 'j', 'yes', 'y', 'x', '1', 'true', 'waar'].includes(s)) return true;
   if (['nee', 'n', 'no', '0', 'false', 'onwaar'].includes(s)) return false;
-  return `Zichtbaar "${text(cell)}" — gebruik ja of nee`;
+  return codedError('import_visible_invalid', { value: text(cell) });
 }
 
 function limit(value: string, max: number, label: string, errors: ImportError[], row: number): string {
-  if (value.length > max) errors.push({ row, message: `${label} is te lang (max ${max} tekens)` });
+  if (value.length > max) errors.push(rowError(row, 'import_too_long', { field: label, max }));
   return value.slice(0, max);
 }
 
@@ -148,17 +162,17 @@ function parseRows(raw: RawRow[], errors: ImportError[]): ParsedRow[] {
     const productCell = text(r.product);
     if (groepCell) lastGroep = groepCell;
     if (productCell) lastProduct = productCell;
-    if (!lastGroep) errors.push({ row, message: 'Groep ontbreekt (en er is geen rij erboven om van over te nemen)' });
-    if (!lastProduct) errors.push({ row, message: 'Product ontbreekt (en er is geen rij erboven om van over te nemen)' });
+    if (!lastGroep) errors.push(rowError(row, 'import_group_missing'));
+    if (!lastProduct) errors.push(rowError(row, 'import_product_missing'));
 
     const price = parsePrice(r.prijs);
-    if (typeof price === 'string') errors.push({ row, message: price });
+    if (isCoded(price)) errors.push(rowError(row, price.code, price.params));
     const vat = parseVat(r.btw);
-    if (typeof vat === 'string') errors.push({ row, message: vat });
+    if (isCoded(vat)) errors.push(rowError(row, vat.code, vat.params));
     const quick = parseQuick(r.snelknoppen);
-    if (typeof quick === 'string') errors.push({ row, message: quick });
+    if (isCoded(quick)) errors.push(rowError(row, quick.code, quick.params));
     const visible = parseVisible(r.zichtbaar);
-    if (typeof visible === 'string') errors.push({ row, message: visible });
+    if (isCoded(visible)) errors.push(rowError(row, visible.code, visible.params));
 
     const categorie = text(r.categorie);
     const station = text(r.station);
@@ -171,10 +185,10 @@ function parseRows(raw: RawRow[], errors: ImportError[]): ParsedRow[] {
       priceCents: typeof price === 'number' ? price : 0,
       categorie: categorie ? limit(categorie, 60, 'Categorie', errors, row) : null,
       station: station ? limit(station, 60, 'Station', errors, row) : null,
-      vatBp: typeof vat === 'string' ? undefined : vat,
+      vatBp: isCoded(vat) ? undefined : vat,
       code: code ? limit(code, 40, 'Code', errors, row) : null,
-      quick: typeof quick === 'string' ? null : quick,
-      visible: typeof visible === 'string' ? true : visible,
+      quick: isCoded(quick) ? null : quick,
+      visible: isCoded(visible) ? true : visible,
     };
     if (errors.length === before) parsed.push(entry);
     else parsed.push({ ...entry, row: -row }); // marked invalid, still takes part in grouping checks
@@ -255,7 +269,7 @@ const vatLabel = (bp: number | null) => (bp === null ? '(geen)' : `${bp / 100}%`
 async function importCatalog(request: Request, env: Env, orgId: string): Promise<Response> {
   const body = ((await request.json().catch(() => null)) || {}) as { catalogId?: unknown; name?: unknown; rows?: unknown; dryRun?: unknown };
   if (!Array.isArray(body.rows) || body.rows.length === 0) return json({ error: 'rows must be a non-empty array' }, 400);
-  if (body.rows.length > MAX_ROWS) return json({ error: `Maximaal ${MAX_ROWS} rijen per bestand` }, 400);
+  if (body.rows.length > MAX_ROWS) return errorJson(codedError('import_too_many_rows', { max: MAX_ROWS }), 400);
   const dryRun = body.dryRun !== false;
 
   let catalogId: string | null = null;
@@ -264,7 +278,7 @@ async function importCatalog(request: Request, env: Env, orgId: string): Promise
     const row = await env.DB.prepare('SELECT id, name FROM catalogs WHERE id = ? AND org_id = ? AND archived_at IS NULL')
       .bind(body.catalogId, orgId)
       .first<{ id: string; name: string }>();
-    if (!row) return json({ error: 'Menukaart niet gevonden' }, 404);
+    if (!row) return errorJson('catalog_not_found', 404);
     catalogId = row.id;
     catalogName = row.name;
   } else {
@@ -298,17 +312,28 @@ async function importCatalog(request: Request, env: Env, orgId: string): Promise
     const row = Math.abs(r.row);
     if (r.categorie) {
       if (fp.categorie && norm(fp.categorie.value) !== norm(r.categorie)) {
-        errors.push({ row, message: `${fp.name}: andere categorie ("${r.categorie}") dan op rij ${fp.categorie.row} ("${fp.categorie.value}") — rijen ${fp.categorie.row} en ${row}` });
+        errors.push(rowError(row, 'import_category_conflict', { product: fp.name, value: r.categorie, otherRow: fp.categorie.row, otherValue: fp.categorie.value, row }));
       } else if (!fp.categorie) fp.categorie = { value: r.categorie, row };
     }
     if (r.station) {
       if (fp.station && norm(fp.station.value) !== norm(r.station)) {
-        errors.push({ row, message: `${fp.name}: ander station ("${r.station}") dan op rij ${fp.station.row} ("${fp.station.value}") — rijen ${fp.station.row} en ${row}` });
+        errors.push(rowError(row, 'import_station_conflict', { product: fp.name, value: r.station, otherRow: fp.station.row, otherValue: fp.station.value, row }));
       } else if (!fp.station) fp.station = { value: r.station, row };
     }
     if (r.vatBp !== undefined) {
       if (fp.vat && fp.vat.value !== r.vatBp) {
-        errors.push({ row, message: `${fp.name}: ander BTW-tarief (${vatLabel(r.vatBp)}) dan op rij ${fp.vat.row} (${vatLabel(fp.vat.value)}) — rijen ${fp.vat.row} en ${row}` });
+        errors.push(
+          rowError(row, 'import_vat_conflict', {
+            product: fp.name,
+            value: vatLabel(r.vatBp),
+            otherRow: fp.vat.row,
+            otherValue: vatLabel(fp.vat.value),
+            row,
+            // The rates themselves (basis points, null = none), for a frontend's own label.
+            valueBp: r.vatBp,
+            otherValueBp: fp.vat.value,
+          })
+        );
       } else if (!fp.vat) fp.vat = { value: r.vatBp, row };
     }
   }
@@ -319,10 +344,10 @@ async function importCatalog(request: Request, env: Env, orgId: string): Promise
   for (const r of rows) {
     const row = Math.abs(r.row);
     const key = `${norm(r.product)}\u0000${norm(r.variant)}`;
-    if (seenVariant.has(key)) errors.push({ row, message: `${displayName(r.product, r.variant)} staat al op rij ${seenVariant.get(key)}` });
+    if (seenVariant.has(key)) errors.push(rowError(row, 'import_duplicate_variant', { name: displayName(r.product, r.variant), otherRow: seenVariant.get(key)! }));
     else seenVariant.set(key, row);
     if (r.code) {
-      if (seenCode.has(r.code)) errors.push({ row, message: `Code "${r.code}" staat al op rij ${seenCode.get(r.code)}` });
+      if (seenCode.has(r.code)) errors.push(rowError(row, 'import_duplicate_code', { code: r.code, otherRow: seenCode.get(r.code)! }));
       else seenCode.set(r.code, row);
     }
   }
@@ -342,7 +367,7 @@ async function importCatalog(request: Request, env: Env, orgId: string): Promise
       const owner = productById.get(variantByCode.get(coded.code as string)!.product_id)!;
       const byName = productByName.get(fp.key);
       if (norm(owner.name) !== fp.key && byName && byName.id !== owner.id) {
-        errors.push({ row: Math.abs(coded.row), message: `Code "${coded.code}" hoort bij product "${owner.name}", niet bij "${fp.name}" (dat bestaat al apart)` });
+        errors.push(rowError(Math.abs(coded.row), 'import_code_other_product', { code: coded.code as string, owner: owner.name, product: fp.name }));
       } else match = owner;
     } else {
       match = productByName.get(fp.key) ?? null;
@@ -350,7 +375,7 @@ async function importCatalog(request: Request, env: Env, orgId: string): Promise
     if (match) {
       const claimedBy = claimedProducts.get(match.id);
       if (claimedBy !== undefined) {
-        errors.push({ row: Math.abs(fp.rows[0].row), message: `"${fp.name}" en "${claimedBy}" verwijzen naar hetzelfde bestaande product "${match.name}"` });
+        errors.push(rowError(Math.abs(fp.rows[0].row), 'import_same_existing_product', { product: fp.name, other: claimedBy, existing: match.name }));
         match = null;
       } else claimedProducts.set(match.id, fp.name);
     }
@@ -371,13 +396,13 @@ async function importCatalog(request: Request, env: Env, orgId: string): Promise
       const v = variantByCode.get(r.code)!;
       if (product && v.product_id === product.id) variant = v;
       else if (product || !resolvedProduct.has(norm(r.product))) {
-        errors.push({ row, message: `Code "${r.code}" is al in gebruik bij een ander product` });
+        errors.push(rowError(row, 'import_code_in_use', { code: r.code }));
       }
     } else if (product) {
       variant = existing.variants.find((v) => v.product_id === product.id && norm(v.name) === norm(r.variant)) ?? null;
     }
     if (variant) {
-      if (claimedVariants.has(variant.id)) errors.push({ row, message: `Deze variant staat al op rij ${claimedVariants.get(variant.id)}` });
+      if (claimedVariants.has(variant.id)) errors.push(rowError(row, 'import_variant_claimed', { otherRow: claimedVariants.get(variant.id)! }));
       else claimedVariants.set(variant.id, row);
     }
     resolvedRows.push({ ...r, row, variantId: variant?.id ?? null });
@@ -592,7 +617,7 @@ async function importCatalog(request: Request, env: Env, orgId: string): Promise
     await env.DB.batch(statements);
   } catch (err) {
     if (/UNIQUE constraint failed/i.test((err as Error)?.message || '')) {
-      return json({ ok: false, errors: [{ row: null, message: 'Er is intussen iets gewijzigd (bv. een code wordt al gebruikt) — maak opnieuw een voorbeeld' }], summary }, 409);
+      return json({ ok: false, errors: [rowError(null, 'import_changed')], summary }, 409);
     }
     throw err;
   }
@@ -603,7 +628,7 @@ async function importCatalog(request: Request, env: Env, orgId: string): Promise
 
 async function exportCatalog(env: Env, orgId: string, catalogId: string): Promise<Response> {
   const catalog = await env.DB.prepare('SELECT id, name FROM catalogs WHERE id = ? AND org_id = ?').bind(catalogId, orgId).first<{ id: string; name: string }>();
-  if (!catalog) return json({ error: 'Menukaart niet gevonden' }, 404);
+  if (!catalog) return errorJson('catalog_not_found', 404);
 
   // Sellable entries only: an archived product can't be matched on
   // re-import (matching is on active products), so exporting it would

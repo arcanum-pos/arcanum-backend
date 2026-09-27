@@ -86,7 +86,10 @@ CREATE TABLE IF NOT EXISTS organizations (
   -- row counts. Cleared by /import/finish.
   import_status TEXT,
   import_key TEXT,
-  import_manifest TEXT
+  import_manifest TEXT,
+  -- Default language (see organizations/locale.ts): the org's screens and
+  -- the mails it sends, until a user picks their own.
+  locale TEXT NOT NULL DEFAULT 'nl' CHECK (locale IN ('nl', 'fr', 'en'))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_organizations_custom_domain ON organizations(custom_domain);
 
@@ -493,3 +496,4 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0016_prep_stations.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0017_org_import.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0018_split_payments.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0019_charge_lines.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0020_org_locale.sql');

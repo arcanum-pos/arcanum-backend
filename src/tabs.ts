@@ -23,6 +23,7 @@
 // a tip on the payment (charges.tip_cents), not a line.
 import type { Env } from './env';
 import { json } from './http';
+import { codedError, errorBody, errorJson, type CodedError } from './errors';
 import { extractCaller, requireOrgRole } from './organizations/auth';
 import { displayName } from './catalog';
 import { jsonRowsStatement } from './sql-json';
@@ -236,13 +237,13 @@ function parseLines(raw: unknown): LineInput[] | string {
 // that (non-archived, same-org) catalog, visible, and its product/variant
 // not archived — the same rule as the kassa view, so a kassa can only sell
 // what it's shown.
-async function priceCatalogLines(env: Env, orgId: string, catalogId: string | null, lines: LineInput[]): Promise<string | null> {
+async function priceCatalogLines(env: Env, orgId: string, catalogId: string | null, lines: LineInput[]): Promise<string | CodedError | null> {
   const variantIds = [...new Set(lines.filter((l) => l.variantId).map((l) => l.variantId as string))];
   if (variantIds.length === 0) return null;
   if (!catalogId) return 'catalogId is required for lines with a variantId';
 
   const catalog = await env.DB.prepare('SELECT 1 FROM catalogs WHERE id = ? AND org_id = ? AND archived_at IS NULL').bind(catalogId, orgId).first();
-  if (!catalog) return 'Onbekende of gearchiveerde menukaart';
+  if (!catalog) return codedError('unknown_catalog');
 
   const { results } = await env.DB.prepare(
     `SELECT e.variant_id, e.price_cents, v.name AS variant_name, v.code, p.name AS product_name, p.vat_rate_bp, c.name AS category_name,
@@ -273,7 +274,7 @@ async function priceCatalogLines(env: Env, orgId: string, catalogId: string | nu
   for (const line of lines) {
     if (!line.variantId) continue;
     const entry = byVariant.get(line.variantId);
-    if (!entry) return 'Dit product staat niet (meer) op de menukaart — herlaad de kassa';
+    if (!entry) return codedError('product_not_on_catalog');
     line.name = displayName(entry.product_name, entry.variant_name);
     line.unitPriceCents = entry.price_cents;
     line.itemCode = entry.code;
@@ -286,7 +287,7 @@ async function priceCatalogLines(env: Env, orgId: string, catalogId: string | nu
 }
 
 // parseLines + priceCatalogLines for an order body ({ lines, catalogId? }).
-async function prepareOrderLines(env: Env, orgId: string, body: Record<string, unknown>): Promise<{ lines: LineInput[]; catalogId: string | null } | string> {
+async function prepareOrderLines(env: Env, orgId: string, body: Record<string, unknown>): Promise<{ lines: LineInput[]; catalogId: string | null } | string | CodedError> {
   const lines = parseLines(body.lines);
   if (typeof lines === 'string') return lines;
   const catalogId = typeof body.catalogId === 'string' && body.catalogId ? body.catalogId : null;
@@ -429,10 +430,10 @@ export async function customerOrder(env: Env, orgId: string, tabId: string, char
 // Distinguishes *why* a conditional write touched nothing, for a useful error.
 async function refusalResponse(env: Env, orgId: string, tabId: string): Promise<Response> {
   const tab = await loadTabSummary(env, orgId, tabId);
-  if (!tab) return json({ error: 'Rekening niet gevonden' }, 404);
-  if (tab.status !== 'open') return json({ error: 'Rekening is niet meer open', tab }, 409);
-  if (tab.paymentPending) return json({ error: 'Er loopt een betaling voor deze rekening', tab }, 409);
-  return json({ error: 'Rekening is gewijzigd, herlaad en probeer opnieuw', tab }, 409);
+  if (!tab) return errorJson('tab_not_found', 404);
+  if (tab.status !== 'open') return errorJson('tab_not_open', 409, { tab });
+  if (tab.paymentPending) return errorJson('tab_payment_pending', 409, { tab });
+  return errorJson('tab_changed', 409, { tab });
 }
 
 // GET /organizations/:orgId/tabs?status=open|closed|cancelled
@@ -460,7 +461,7 @@ async function createTab(request: Request, env: Env, orgId: string): Promise<Res
   if (body.eventId !== undefined && body.eventId !== null) {
     if (typeof body.eventId !== 'string') return json({ error: 'eventId must be a string or null' }, 400);
     const event = await env.DB.prepare('SELECT id FROM events WHERE id = ? AND org_id = ?').bind(body.eventId, orgId).first<{ id: string }>();
-    if (!event) return json({ error: 'Onbekend evenement — kies het opnieuw in de instellingen van de kassa' }, 400);
+    if (!event) return errorJson('unknown_event', 400);
     eventId = event.id;
   }
 
@@ -468,7 +469,7 @@ async function createTab(request: Request, env: Env, orgId: string): Promise<Res
   let catalogId: string | null = null;
   if (body.lines !== undefined) {
     const prepared = await prepareOrderLines(env, orgId, body);
-    if (typeof prepared === 'string') return json({ error: prepared }, 400);
+    if (typeof prepared === 'string' || 'code' in prepared) return json(errorBody(prepared), 400);
     ({ lines, catalogId } = prepared);
   }
 
@@ -515,7 +516,7 @@ async function createTab(request: Request, env: Env, orgId: string): Promise<Res
 // GET /organizations/:orgId/tabs/:tabId
 async function getTab(env: Env, orgId: string, tabId: string): Promise<Response> {
   const tab = await loadTabDetail(env, orgId, tabId);
-  return tab ? json(tab) : json({ error: 'Rekening niet gevonden' }, 404);
+  return tab ? json(tab) : errorJson('tab_not_found', 404);
 }
 
 // PATCH /organizations/:orgId/tabs/:tabId { label } — only while open.
@@ -532,7 +533,7 @@ async function renameTab(request: Request, env: Env, orgId: string, tabId: strin
 async function addOrder(request: Request, env: Env, orgId: string, tabId: string): Promise<Response> {
   const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
   const prepared = await prepareOrderLines(env, orgId, body);
-  if (typeof prepared === 'string') return json({ error: prepared }, 400);
+  if (typeof prepared === 'string' || 'code' in prepared) return json(errorBody(prepared), 400);
   const { lines, catalogId } = prepared;
 
   const who = attribution(request, body);
@@ -568,10 +569,10 @@ async function voidLine(request: Request, env: Env, orgId: string, tabId: string
   )
     .bind(lineId, tabId, orgId)
     .first<{ remaining: number }>();
-  if (!original) return json({ error: 'Lijn niet gevonden' }, 404);
+  if (!original) return errorJson('line_not_found', 404);
 
   const quantity = body.quantity === undefined ? original.remaining : Number(body.quantity);
-  if (!Number.isInteger(quantity) || quantity < 1) return json({ error: 'Niets meer te annuleren op deze lijn' }, 409);
+  if (!Number.isInteger(quantity) || quantity < 1) return errorJson('nothing_to_void', 409);
 
   const who = attribution(request, body);
   const orderId = crypto.randomUUID();
@@ -607,9 +608,9 @@ async function voidLine(request: Request, env: Env, orgId: string, tabId: string
     if (tab && tab.status === 'open' && !tab.paymentPending && tab.paidCents > 0 && quantity <= original.remaining) {
       const paidUnits = await env.DB.prepare(`SELECT ${PAID_UNITS_SQL('?')} AS n`).bind(lineId).first<{ n: number }>();
       if ((paidUnits?.n || 0) > 0 && quantity > original.remaining - (paidUnits?.n || 0)) {
-        return json({ error: 'Deze stuks zijn al betaald — ze kunnen niet meer geannuleerd worden', tab }, 409);
+        return errorJson('void_units_paid', 409, { tab });
       }
-      return json({ error: 'Er is al een deel betaald — annuleren zou meer terugbetalen dan er open staat', tab }, 409);
+      return errorJson('void_exceeds_outstanding', 409, { tab });
     }
     return refusalResponse(env, orgId, tabId);
   }
@@ -633,7 +634,7 @@ async function setSplit(request: Request, env: Env, orgId: string, tabId: string
     .run();
   if ((result.meta.changes || 0) === 0) {
     const tab = await loadTabSummary(env, orgId, tabId);
-    if (tab && tab.status === 'open' && !tab.paymentPending) return json({ error: 'Te weinig open om zo te verdelen', tab }, 409);
+    if (tab && tab.status === 'open' && !tab.paymentPending) return errorJson('split_too_small', 409, { tab });
     return refusalResponse(env, orgId, tabId);
   }
   return json(await loadTabDetail(env, orgId, tabId));
@@ -657,7 +658,7 @@ async function cancelTab(request: Request, env: Env, orgId: string, tabId: strin
   if ((result.meta.changes || 0) === 0) {
     const tab = await loadTabSummary(env, orgId, tabId);
     if (tab && tab.status === 'open' && !tab.paymentPending) {
-      return json({ error: 'Alleen een lege rekening kan geannuleerd worden — annuleer eerst de lijnen', tab }, 409);
+      return errorJson('tab_not_empty', 409, { tab });
     }
     return refusalResponse(env, orgId, tabId);
   }
@@ -732,10 +733,10 @@ export async function prepareTabCharge(
   if (refusal) return { ok: false, response: refusal };
 
   const tab = await loadTabSummary(env, orgId, tabId);
-  if (!tab) return { ok: false, response: json({ error: 'Rekening niet gevonden' }, 404) };
-  if (tab.status !== 'open') return { ok: false, response: json({ error: 'Rekening is niet meer open', tab }, 409) };
-  if (tab.paymentPending) return { ok: false, response: json({ error: 'Er loopt al een betaling voor deze rekening', tab }, 409) };
-  if (tab.outstandingCents < 1) return { ok: false, response: json({ error: 'Niets te betalen op deze rekening', tab }, 409) };
+  if (!tab) return { ok: false, response: errorJson('tab_not_found', 404) };
+  if (tab.status !== 'open') return { ok: false, response: errorJson('tab_not_open', 409, { tab }) };
+  if (tab.paymentPending) return { ok: false, response: errorJson('tab_payment_already_pending', 409, { tab }) };
+  if (tab.outstandingCents < 1) return { ok: false, response: errorJson('tab_nothing_to_pay', 409, { tab }) };
   // amount − tip is what pays off the tab.
   const paysCents = amountCents - tipCents;
 
@@ -743,8 +744,8 @@ export async function prepareTabCharge(
   let itemLines: { lineId: string; quantity: number }[] = [];
   if (intent.lines !== undefined) {
     const picked = await checkItemLines(env, tabId, intent.lines);
-    if (typeof picked === 'string') return { ok: false, response: json({ error: picked, tab }, picked.startsWith('lines') ? 400 : 409) };
-    if (picked.cents !== paysCents) return { ok: false, response: json({ error: 'Rekening is gewijzigd, herlaad en probeer opnieuw', tab }, 409) };
+    if (typeof picked === 'string' || 'code' in picked) return { ok: false, response: json({ ...errorBody(picked), tab }, typeof picked === 'string' ? 400 : 409) };
+    if (picked.cents !== paysCents) return { ok: false, response: errorJson('tab_changed', 409, { tab }) };
     itemLines = picked.lines;
   }
 
@@ -756,7 +757,7 @@ export async function prepareTabCharge(
       ? paysCents >= 1 && paysCents <= tab.outstandingCents
       : paysCents === tab.outstandingCents;
   if (!expected) {
-    return { ok: false, response: json({ error: 'Rekening is gewijzigd, herlaad en probeer opnieuw', tab }, 409) };
+    return { ok: false, response: errorJson('tab_changed', 409, { tab }) };
   }
   const settlesTab = paysCents === tab.outstandingCents;
 
@@ -791,7 +792,7 @@ export async function prepareTabCharge(
 // an original (non-void) line of this tab, quantity ≥ 1 and at most its
 // units not voided and not paid yet. Returns the lines and what they cost,
 // or an error (a 400 for malformed input, a 409 — stale view — otherwise).
-async function checkItemLines(env: Env, tabId: string, raw: unknown): Promise<{ lines: { lineId: string; quantity: number }[]; cents: number } | string> {
+async function checkItemLines(env: Env, tabId: string, raw: unknown): Promise<{ lines: { lineId: string; quantity: number }[]; cents: number } | string | CodedError> {
   if (!Array.isArray(raw) || raw.length === 0 || raw.length > 200) return 'lines must be a non-empty array of { lineId, quantity }';
   const wanted = new Map<string, number>();
   for (const item of raw as { lineId?: unknown; quantity?: unknown }[]) {
@@ -809,7 +810,7 @@ async function checkItemLines(env: Env, tabId: string, raw: unknown): Promise<{ 
   let cents = 0;
   for (const [lineId, quantity] of wanted) {
     const line = byId.get(lineId);
-    if (!line || quantity > line.payable) return 'Rekening is gewijzigd, herlaad en probeer opnieuw';
+    if (!line || quantity > line.payable) return codedError('tab_changed');
     cents += quantity * line.unit_price_cents;
   }
   return { lines: [...wanted].map(([lineId, quantity]) => ({ lineId, quantity })), cents };

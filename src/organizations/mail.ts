@@ -5,6 +5,7 @@
 // picking a transport themselves.
 import type { Env } from '../env';
 import { json } from '../http';
+import { errorJson } from '../errors';
 import { sendEmail, type SendEmailRequest } from '../mailer-client';
 import { extractCaller, requireOrgRole } from './auth';
 import { resolveMailProvider } from './mail-provider';
@@ -67,13 +68,13 @@ export async function testMailConfiguration(request: Request, env: Env, orgId: s
     html: '<p>Als je dit leest, werkt de e-mailconfiguratie voor deze organisatie.</p>',
   });
   if (!sendRequest) {
-    return json({ error: 'Geen e-mailconfiguratie gevonden (en ook geen platform-standaard)', provider }, 404);
+    return errorJson('mail_not_configured', 404, { provider });
   }
 
   try {
     await sendEmail(env, sendRequest);
     return json({ ok: true, provider });
   } catch (err) {
-    return json({ error: 'Verzenden mislukt', details: (err as Error).message, provider }, 502);
+    return errorJson('mail_send_failed', 502, { details: (err as Error).message, provider });
   }
 }

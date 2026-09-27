@@ -17,6 +17,7 @@
 // specific Solo reader is targeted directly now, chosen in Instellingen).
 import type { Env } from '../env';
 import { json } from '../http';
+import { errorJson, providerErrorJson } from '../errors';
 import { broadcastPaymentEvent } from '../devicehub-client';
 import { getDecryptedPaymentCredential } from '../organizations/payment-credentials';
 import { createSumupReaderCheckout, SumupCloudApiError, listSumupReaders } from './sumup-cloud-api';
@@ -43,8 +44,7 @@ export async function listSumupReadersForOrg(request: Request, env: Env): Promis
     const readers = await listSumupReaders(merchantId, apiKey);
     return json({ configured: true, readers });
   } catch (err) {
-    const message = err instanceof SumupCloudApiError ? err.message : 'Kon SumUp readers niet ophalen';
-    return json({ configured: true, readers: [], error: message }, 502);
+    return providerErrorJson('sumup_readers_failed', err instanceof SumupCloudApiError ? err.message : null, 502, { configured: true, readers: [] });
   }
 }
 
@@ -128,7 +128,7 @@ export async function createSumupCharge(request: Request, env: Env): Promise<Res
       lines,
     });
   } catch (err) {
-    if (isPendingTabChargeConflict(err)) return json({ error: 'Er loopt al een betaling voor deze rekening' }, 409);
+    if (isPendingTabChargeConflict(err)) return errorJson('tab_payment_already_pending', 409);
     throw err;
   }
 

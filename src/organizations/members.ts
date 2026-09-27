@@ -2,6 +2,7 @@ import type { Env } from '../env';
 import { json } from '../http';
 import { buildInviteEmail } from '../email-templates/invite';
 import { extractCaller, requireOrgRole } from './auth';
+import { toLocale } from './locale';
 import { sendOrgEmail } from './mail';
 import type { MembershipRow, OrgRole } from './types';
 
@@ -63,9 +64,10 @@ export async function inviteMember(request: Request, env: Env, orgId: string): P
   // creation itself — worst case, the admin has to tell them out of band,
   // exactly like before this existed.
   try {
-    const org = await env.DB.prepare('SELECT name FROM organizations WHERE id = ?').bind(orgId).first<{ name: string }>();
+    // The mail is in the org's default language (the invitee has no language of their own yet).
+    const org = await env.DB.prepare('SELECT name, locale FROM organizations WHERE id = ?').bind(orgId).first<{ name: string; locale: string }>();
     if (org) {
-      const content = buildInviteEmail({ orgName: org.name, role, loginUrl: `${env.PUBLIC_BASE_URL}/login` });
+      const content = buildInviteEmail({ orgName: org.name, role, loginUrl: `${env.PUBLIC_BASE_URL}/login`, locale: toLocale(org.locale) });
       await sendOrgEmail(env, orgId, { to: email, ...content });
     }
   } catch (err) {

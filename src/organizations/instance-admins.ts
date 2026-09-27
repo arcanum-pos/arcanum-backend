@@ -22,4 +22,4 @@ export function mayCreateOrganizations(env: Env, email: string): boolean {
   return entries.some((e) => (e.startsWith('*@') ? e.slice(2) === domain : e === address));
 }
 
-export const NOT_AN_INSTANCE_ADMIN = 'Alleen de beheerders van deze installatie kunnen een organisatie aanmaken of importeren';
+// Refused with error code `not_instance_admin` (see errors.ts).

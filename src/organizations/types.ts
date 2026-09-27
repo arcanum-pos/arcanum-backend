@@ -36,6 +36,8 @@ export interface OrganizationRow {
   import_key: string | null;
   import_manifest: string | null;
   custom_domain_ssl_status: string | null;
+  // 'nl' | 'fr' | 'en' — see organizations/locale.ts.
+  locale: string;
 }
 
 export interface MembershipRow {

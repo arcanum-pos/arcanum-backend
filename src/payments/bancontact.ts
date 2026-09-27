@@ -11,6 +11,7 @@
 // the admin portal and stored encrypted in payment_provider_credentials.
 import type { Env } from '../env';
 import { json } from '../http';
+import { errorJson } from '../errors';
 import { broadcastPaymentEvent } from '../devicehub-client';
 import { getDecryptedPaymentCredential } from '../organizations/payment-credentials';
 import { verifyBancontactCallback } from './bancontact-jws';
@@ -95,7 +96,7 @@ export async function createPayment(request: Request, env: Env): Promise<Respons
 
   const credential = await resolveCredential(env, orgId);
   if (!credential) {
-    return json({ error: 'Bancontact niet geconfigureerd voor deze organisatie' }, 400);
+    return errorJson('bancontact_not_configured', 400);
   }
 
   // Generated up front — Bancontact needs it as `reference` in the create
@@ -156,7 +157,7 @@ export async function createPayment(request: Request, env: Env): Promise<Respons
   } catch (err) {
     // Lost the race against another kassa paying the same tab — the
     // Bancontact payment just created is never shown and simply expires.
-    if (isPendingTabChargeConflict(err)) return json({ error: 'Er loopt al een betaling voor deze rekening' }, 409);
+    if (isPendingTabChargeConflict(err)) return errorJson('tab_payment_already_pending', 409);
     throw err;
   }
 

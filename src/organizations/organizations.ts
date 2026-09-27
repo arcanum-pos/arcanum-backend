@@ -1,9 +1,11 @@
 import type { Env } from '../env';
 import { json } from '../http';
 import { extractCaller, requireOrgRole } from './auth';
-import { mayCreateOrganizations, NOT_AN_INSTANCE_ADMIN } from './instance-admins';
+import { mayCreateOrganizations } from './instance-admins';
+import { errorJson } from '../errors';
 import { reconcilePendingInvites } from './invite-reconciliation';
 import { generateDataKey, wrapDataKey, unwrapDataKey } from './crypto';
+import { toLocale } from './locale';
 import type { OrganizationRow } from './types';
 
 function rowToOrganization(row: OrganizationRow) {
@@ -17,6 +19,7 @@ function rowToOrganization(row: OrganizationRow) {
     customDomainStatus: row.custom_domain_status,
     customDomainSslStatus: row.custom_domain_ssl_status,
     importStatus: row.import_status ?? null,
+    locale: toLocale(row.locale),
   };
 }
 
@@ -40,7 +43,7 @@ export async function createOrganization(request: Request, env: Env): Promise<Re
   const caller = extractCaller(request);
   if (!caller) return json({ error: 'Unauthorized' }, 401);
 
-  if (!mayCreateOrganizations(env, caller.email)) return json({ error: NOT_AN_INSTANCE_ADMIN }, 403);
+  if (!mayCreateOrganizations(env, caller.email)) return errorJson('not_instance_admin', 403);
 
   const body = (await request.json().catch(() => ({}))) as { name?: string };
   const name = (body.name || '').trim();
@@ -100,15 +103,15 @@ export async function listMyMemberships(request: Request, env: Env): Promise<Res
   await reconcilePendingInvites(env, caller.sub, caller.email, caller.issuer);
 
   const { results } = await env.DB.prepare(
-    `SELECT o.id as org_id, o.name as org_name, m.role FROM organizations o
+    `SELECT o.id as org_id, o.name as org_name, o.locale as org_locale, m.role FROM organizations o
      JOIN memberships m ON m.org_id = o.id
      WHERE m.issuer = ? AND m.user_sub = ? AND m.status = 'active'
      ORDER BY o.created_at`
   )
     .bind(caller.issuer, caller.sub)
-    .all<{ org_id: string; org_name: string; role: string }>();
+    .all<{ org_id: string; org_name: string; org_locale: string; role: string }>();
 
-  return json((results || []).map((r) => ({ orgId: r.org_id, orgName: r.org_name, role: r.role })));
+  return json((results || []).map((r) => ({ orgId: r.org_id, orgName: r.org_name, orgLocale: toLocale(r.org_locale), role: r.role })));
 }
 
 export async function getOrganization(request: Request, env: Env, orgId: string): Promise<Response> {

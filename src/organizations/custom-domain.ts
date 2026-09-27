@@ -36,6 +36,7 @@
 // one fixed OAuth callback to land.
 import type { Env } from '../env';
 import { json } from '../http';
+import { errorJson, providerErrorJson } from '../errors';
 import { extractCaller, requireOrgRole } from './auth';
 import { hasCompleteIdentityProvider } from './identity-providers';
 import type { OrganizationRow } from './types';
@@ -137,20 +138,14 @@ export async function setCustomDomain(request: Request, env: Env, orgId: string)
   const body = (await request.json().catch(() => ({}))) as { hostname?: string };
   const hostname = (body.hostname || '').trim().toLowerCase();
   if (!hostname || !HOSTNAME_RE.test(hostname)) {
-    return json({ error: 'Vul een geldige domeinnaam in (bv. pos.mijnorganisatie.be)' }, 400);
+    return errorJson('invalid_domain', 400);
   }
 
   const existing = await env.DB.prepare('SELECT * FROM organizations WHERE id = ?').bind(orgId).first<OrganizationRow>();
   if (!existing) return json({ error: 'Unknown organization' }, 404);
 
   if (!(await hasCompleteIdentityProvider(env, orgId))) {
-    return json(
-      {
-        error:
-          'Configureer eerst een eigen identity provider voor deze organisatie (zie Authentication) voordat je een aangepast domein instelt.',
-      },
-      400
-    );
+    return errorJson('domain_requires_idp', 400);
   }
 
   // Re-submitting the exact hostname that's already registered — nothing to
@@ -160,7 +155,7 @@ export async function setCustomDomain(request: Request, env: Env, orgId: string)
   }
 
   const clash = await env.DB.prepare('SELECT id FROM organizations WHERE custom_domain = ? AND id != ?').bind(hostname, orgId).first();
-  if (clash) return json({ error: 'Dit domein is al in gebruik door een andere organisatie' }, 409);
+  if (clash) return errorJson('domain_in_use', 409);
 
   // Changing domains: Cloudflare has no "edit hostname" — remove the old
   // registration (and its route) first. Best-effort; a failure here (e.g.
@@ -176,8 +171,7 @@ export async function setCustomDomain(request: Request, env: Env, orgId: string)
   });
 
   if (!ok || !cfBody?.result) {
-    const message = cfBody?.errors?.[0]?.message || 'Kon domein niet registreren bij Cloudflare';
-    return json({ error: message }, 502);
+    return providerErrorJson('domain_registration_failed', cfBody?.errors?.[0]?.message, 502);
   }
 
   const cf = cfBody.result;
@@ -188,7 +182,7 @@ export async function setCustomDomain(request: Request, env: Env, orgId: string)
   const routeId = await createWorkerRoute(env, hostname);
   if (!routeId) {
     await cfRequest(env, `/custom_hostnames/${cf.id}`, { method: 'DELETE' }).catch(() => {});
-    return json({ error: 'Kon geen routing instellen voor dit domein bij Cloudflare' }, 502);
+    return errorJson('domain_routing_failed', 502);
   }
 
   await env.DB.prepare(
@@ -215,8 +209,7 @@ export async function verifyCustomDomain(request: Request, env: Env, orgId: stri
 
   const { ok, body: cfBody } = await cfRequest<CloudflareCustomHostname>(env, `/custom_hostnames/${row.custom_domain_cf_id}`);
   if (!ok || !cfBody?.result) {
-    const message = cfBody?.errors?.[0]?.message || 'Kon status niet ophalen bij Cloudflare';
-    return json({ error: message }, 502);
+    return providerErrorJson('domain_status_failed', cfBody?.errors?.[0]?.message, 502);
   }
 
   const cf = cfBody.result;

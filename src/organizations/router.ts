@@ -8,6 +8,7 @@ import { getGmailApiCredentials, setGmailApiCredentials } from './gmail-api-cred
 import { getMailProvider, setMailProvider } from './mail-provider';
 import { testMailConfiguration } from './mail';
 import { listEvents, createEvent } from './events';
+import { getOrgLocale, setOrgLocale } from './locale';
 import { getCustomDomain, setCustomDomain, verifyCustomDomain, removeCustomDomain } from './custom-domain';
 
 // Handles every /organizations/* path. Returns null for anything it doesn't
@@ -35,6 +36,13 @@ export async function dispatchOrganizationsRoute(request: Request, env: Env, pat
   const brandingMatch = pathname.match(/^\/organizations\/([^/]+)\/branding$/);
   if (brandingMatch && request.method === 'PATCH') {
     return updateBranding(request, env, brandingMatch[1]);
+  }
+
+  const localeMatch = pathname.match(/^\/organizations\/([^/]+)\/locale$/);
+  if (localeMatch) {
+    if (request.method === 'GET') return getOrgLocale(request, env, localeMatch[1]);
+    if (request.method === 'PUT') return setOrgLocale(request, env, localeMatch[1]);
+    return null;
   }
 
   const customDomainVerifyMatch = pathname.match(/^\/organizations\/([^/]+)\/custom-domain\/verify$/);

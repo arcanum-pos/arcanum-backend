@@ -25,10 +25,12 @@
 // back as pending invites and reconnect on their first login).
 import type { Env } from './env';
 import { json } from './http';
+import { codedError, errorJson } from './errors';
 import { decryptWithKey, encryptWithKey, generateDataKey, wrapDataKey } from './organizations/crypto';
 import { extractCaller, requireOrgRole } from './organizations/auth';
 import { getOrgDataKey } from './organizations/organizations';
-import { mayCreateOrganizations, NOT_AN_INSTANCE_ADMIN } from './organizations/instance-admins';
+import { mayCreateOrganizations } from './organizations/instance-admins';
+import { toLocale } from './organizations/locale';
 
 export const EXPORT_FORMAT = 'arcanum-org-export';
 export const EXPORT_VERSION = 1;
@@ -207,10 +209,10 @@ async function exportOrg(request: Request, env: Env, orgId: string): Promise<Res
   if (auth.error) return auth.error;
   const includeSecrets = new URL(request.url).searchParams.get('secrets') === '1';
 
-  const org = await env.DB.prepare('SELECT id, name, logo_url, theme, created_at FROM organizations WHERE id = ?')
+  const org = await env.DB.prepare('SELECT id, name, logo_url, theme, locale, created_at FROM organizations WHERE id = ?')
     .bind(orgId)
-    .first<{ id: string; name: string; logo_url: string | null; theme: string | null; created_at: string }>();
-  if (!org) return json({ error: 'Organisatie niet gevonden' }, 404);
+    .first<{ id: string; name: string; logo_url: string | null; theme: string | null; locale: string; created_at: string }>();
+  if (!org) return errorJson('org_not_found', 404);
 
   const specs = EXPORT_TABLES.filter((s) => !s.secret || includeSecrets);
   const results = await env.DB.batch(
@@ -235,7 +237,8 @@ async function exportOrg(request: Request, env: Env, orgId: string): Promise<Res
     exportedAt: new Date().toISOString(),
     source: { orgId: org.id, installation: env.PUBLIC_BASE_URL },
     includesSecrets: includeSecrets,
-    organization: { name: org.name, logo_url: org.logo_url, theme: org.theme, created_at: org.created_at },
+    // `locale` was added without a version bump: an older file without it imports as 'nl'.
+    organization: { name: org.name, logo_url: org.logo_url, theme: org.theme, locale: org.locale, created_at: org.created_at },
     tables,
   };
   const slug = org.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'organisatie';
@@ -267,20 +270,20 @@ interface Manifest {
 async function startImport(request: Request, env: Env): Promise<Response> {
   const caller = extractCaller(request);
   if (!caller) return json({ error: 'Unauthorized' }, 401);
-  if (!mayCreateOrganizations(env, caller.email)) return json({ error: NOT_AN_INSTANCE_ADMIN }, 403);
+  if (!mayCreateOrganizations(env, caller.email)) return errorJson('not_instance_admin', 403);
   const body = ((await request.json().catch(() => null)) || {}) as { manifest?: any; name?: unknown };
   const manifest = body.manifest;
-  if (!manifest || manifest.format !== EXPORT_FORMAT) return json({ error: 'Dit is geen Arcanum-exportbestand' }, 400);
-  if (manifest.version !== EXPORT_VERSION) return json({ error: `Exportversie ${manifest.version} wordt niet ondersteund (verwacht ${EXPORT_VERSION})` }, 400);
+  if (!manifest || manifest.format !== EXPORT_FORMAT) return errorJson('not_an_export', 400);
+  if (manifest.version !== EXPORT_VERSION) return errorJson(codedError('export_version_unsupported', { version: manifest.version ?? null, expected: EXPORT_VERSION }), 400);
 
-  const org = (manifest.organization || {}) as { name?: unknown; logo_url?: unknown; theme?: unknown };
+  const org = (manifest.organization || {}) as { name?: unknown; logo_url?: unknown; theme?: unknown; locale?: unknown };
   const name = (typeof body.name === 'string' && body.name.trim()) || (typeof org.name === 'string' && org.name.trim()) || '';
-  if (!name || name.length > 100) return json({ error: 'De organisatie heeft een naam nodig (max 100 tekens)' }, 400);
+  if (!name || name.length > 100) return errorJson('org_name_required', 400);
 
   const counts: Record<string, number> = {};
   for (const spec of EXPORT_TABLES) {
     const n = Number(manifest.counts?.[spec.table] ?? 0);
-    if (!Number.isInteger(n) || n < 0) return json({ error: `Ongeldig aantal voor ${spec.table}` }, 400);
+    if (!Number.isInteger(n) || n < 0) return errorJson(codedError('import_invalid_count', { table: spec.table }), 400);
     counts[spec.table] = n;
   }
 
@@ -289,13 +292,15 @@ async function startImport(request: Request, env: Env): Promise<Response> {
   const wrapped = await wrapDataKey(generateDataKey(), env.ENCRYPTION_KEY);
   await env.DB.batch([
     env.DB.prepare(
-      `INSERT INTO organizations (id, name, logo_url, theme, dek_ciphertext, dek_iv, created_at, created_by_sub, import_status, import_key, import_manifest)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'importing', ?, ?)`
+      `INSERT INTO organizations (id, name, logo_url, theme, locale, dek_ciphertext, dek_iv, created_at, created_by_sub, import_status, import_key, import_manifest)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'importing', ?, ?)`
     ).bind(
       orgId,
       name,
       typeof org.logo_url === 'string' ? org.logo_url : null,
       typeof org.theme === 'string' ? org.theme : null,
+      // Missing (an export from before locales) or unknown: Dutch.
+      toLocale(org.locale),
       wrapped.ciphertext,
       wrapped.iv,
       now,
@@ -321,13 +326,13 @@ async function importChunk(request: Request, env: Env, orgId: string): Promise<R
   const auth = await authorizeAdmin(request, env, orgId);
   if (auth.error) return auth.error;
   const state = await loadImportingOrg(env, orgId);
-  if (!state || state.import_status !== 'importing' || !state.import_key) return json({ error: 'Deze organisatie wordt niet (meer) geïmporteerd' }, 409);
+  if (!state || state.import_status !== 'importing' || !state.import_key) return errorJson('not_importing', 409);
 
   const body = ((await request.json().catch(() => null)) || {}) as { table?: unknown; rows?: unknown };
   const spec = typeof body.table === 'string' ? SPEC_BY_TABLE.get(body.table) : undefined;
-  if (!spec) return json({ error: 'Onbekende tabel' }, 400);
+  if (!spec) return errorJson('import_unknown_table', 400);
   if (!Array.isArray(body.rows)) return json({ error: 'rows must be an array' }, 400);
-  if (body.rows.length > MAX_CHUNK_ROWS) return json({ error: `Maximaal ${MAX_CHUNK_ROWS} rijen per stuk` }, 400);
+  if (body.rows.length > MAX_CHUNK_ROWS) return errorJson(codedError('import_too_many_chunk_rows', { max: MAX_CHUNK_ROWS }), 400);
   if (body.rows.length === 0) return json({ ok: true, inserted: 0 });
 
   const key = state.import_key;
@@ -365,7 +370,7 @@ async function importChunk(request: Request, env: Env, orgId: string): Promise<R
   }
   if (spec.secret) {
     const dek = await getOrgDataKey(env, orgId);
-    if (!dek) return json({ error: 'Organisatie niet gevonden' }, 404);
+    if (!dek) return errorJson('org_not_found', 404);
     const raw = body.rows as Record<string, unknown>[];
     const secretCols =
       spec.secret === 'payment' ? ['config_ciphertext', 'config_iv'] : spec.secret === 'smtp' ? ['password_ciphertext', 'password_iv'] : ['private_key_ciphertext', 'private_key_iv'];
@@ -396,7 +401,7 @@ async function finishImport(request: Request, env: Env, orgId: string): Promise<
   const auth = await authorizeAdmin(request, env, orgId);
   if (auth.error) return auth.error;
   const state = await loadImportingOrg(env, orgId);
-  if (!state || state.import_status !== 'importing') return json({ error: 'Deze organisatie wordt niet (meer) geïmporteerd' }, 409);
+  if (!state || state.import_status !== 'importing') return errorJson('not_importing', 409);
   const manifest = JSON.parse(state.import_manifest || '{"counts":{}}') as Manifest;
 
   const results = await env.DB.batch(EXPORT_TABLES.map((s) => env.DB.prepare(`SELECT COUNT(*) AS n FROM ${s.table} WHERE org_id = ?`).bind(orgId)));
@@ -421,7 +426,7 @@ async function abortImport(request: Request, env: Env, orgId: string): Promise<R
   const auth = await authorizeAdmin(request, env, orgId);
   if (auth.error) return auth.error;
   const state = await loadImportingOrg(env, orgId);
-  if (!state || state.import_status !== 'importing') return json({ error: 'Alleen een onafgewerkte import kan geannuleerd worden' }, 409);
+  if (!state || state.import_status !== 'importing') return errorJson('import_not_abortable', 409);
   // Reverse foreign-key order; memberships go last (they carry the admin
   // check), then the org itself.
   const tables = EXPORT_TABLES.map((s) => s.table).filter((t) => t !== 'memberships').reverse();

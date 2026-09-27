@@ -10,6 +10,7 @@
 //    BFF's service binding.
 import type { Env } from '../env';
 import { json } from '../http';
+import { errorJson } from '../errors';
 import { extractCaller, requireOrgRole } from './auth';
 import { getOrgDataKey, resolveOrgId } from './organizations';
 import { encryptWithKey, decryptWithKey } from './crypto';
@@ -82,13 +83,7 @@ export async function setIdentityProvider(request: Request, env: Env, orgId: str
   if (body.issuerUrl) {
     endpoints = await resolveOidcDiscovery(body.issuerUrl);
     if (!endpoints) {
-      return json(
-        {
-          error:
-            'Kon de issuer-URL niet bereiken, of deze ondersteunt geen apparaatcode-aanmelding (vereist voor de kassa-toestellen).',
-        },
-        400
-      );
+      return errorJson('idp_discovery_failed', 400);
     }
   }
 
