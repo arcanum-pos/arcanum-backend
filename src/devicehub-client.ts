@@ -2,6 +2,7 @@
 // Worker (arcanum-devicehub) — kept apart from payment processing on purpose.
 // This module only ever asks it to broadcast an event; it carries no
 // business data, same as before.
+import { waitUntil } from 'cloudflare:workers';
 import type { Env } from './env';
 
 function internalKeyHeader(env: Env): Record<string, string> {
@@ -38,5 +39,40 @@ export async function broadcastPaymentEvent(
     // A notification failure must never fail the payment request itself —
     // worst case, the POS/CFD/sim falls back to noticing on next interaction.
     console.error('Kon devicehub niet bereiken voor melding', err);
+  }
+}
+
+// Pushes an event to every connected device of one role across a whole org
+// (devicehub tags each socket with its org + role) — for things that belong
+// to the org rather than to one POS, like tabs. Best-effort, same as above.
+export async function broadcastOrgEvent(
+  env: Env,
+  orgId: string,
+  event: string,
+  payload: Record<string, unknown>,
+  role: 'pos' | 'cfd' | 'sim' = 'pos'
+): Promise<void> {
+  try {
+    const res = await callDeviceHub(env, '/devices/broadcast-org', {
+      method: 'POST',
+      body: JSON.stringify({ org_id: orgId, role, event, payload }),
+    });
+    if (!res.ok) console.error(`devicehub weigerde melding ${event}: ${res.status}`);
+  } catch (err) {
+    console.error('Kon devicehub niet bereiken voor melding', err);
+  }
+}
+
+// `tabs_changed { tab_id }` to every kassa of the org, after any change to a
+// tab (its lines, name, split, or a payment on it) — so another kassa
+// reloads it instead of waiting for focus/switch. Not awaited: handed to
+// waitUntil, so the push adds no latency to the request that caused it and
+// still completes after the response is sent.
+export function notifyTabChanged(env: Env, orgId: string, tabId: string): void {
+  const push = broadcastOrgEvent(env, orgId, 'tabs_changed', { tab_id: tabId });
+  try {
+    waitUntil(push);
+  } catch {
+    // Outside a request context: the push still runs, just unguarded.
   }
 }

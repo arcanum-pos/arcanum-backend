@@ -3,7 +3,7 @@
 // /sumup/confirm, the generic resolveCharge path: the real callback needs a
 // genuine ES256 JWS from Bancontact, which isn't faked here.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { api, confirmCharge, createTab, DEVICE, getTab, line, payCash, rows, seedOrg, type TestOrg } from './helpers';
+import { api, confirmCharge, createTab, DEVICE, getTab, line, payCash, recordedCalls, rows, seedOrg, type TestOrg } from './helpers';
 
 const BANCONTACT_HOST = 'merchant.api.preprod.bancontact.net';
 
@@ -61,6 +61,21 @@ async function openTab(org: TestOrg) {
 }
 
 describe('bancontact tab payments', () => {
+  it("tells the org's kassas the tab has a payment pending (tabs_changed)", async () => {
+    const org = await orgWithBancontact();
+    const tab = await openTab(org);
+    const res = await payBancontact(org, tab.id, 1150);
+    expect(res.status).toBe(201);
+    let pushes: { body: any }[] = [];
+    // Handed to waitUntil: may land just after the response.
+    for (let i = 0; i < 50 && pushes.length < 2; i++) {
+      pushes = (await recordedCalls('devicehub')).filter((c) => c.path === '/devices/broadcast-org' && c.body?.org_id === org.orgId);
+      if (pushes.length < 2) await new Promise((r) => setTimeout(r, 10));
+    }
+    // One for opening the tab, one for the payment.
+    expect(pushes.map((p) => p.body.payload)).toEqual([{ tab_id: tab.id }, { tab_id: tab.id }]);
+  });
+
   it('charges outstanding + tip at Bancontact and stores the tip on the charge', async () => {
     const org = await orgWithBancontact();
     const tab = await openTab(org);

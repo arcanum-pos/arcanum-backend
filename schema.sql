@@ -272,6 +272,8 @@ CREATE INDEX IF NOT EXISTS idx_charge_lines_tab ON charge_lines(tab_id);
 CREATE INDEX IF NOT EXISTS idx_charge_lines_line ON charge_lines(line_id);
 CREATE INDEX IF NOT EXISTS idx_charges_status ON charges(status);
 CREATE INDEX IF NOT EXISTS idx_charges_method_provider_ref ON charges(method, provider_ref);
+-- A tab's charges by tab (tab summaries: paid amount, methods) — migration 0021.
+CREATE INDEX IF NOT EXISTS idx_charges_tab_status ON charges(tab_id, status);
 
 -- --- Tabs / orders (see tabs.ts, DOMAIN_MODEL.md) ---
 
@@ -497,3 +499,4 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0017_org_import.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0018_split_payments.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0019_charge_lines.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0020_org_locale.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0021_charges_tab_index.sql');

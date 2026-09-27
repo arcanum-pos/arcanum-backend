@@ -18,7 +18,7 @@
 import type { Env } from '../env';
 import { json } from '../http';
 import { errorJson, providerErrorJson } from '../errors';
-import { broadcastPaymentEvent } from '../devicehub-client';
+import { broadcastPaymentEvent, notifyTabChanged } from '../devicehub-client';
 import { getDecryptedPaymentCredential } from '../organizations/payment-credentials';
 import { createSumupReaderCheckout, SumupCloudApiError, listSumupReaders } from './sumup-cloud-api';
 import { createCharge, getCharge, parseTipCents, setChargeProviderRef, resolveCharge, type ChargeRecord } from './charges';
@@ -132,9 +132,10 @@ export async function createSumupCharge(request: Request, env: Env): Promise<Res
     throw err;
   }
 
-  if (method === 'sumup' && body.readerId) {
-    await dispatchToReader(env, charge, String(body.readerId));
-  }
+  // A dispatch that fails resolves the charge (failed) right away, and
+  // resolveCharge already tells the org's kassas about the tab then.
+  const resolved = method === 'sumup' && body.readerId ? await dispatchToReader(env, charge, String(body.readerId)) : false;
+  if (tabId && !resolved) notifyTabChanged(env, orgId, tabId);
 
   // Unconditional — not just on a successful reader dispatch. This is what
   // actually makes expireStaleCharges' time-out backstop apply to every
@@ -154,13 +155,14 @@ export async function createSumupCharge(request: Request, env: Env): Promise<Res
   return json({ chargeId: charge.id }, 201);
 }
 
-async function dispatchToReader(env: Env, charge: ChargeRecord, readerId: string): Promise<void> {
+// True when the dispatch failed and the charge was resolved (as failed) here.
+async function dispatchToReader(env: Env, charge: ChargeRecord, readerId: string): Promise<boolean> {
   const credential = await getDecryptedPaymentCredential(env, charge.orgId, 'sumup');
   const merchantId = credential?.merchantId ? String(credential.merchantId) : '';
   const apiKey = credential?.apiKey ? String(credential.apiKey) : '';
   if (!merchantId || !apiKey) {
     await resolveCharge(env, charge.id, { success: false, errorMessage: 'SumUp cloud-API niet geconfigureerd voor deze organisatie' });
-    return;
+    return true;
   }
 
   const callbackToken = crypto.randomUUID();
@@ -177,9 +179,11 @@ async function dispatchToReader(env: Env, charge: ChargeRecord, readerId: string
     });
     await setChargeProviderRef(env, charge.id, checkout.checkoutId, { readerId, callbackToken });
     await ensureChargePolling(env); // fallback sweep in case the callback above never arrives
+    return false;
   } catch (err) {
     const message = err instanceof SumupCloudApiError ? err.message : 'Kon betaling niet naar SumUp-reader sturen';
     await resolveCharge(env, charge.id, { success: false, errorMessage: message });
+    return true;
   }
 }
 

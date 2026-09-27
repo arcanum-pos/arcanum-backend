@@ -12,7 +12,7 @@
 import type { Env } from '../env';
 import { json } from '../http';
 import { errorJson } from '../errors';
-import { broadcastPaymentEvent } from '../devicehub-client';
+import { broadcastPaymentEvent, notifyTabChanged } from '../devicehub-client';
 import { getDecryptedPaymentCredential } from '../organizations/payment-credentials';
 import { verifyBancontactCallback } from './bancontact-jws';
 import { createCharge, getCharge, parseTipCents, resolveCharge, updateChargeProviderStatus } from './charges';
@@ -166,6 +166,8 @@ export async function createPayment(request: Request, env: Env): Promise<Respons
   if (posTerminalId) {
     await broadcastPaymentEvent(env, posTerminalId, 'payment_updated', { payment_id: charge.id, method: 'bancontact' });
   }
+  // Every kassa of the org: this tab now has a payment pending.
+  if (tabId) notifyTabChanged(env, orgId, tabId);
 
   return json(
     {

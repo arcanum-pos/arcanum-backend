@@ -7,7 +7,7 @@
 // callback and the poller racing to resolve the same charge is safe without
 // needing a Durable Object for coordination.
 import type { Env } from '../env';
-import { broadcastPaymentEvent } from '../devicehub-client';
+import { broadcastPaymentEvent, notifyTabChanged } from '../devicehub-client';
 import { recordChargeTransaction } from '../transactions';
 import { settleTab } from '../tabs';
 import { jsonRowsStatement, present } from '../sql-json';
@@ -277,6 +277,9 @@ export async function resolveCharge(env: Env, id: string, outcome: ResolveOutcom
       await recordChargeTransaction(env, record);
       if (record.tabId) await settleTab(env, record.tabId, record.splitPart > 0);
     }
+    // Every kassa of the org: the tab's paymentPending (and, on success,
+    // paid/outstanding/split/status) just changed — failed and expired too.
+    if (record.tabId) notifyTabChanged(env, record.orgId, record.tabId);
   }
 
   return { record, alreadyResolved };

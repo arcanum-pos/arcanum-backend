@@ -27,6 +27,7 @@ import { codedError, errorBody, errorJson, type CodedError } from './errors';
 import { extractCaller, requireOrgRole } from './organizations/auth';
 import { displayName } from './catalog';
 import { jsonRowsStatement } from './sql-json';
+import { notifyTabChanged } from './devicehub-client';
 
 type TabStatus = 'open' | 'closed' | 'cancelled';
 
@@ -55,6 +56,9 @@ interface TabSummaryRow extends TabRow {
   total_cents: number;
   paid_cents: number;
   payment_pending: number;
+  // JSON array, see METHODS_SQL.
+  methods: string | null;
+  item_count: number;
 }
 
 interface OrderRow {
@@ -107,7 +111,18 @@ const PENDING_SQL = `EXISTS (SELECT 1 FROM charges WHERE tab_id = tabs.id AND st
 const PAID_UNITS_SQL = (lineRef: string) =>
   `(SELECT COALESCE(SUM(cl.quantity), 0) FROM charge_lines cl JOIN charges c ON c.id = cl.charge_id WHERE cl.line_id = ${lineRef} AND c.status = 'succeeded')`;
 
-const SUMMARY_SELECT = `SELECT tabs.*, ${TOTAL_SQL} AS total_cents, ${PAID_SQL} AS paid_cents, ${PENDING_SQL} AS payment_pending, (SELECT name FROM events WHERE events.id = tabs.event_id) AS event_name FROM tabs`;
+// The distinct methods of the tab's succeeded payments, in the order first
+// paid — as a JSON array (one column, so still one query for the whole list).
+const METHODS_SQL = `(SELECT json_group_array(method) FROM (
+  SELECT method, MIN(COALESCE(resolved_at, created_at)) AS first_paid FROM charges WHERE tab_id = tabs.id AND status = 'succeeded'
+  GROUP BY method ORDER BY first_paid))`;
+// Units still on the tab: void lines carry negative quantities (and their
+// original's item_code), so a plain sum is already net of voids. Legacy fooi
+// lines hold an amount, not units — left out.
+const ITEM_COUNT_SQL = `(SELECT COALESCE(SUM(quantity), 0) FROM order_lines WHERE tab_id = tabs.id AND (item_code IS NULL OR item_code <> 'fooi'))`;
+
+const SUMMARY_SELECT = `SELECT tabs.*, ${TOTAL_SQL} AS total_cents, ${PAID_SQL} AS paid_cents, ${PENDING_SQL} AS payment_pending,
+  ${METHODS_SQL} AS methods, ${ITEM_COUNT_SQL} AS item_count, (SELECT name FROM events WHERE events.id = tabs.event_id) AS event_name FROM tabs`;
 
 // "Gelijk verdelen": the next part is what's open ÷ parts left, rounded
 // down — the last part is whatever remains, so rounding never leaves a cent
@@ -144,6 +159,9 @@ function rowToTabSummary(row: TabSummaryRow) {
     outstandingCents: row.total_cents - row.paid_cents,
     paymentPending: !!row.payment_pending,
     split: splitState(row),
+    // 'cash' | 'sumup' | 'bancontact', of succeeded payments, first paid first.
+    methods: row.methods ? (JSON.parse(row.methods) as string[]) : [],
+    itemCount: row.item_count,
   };
 }
 
@@ -436,13 +454,34 @@ async function refusalResponse(env: Env, orgId: string, tabId: string): Promise<
   return errorJson('tab_changed', 409, { tab });
 }
 
-// GET /organizations/:orgId/tabs?status=open|closed|cancelled
+// GET /organizations/:orgId/tabs?status=open|closed|cancelled|all&since=<ISO>
+// status defaults to open (the kassa's tab strip). `since` is for "today's
+// bills": tabs opened or closed at/after it, plus any still open whenever
+// they were opened — newest opened first.
 async function listTabs(request: Request, env: Env, orgId: string): Promise<Response> {
-  const status = new URL(request.url).searchParams.get('status') || 'open';
-  if (!['open', 'closed', 'cancelled'].includes(status)) return json({ error: 'status must be open, closed or cancelled' }, 400);
+  const params = new URL(request.url).searchParams;
+  const status = params.get('status') || 'open';
+  if (!['open', 'closed', 'cancelled', 'all'].includes(status)) return json({ error: 'status must be open, closed, cancelled or all' }, 400);
 
-  const { results } = await env.DB.prepare(`${SUMMARY_SELECT} WHERE tabs.org_id = ? AND tabs.status = ? ORDER BY tabs.number DESC LIMIT 200`)
-    .bind(orgId, status)
+  const where = ['tabs.org_id = ?'];
+  const binds: unknown[] = [orgId];
+  if (status !== 'all') {
+    where.push('tabs.status = ?');
+    binds.push(status);
+  }
+  const sinceParam = params.get('since');
+  if (sinceParam !== null) {
+    const since = /^\d{4}-\d{2}-\d{2}/.test(sinceParam) ? Date.parse(sinceParam) : NaN;
+    if (Number.isNaN(since)) return json({ error: 'since must be an ISO timestamp' }, 400);
+    // Normalized, since opened_at/closed_at are compared as toISOString() text.
+    where.push(`(tabs.opened_at >= ? OR tabs.closed_at >= ? OR tabs.status = 'open')`);
+    const iso = new Date(since).toISOString();
+    binds.push(iso, iso);
+  }
+  const order = sinceParam !== null ? 'tabs.opened_at DESC, tabs.number DESC' : 'tabs.number DESC';
+
+  const { results } = await env.DB.prepare(`${SUMMARY_SELECT} WHERE ${where.join(' AND ')} ORDER BY ${order} LIMIT 200`)
+    .bind(...binds)
     .all<TabSummaryRow>();
   return json((results || []).map(rowToTabSummary));
 }
@@ -510,6 +549,7 @@ async function createTab(request: Request, env: Env, orgId: string): Promise<Res
   }
 
   await env.DB.batch(statements);
+  notifyTabChanged(env, orgId, tabId);
   return json(await loadTabDetail(env, orgId, tabId), 201);
 }
 
@@ -526,6 +566,7 @@ async function renameTab(request: Request, env: Env, orgId: string, tabId: strin
 
   const result = await env.DB.prepare(`UPDATE tabs SET label = ? WHERE id = ? AND org_id = ? AND status = 'open'`).bind(label, tabId, orgId).run();
   if ((result.meta.changes || 0) === 0) return refusalResponse(env, orgId, tabId);
+  notifyTabChanged(env, orgId, tabId);
   return json(await loadTabDetail(env, orgId, tabId));
 }
 
@@ -551,6 +592,7 @@ async function addOrder(request: Request, env: Env, orgId: string, tabId: string
   ]);
 
   if ((orderResult.meta.changes || 0) === 0) return refusalResponse(env, orgId, tabId);
+  notifyTabChanged(env, orgId, tabId);
   return json(await loadTabDetail(env, orgId, tabId), 201);
 }
 
@@ -614,6 +656,7 @@ async function voidLine(request: Request, env: Env, orgId: string, tabId: string
     }
     return refusalResponse(env, orgId, tabId);
   }
+  notifyTabChanged(env, orgId, tabId);
   return json(await loadTabDetail(env, orgId, tabId), 201);
 }
 
@@ -637,6 +680,7 @@ async function setSplit(request: Request, env: Env, orgId: string, tabId: string
     if (tab && tab.status === 'open' && !tab.paymentPending) return errorJson('split_too_small', 409, { tab });
     return refusalResponse(env, orgId, tabId);
   }
+  notifyTabChanged(env, orgId, tabId);
   return json(await loadTabDetail(env, orgId, tabId));
 }
 
@@ -662,6 +706,7 @@ async function cancelTab(request: Request, env: Env, orgId: string, tabId: strin
     }
     return refusalResponse(env, orgId, tabId);
   }
+  notifyTabChanged(env, orgId, tabId);
   return json(await loadTabDetail(env, orgId, tabId));
 }
 
