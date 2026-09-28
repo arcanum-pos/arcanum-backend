@@ -89,7 +89,10 @@ CREATE TABLE IF NOT EXISTS organizations (
   import_manifest TEXT,
   -- Default language (see organizations/locale.ts): the org's screens and
   -- the mails it sends, until a user picks their own.
-  locale TEXT NOT NULL DEFAULT 'nl' CHECK (locale IN ('nl', 'fr', 'en'))
+  locale TEXT NOT NULL DEFAULT 'nl' CHECK (locale IN ('nl', 'fr', 'en')),
+  -- 'N' = arcanum-cleaner deletes this org (every row of it) once it's 4 hours
+  -- old; any other value, NULL included, keeps it (migration 0022).
+  is_locked TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_organizations_custom_domain ON organizations(custom_domain);
 
@@ -500,3 +503,4 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0018_split_payments.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0019_charge_lines.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0020_org_locale.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0021_charges_tab_index.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0022_org_is_locked.sql');
