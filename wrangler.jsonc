@@ -24,7 +24,20 @@
 		// validated custom domain proxies straight through with no further
 		// per-hostname routing step. Not secret — paired with the
 		// CLOUDFLARE_API_TOKEN secret (Zone > SSL and Certificates > Edit).
-		"CLOUDFLARE_ZONE_ID": "f68954584752839bfd85b0b143ed6f9d"
+		"CLOUDFLARE_ZONE_ID": "f68954584752839bfd85b0b143ed6f9d",
+		// This installation is the demo instance (HOSTING_PLAN.md): no new orgs
+		// from the console — demo orgs come only from the bootstrapper, via
+		// POST /internal/demo-orgs (bearer BOOTSTRAP_API_KEY, a secret). Own
+		// instances get "single" from the installer instead (arcanum-releases
+		// components.mjs), never this value. See organizations/org-creation.ts.
+		"ORG_CREATION": "internal",
+		// A demo org's lifetime as shown in its banner — keep equal to
+		// arcanum-cleaner's MIN_AGE_HOURS, which does the actual deleting.
+		"DEMO_LIFETIME_HOURS": "4",
+		// Most live demo orgs at once (Free-plan quotas are per account).
+		"DEMO_MAX_LIVE": "20",
+		// The demo banner's "Eigen installatie" link: the bootstrapper.
+		"DEMO_INSTALL_URL": "https://start.kaboutersoft.be"
 	},
 	"services": [
 		{

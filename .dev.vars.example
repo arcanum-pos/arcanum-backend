@@ -44,3 +44,11 @@ DEFAULT_SMTP_PASS=
 DEFAULT_SMTP_FROM_ADDRESS=
 DEFAULT_SMTP_FROM_NAME=Arcanum
 
+
+# wrangler.jsonc makes this the demo instance (ORG_CREATION=internal: no new
+# orgs from the console). Locally you usually want the default kind back —
+# see src/organizations/org-creation.ts.
+ORG_CREATION=admins
+# Bearer key for POST /internal/demo-orgs (the bootstrapper's demo orgs; only
+# with ORG_CREATION=internal) — see src/demo-orgs.ts. Unset = refused.
+BOOTSTRAP_API_KEY=

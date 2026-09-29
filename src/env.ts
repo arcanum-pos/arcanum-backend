@@ -31,6 +31,23 @@ export interface Env {
   // Self-hosted installations: who may create/import orgs (see
   // organizations/instance-admins.ts). Unset = anyone who can log in.
   INSTANCE_ADMIN_EMAILS?: string;
+  // What kind of installation this is, for creating orgs: 'admins' (unset:
+  // the allowlist above), 'single' (own instance: its first org only) or
+  // 'internal' (demo instance: only POST /internal/demo-orgs). See
+  // organizations/org-creation.ts.
+  ORG_CREATION?: string;
+  // Demo orgs (demo-orgs.ts, only with ORG_CREATION=internal). The lifetime
+  // shown to the user (organization JSON `demo.expiresAt`) — keep it equal
+  // to arcanum-cleaner's MIN_AGE_HOURS, which does the actual deleting.
+  // Default 4.
+  DEMO_LIFETIME_HOURS?: string;
+  // Most live demo orgs at once (default 20) — Free-plan quotas are per account.
+  DEMO_MAX_LIVE?: string;
+  // Where a demo's "Eigen installatie" link points (the bootstrapper); unset = no link.
+  DEMO_INSTALL_URL?: string;
+  // The bootstrapper's bearer key for POST /internal/demo-orgs. Unset = the
+  // endpoint refuses everything.
+  BOOTSTRAP_API_KEY?: string;
   // Seeds the platform-default identity provider (the fallback used by any
   // org that hasn't configured its own, and by the very first bootstrap
   // admin before any org exists) — see organizations/idp-resolution.ts

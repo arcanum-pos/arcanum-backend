@@ -9,6 +9,7 @@ import { getMailProvider, setMailProvider } from './mail-provider';
 import { testMailConfiguration } from './mail';
 import { listEvents, createEvent } from './events';
 import { getOrgLocale, setOrgLocale } from './locale';
+import { getCapabilities } from './org-creation';
 import { getCustomDomain, setCustomDomain, verifyCustomDomain, removeCustomDomain } from './custom-domain';
 
 // Handles every /organizations/* path. Returns null for anything it doesn't
@@ -25,6 +26,11 @@ export async function dispatchOrganizationsRoute(request: Request, env: Env, pat
   // "memberships" would otherwise be parsed as an organization id.
   if (pathname === '/organizations/memberships' && request.method === 'GET') {
     return listMyMemberships(request, env);
+  }
+
+  // Same reason: "capabilities" isn't an organization id.
+  if (pathname === '/organizations/capabilities' && request.method === 'GET') {
+    return getCapabilities(request, env);
   }
 
   const orgMatch = pathname.match(/^\/organizations\/([^/]+)$/);

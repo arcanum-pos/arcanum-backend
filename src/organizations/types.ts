@@ -38,6 +38,9 @@ export interface OrganizationRow {
   custom_domain_ssl_status: string | null;
   // 'nl' | 'fr' | 'en' — see organizations/locale.ts.
   locale: string;
+  // 'N' = a demo org, deleted by arcanum-cleaner after DEMO_LIFETIME_HOURS
+  // (see organizations/demo.ts); anything else, NULL included, keeps it.
+  is_locked: string | null;
 }
 
 export interface MembershipRow {

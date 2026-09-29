@@ -1,4 +1,5 @@
-// Who may create (or import) an organization on this installation.
+// Who may create (or import) an organization on this installation — within
+// what ORG_CREATION allows at all (org-creation.ts, which calls this).
 //
 // INSTANCE_ADMIN_EMAILS unset/empty = anyone who can log in (the shared
 // platform's self-service behaviour). Set on a self-hosted installation, it

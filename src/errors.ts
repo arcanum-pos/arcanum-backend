@@ -85,6 +85,10 @@ export const ERROR_TEXTS = {
   // --- Organisations, export / import ---
   org_not_found: 'Organisatie niet gevonden',
   not_instance_admin: 'Alleen de beheerders van deze installatie kunnen een organisatie aanmaken of importeren',
+  // ORG_CREATION says no (demo instance, or an own instance that already has its org) — see organizations/org-creation.ts.
+  org_creation_disabled: 'Op deze installatie kunnen geen nieuwe organisaties aangemaakt worden',
+  // Too many live demo orgs at once (DEMO_MAX_LIVE) — see demo-orgs.ts.
+  demo_limit_reached: 'Er lopen nu te veel demo\'s tegelijk — probeer het over een tijdje opnieuw',
   not_an_export: 'Dit is geen Arcanum-exportbestand',
   export_version_unsupported: 'Exportversie {version} wordt niet ondersteund (verwacht {expected})',
   org_name_required: 'De organisatie heeft een naam nodig (max 100 tekens)',

@@ -1,14 +1,15 @@
 import type { Env } from '../env';
 import { json } from '../http';
 import { extractCaller, requireOrgRole } from './auth';
-import { mayCreateOrganizations } from './instance-admins';
+import { NO_ORG_YET_SQL, orgCreationMode, orgCreationRefusal } from './org-creation';
+import { demoInfo } from './demo';
 import { errorJson } from '../errors';
 import { reconcilePendingInvites } from './invite-reconciliation';
 import { generateDataKey, wrapDataKey, unwrapDataKey } from './crypto';
 import { toLocale } from './locale';
 import type { OrganizationRow } from './types';
 
-function rowToOrganization(row: OrganizationRow) {
+function rowToOrganization(row: OrganizationRow, env: Env) {
   return {
     id: row.id,
     name: row.name,
@@ -20,6 +21,8 @@ function rowToOrganization(row: OrganizationRow) {
     customDomainSslStatus: row.custom_domain_ssl_status,
     importStatus: row.import_status ?? null,
     locale: toLocale(row.locale),
+    // Non-null only for a demo org (is_locked = 'N') — see demo.ts.
+    demo: demoInfo(env, row),
   };
 }
 
@@ -43,7 +46,8 @@ export async function createOrganization(request: Request, env: Env): Promise<Re
   const caller = extractCaller(request);
   if (!caller) return json({ error: 'Unauthorized' }, 401);
 
-  if (!mayCreateOrganizations(env, caller.email)) return errorJson('not_instance_admin', 403);
+  const refusal = await orgCreationRefusal(env, caller);
+  if (refusal) return errorJson(refusal, 403);
 
   const body = (await request.json().catch(() => ({}))) as { name?: string };
   const name = (body.name || '').trim();
@@ -55,19 +59,24 @@ export async function createOrganization(request: Request, env: Env): Promise<Re
   const orgId = crypto.randomUUID();
   const now = new Date().toISOString();
 
-  await env.DB.batch([
+  // Single mode: the "no org yet" check above is repeated as the INSERT's
+  // own guard, so two concurrent first creates can't both get through; the
+  // membership only follows an org row that was actually written.
+  const guard = orgCreationMode(env) === 'single' ? NO_ORG_YET_SQL : '1';
+  const [inserted] = await env.DB.batch([
     env.DB.prepare(
-      'INSERT INTO organizations (id, name, logo_url, theme, dek_ciphertext, dek_iv, created_at, created_by_sub) VALUES (?, ?, NULL, NULL, ?, ?, ?, ?)'
+      `INSERT INTO organizations (id, name, logo_url, theme, dek_ciphertext, dek_iv, created_at, created_by_sub) SELECT ?, ?, NULL, NULL, ?, ?, ?, ? WHERE ${guard}`
     ).bind(orgId, name, wrapped.ciphertext, wrapped.iv, now, caller.sub),
     // Creator becomes the organization's first admin automatically — already
     // "active" (not "pending") since we already know their sub.
     env.DB.prepare(
-      'INSERT INTO memberships (id, org_id, user_sub, issuer, invited_email, role, status, invited_at, accepted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
-    ).bind(crypto.randomUUID(), orgId, caller.sub, caller.issuer, caller.email, 'admin', 'active', now, now),
+      'INSERT INTO memberships (id, org_id, user_sub, issuer, invited_email, role, status, invited_at, accepted_at) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM organizations WHERE id = ?)'
+    ).bind(crypto.randomUUID(), orgId, caller.sub, caller.issuer, caller.email, 'admin', 'active', now, now, orgId),
   ]);
+  if ((inserted.meta.changes || 0) === 0) return errorJson('org_creation_disabled', 403);
 
   const row = await env.DB.prepare('SELECT * FROM organizations WHERE id = ?').bind(orgId).first<OrganizationRow>();
-  return json(rowToOrganization(row!), 201);
+  return json(rowToOrganization(row!, env), 201);
 }
 
 // The admin portal's landing list: organizations where the caller is an
@@ -89,7 +98,7 @@ export async function listMyOrganizations(request: Request, env: Env): Promise<R
     .bind(caller.issuer, caller.sub)
     .all<OrganizationRow>();
 
-  return json((results || []).map(rowToOrganization));
+  return json((results || []).map((r) => rowToOrganization(r, env)));
 }
 
 // All active memberships for the caller, any role — distinct from
@@ -123,7 +132,7 @@ export async function getOrganization(request: Request, env: Env, orgId: string)
 
   const row = await env.DB.prepare('SELECT * FROM organizations WHERE id = ?').bind(orgId).first<OrganizationRow>();
   if (!row) return json({ error: 'Unknown organization' }, 404);
-  return json(rowToOrganization(row));
+  return json(rowToOrganization(row, env));
 }
 
 export async function updateBranding(request: Request, env: Env, orgId: string): Promise<Response> {
@@ -158,7 +167,7 @@ export async function updateBranding(request: Request, env: Env, orgId: string):
     .run();
 
   const row = await env.DB.prepare('SELECT * FROM organizations WHERE id = ?').bind(orgId).first<OrganizationRow>();
-  return json(rowToOrganization(row!));
+  return json(rowToOrganization(row!, env));
 }
 
 // Internal helper for identity-providers.ts / payment-credentials.ts: gets

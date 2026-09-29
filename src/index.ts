@@ -8,6 +8,7 @@
 //   catalog-import.ts                            — menukaart import/export (spreadsheet rows)
 //   reports.ts                                   — sales report
 //   org-transfer.ts                              — org data export / import (self-hosting move)
+//   demo-orgs.ts                                 — demo orgs for the bootstrapper (internal, bearer key)
 //   devicehub-client.ts                          — outbound calls to arcanum-devicehub
 //   organizations/                                — multi-tenant admin portal backend
 // Kept as file-level modules within one deployed Worker rather than split into
@@ -29,6 +30,7 @@ import { dispatchCatalogRoute } from './catalog';
 import { dispatchCatalogImportRoute } from './catalog-import';
 import { dispatchReportsRoute } from './reports';
 import { dispatchOrgTransferRoute } from './org-transfer';
+import { dispatchDemoOrgsRoute } from './demo-orgs';
 import { QueryBudgetExceeded, withQueryBudget } from './query-budget';
 
 // Durable Object classes must be a named export of the Worker's main entry
@@ -88,6 +90,14 @@ export default {
 
       if (request.method === 'GET' && url.pathname === '/transactions') {
         return await listTransactions(request, env);
+      }
+
+      // The bootstrapper's service-binding calls — gated by BOOTSTRAP_API_KEY
+      // and ORG_CREATION=internal, never reachable with a browser session
+      // (see demo-orgs.ts's header for why the bff can't get a caller here).
+      if (url.pathname.startsWith('/internal/')) {
+        const demoResponse = await dispatchDemoOrgsRoute(request, env, url.pathname);
+        if (demoResponse) return demoResponse;
       }
 
       if (url.pathname.startsWith('/organizations')) {

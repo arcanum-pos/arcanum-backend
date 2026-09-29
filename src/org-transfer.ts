@@ -2,7 +2,7 @@
 // (self-hosting), or copying it within this one.
 //
 //   GET  /organizations/:orgId/export[?secrets=1]   (admin) → one readable JSON file
-//   POST /organizations/import/start                (any logged-in user, like creating an org)
+//   POST /organizations/import/start                (whoever may create an org — see organizations/org-creation.ts)
 //   POST /organizations/:orgId/import/chunk         (admin of the org being imported)
 //   POST /organizations/:orgId/import/finish        (admin) → verifies row counts, activates
 //   POST /organizations/:orgId/import/abort         (admin) → removes the half-imported org
@@ -29,7 +29,7 @@ import { codedError, errorJson } from './errors';
 import { decryptWithKey, encryptWithKey, generateDataKey, wrapDataKey } from './organizations/crypto';
 import { extractCaller, requireOrgRole } from './organizations/auth';
 import { getOrgDataKey } from './organizations/organizations';
-import { mayCreateOrganizations } from './organizations/instance-admins';
+import { NO_ORG_YET_SQL, orgCreationMode, orgCreationRefusal } from './organizations/org-creation';
 import { toLocale } from './organizations/locale';
 
 export const EXPORT_FORMAT = 'arcanum-org-export';
@@ -270,7 +270,8 @@ interface Manifest {
 async function startImport(request: Request, env: Env): Promise<Response> {
   const caller = extractCaller(request);
   if (!caller) return json({ error: 'Unauthorized' }, 401);
-  if (!mayCreateOrganizations(env, caller.email)) return errorJson('not_instance_admin', 403);
+  const refusal = await orgCreationRefusal(env, caller);
+  if (refusal) return errorJson(refusal, 403);
   const body = ((await request.json().catch(() => null)) || {}) as { manifest?: any; name?: unknown };
   const manifest = body.manifest;
   if (!manifest || manifest.format !== EXPORT_FORMAT) return errorJson('not_an_export', 400);
@@ -290,10 +291,13 @@ async function startImport(request: Request, env: Env): Promise<Response> {
   const orgId = crypto.randomUUID();
   const now = new Date().toISOString();
   const wrapped = await wrapDataKey(generateDataKey(), env.ENCRYPTION_KEY);
-  await env.DB.batch([
+  // Single mode: guarded like createOrganization — an own instance's one org
+  // may come from an import, but only while there is none.
+  const guard = orgCreationMode(env) === 'single' ? NO_ORG_YET_SQL : '1';
+  const [inserted] = await env.DB.batch([
     env.DB.prepare(
       `INSERT INTO organizations (id, name, logo_url, theme, locale, dek_ciphertext, dek_iv, created_at, created_by_sub, import_status, import_key, import_manifest)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'importing', ?, ?)`
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, 'importing', ?, ? WHERE ${guard}`
     ).bind(
       orgId,
       name,
@@ -310,9 +314,10 @@ async function startImport(request: Request, env: Env): Promise<Response> {
     ),
     env.DB.prepare(
       `INSERT INTO memberships (id, org_id, user_sub, issuer, invited_email, role, status, invited_at, accepted_at)
-       VALUES (?, ?, ?, ?, ?, 'admin', 'active', ?, ?)`
-    ).bind(crypto.randomUUID(), orgId, caller.sub, caller.issuer, caller.email.toLowerCase(), now, now),
+       SELECT ?, ?, ?, ?, ?, 'admin', 'active', ?, ? WHERE EXISTS (SELECT 1 FROM organizations WHERE id = ?)`
+    ).bind(crypto.randomUUID(), orgId, caller.sub, caller.issuer, caller.email.toLowerCase(), now, now, orgId),
   ]);
+  if ((inserted.meta.changes || 0) === 0) return errorJson('org_creation_disabled', 403);
   return json({ orgId, tables: EXPORT_TABLES.map((s) => s.table), maxChunkRows: MAX_CHUNK_ROWS }, 201);
 }
 

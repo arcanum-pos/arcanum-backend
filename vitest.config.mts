@@ -53,6 +53,11 @@ export default defineConfig({
           ),
           // A self-hosted installation's allowlist (see instance-admins.ts): test users are *@test.
           INSTANCE_ADMIN_EMAILS: '*@test, boss@example.test',
+          // wrangler.jsonc is the demo instance's (internal); the suite runs
+          // as the default kind — tests of the other modes pass their own env.
+          ORG_CREATION: 'admins',
+          DEMO_INSTALL_URL: 'https://start.test',
+          BOOTSTRAP_API_KEY: 'test-bootstrap-key',
           // Test-only values — never real secrets. ENCRYPTION_KEY must be
           // base64 of 32 bytes (see CLAUDE.md: hex silently breaks crypto).
           ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64'),

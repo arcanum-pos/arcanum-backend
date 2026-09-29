@@ -1,6 +1,7 @@
 // Shared test helpers. Every test seeds its own org with random ids, so
 // tests never depend on each other or on a clean database.
 import { env, SELF } from 'cloudflare:test';
+import worker from '../src';
 import { generateDataKey, wrapDataKey } from '../src/organizations/crypto';
 
 export interface TestUser {
@@ -76,6 +77,27 @@ export async function api<T = any>(method: string, path: string, options: { user
     headers,
     body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
   });
+  const text = await res.text();
+  return { status: res.status, body: text ? JSON.parse(text) : null };
+}
+
+// Like api(), but with some settings changed (e.g. ORG_CREATION) — calls the
+// Worker's fetch directly, since SELF always runs with the suite's own env.
+// `headers` adds raw headers (e.g. a bearer key).
+export async function apiWith<T = any>(
+  overrides: Record<string, string | undefined>,
+  method: string,
+  path: string,
+  options: { user?: TestUser | null; body?: unknown; headers?: Record<string, string> } = {}
+): Promise<ApiResponse<T>> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json', ...options.headers };
+  if (options.user) Object.assign(headers, identityHeaders(options.user));
+  const request = new Request(`https://backend.test${path}`, {
+    method,
+    headers,
+    body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+  });
+  const res = await worker.fetch(request, { ...env, ...overrides } as any);
   const text = await res.text();
   return { status: res.status, body: text ? JSON.parse(text) : null };
 }
