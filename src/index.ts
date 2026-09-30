@@ -25,6 +25,7 @@ import { createSumupCharge, postSumupCallback, confirmChargeFromPos, getSumupSta
 import { ChargePoller } from './payments/poller';
 import { createTransaction, listTransactions } from './transactions';
 import { dispatchOrganizationsRoute } from './organizations/router';
+import { handleResolveIdentityProviderForAuth } from './organizations/identity-providers';
 import { dispatchTabsRoute } from './tabs';
 import { dispatchCatalogRoute } from './catalog';
 import { dispatchCatalogImportRoute } from './catalog-import';
@@ -95,6 +96,12 @@ export default {
       // The bootstrapper's service-binding calls — gated by BOOTSTRAP_API_KEY
       // and ORG_CREATION=internal, never reachable with a browser session
       // (see demo-orgs.ts's header for why the bff can't get a caller here).
+      // arcanum-bff's pre-authentication lookup of the instance's login
+      // provider (BFF_INTERNAL_KEY) — see organizations/identity-providers.ts.
+      if (request.method === 'GET' && url.pathname === '/identity-provider/resolve') {
+        return handleResolveIdentityProviderForAuth(request, env);
+      }
+
       if (url.pathname.startsWith('/internal/')) {
         const demoResponse = await dispatchDemoOrgsRoute(request, env, url.pathname);
         if (demoResponse) return demoResponse;

@@ -8,7 +8,7 @@ export interface Env {
   // arcanum-devicehub (separate Worker) — see devicehub-client.ts.
   INTERNAL_API_KEY: string;
   // arcanum-bff's calls to this Worker's own internal-only
-  // /organizations/:orgId/identity-provider/resolve route — see
+  // /identity-provider/resolve route — see
   // organizations/identity-providers.ts. Deliberately a separate secret
   // from INTERNAL_API_KEY above (a different pairwise relationship,
   // independently rotatable) — not the same value.
@@ -48,10 +48,9 @@ export interface Env {
   // The bootstrapper's bearer key for POST /internal/demo-orgs. Unset = the
   // endpoint refuses everything.
   BOOTSTRAP_API_KEY?: string;
-  // Seeds the platform-default identity provider (the fallback used by any
-  // org that hasn't configured its own, and by the very first bootstrap
-  // admin before any org exists) — see organizations/idp-resolution.ts
-  // `ensureDefaultOrganization`. Consumed only once, at first seed; safe to
+  // Seeds the instance's identity provider (the `default` identity_providers
+  // row — every org on this installation logs in through it) — see
+  // organizations/identity-providers.ts `ensureDefaultOrganization`. Consumed only once, at first seed; safe to
   // remove afterward. Not readable back once set (Worker secrets are
   // write-only) — source these from the identity provider's own dashboard,
   // never from a previously-set Cloudflare secret.
@@ -79,13 +78,4 @@ export interface Env {
   DEFAULT_SMTP_PASS?: string;
   DEFAULT_SMTP_FROM_ADDRESS?: string;
   DEFAULT_SMTP_FROM_NAME?: string;
-  // Lets an org register its own custom domain via Cloudflare's Custom
-  // Hostnames API (Cloudflare for SaaS) — see organizations/custom-domain.ts.
-  // Scoped to the kaboutersoft.be zone, "SSL and Certificates: Edit".
-  CLOUDFLARE_API_TOKEN?: string;
-  // Not secret — the kaboutersoft.be zone id. Its Fallback Origin is
-  // already set to arcanum.kaboutersoft.be, so every validated custom
-  // hostname proxies straight to this same app with no further per-org
-  // routing step.
-  CLOUDFLARE_ZONE_ID?: string;
 }

@@ -19,8 +19,10 @@
 // the installation it was exported from.
 //
 // Deliberately NOT exported: the org's data key (a new one is created on
-// import), its custom domain and identity provider (they belong to an
-// installation's setup, not to the org's data), devices (they re-register
+// import), the leftover custom_domain* columns and any identity provider
+// (both belong to an installation's setup, not to the org's data — and an
+// older export file that carries them anyway imports fine: only the
+// tables and organization fields named here are ever read), devices (they re-register
 // with the new installation), and members' identity bindings (members come
 // back as pending invites and reconnect on their first login).
 import type { Env } from './env';

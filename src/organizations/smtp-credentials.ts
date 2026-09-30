@@ -1,6 +1,6 @@
 // Lets an organization use its own outbound SMTP account instead of the
-// platform default — same shape as identity-providers.ts: an org's own
-// config if it has one, otherwise the 'default' org's, encrypted with each
+// platform default: an org's own config if it has one, otherwise the
+// 'default' org's, encrypted with each
 // org's own DEK. Unlike an OIDC issuer, there's no cheap "discovery"
 // request to validate SMTP credentials against at save time — that's what
 // the explicit test-send action (mail.ts's testMailConfiguration) is for,

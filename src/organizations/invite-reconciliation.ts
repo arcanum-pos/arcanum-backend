@@ -6,8 +6,8 @@
 // members.ts instead, organizations.ts -> members.ts -> smtp-credentials.ts
 // -> organizations.ts would cycle.
 import type { Env } from '../env';
-import { resolveConfiguredIssuerUrl } from './idp-resolution';
-import type { MembershipRow } from './types';
+import { resolveInstanceIssuerUrl } from './idp-resolution';
+import type { CallerIdentity, MembershipRow } from './types';
 
 // Invitations are keyed by email because the invited person's sub isn't
 // known until they first log in. Called at the top of any caller-scoped
@@ -15,24 +15,31 @@ import type { MembershipRow } from './types';
 // invite becomes a real, active membership the moment its owner shows up —
 // no separate "accept invite" click needed.
 //
-// `issuer` is checked per-row against that row's *own org's* configured
-// issuer (falling back to the platform default) before activating it — an
-// org can only ever bring its own identity provider for itself, so without
-// this check, org B's fully-attacker-controlled IdP could assert an `email`
-// claim matching a pending invite for org A and hijack it.
-export async function reconcilePendingInvites(env: Env, sub: string, email: string, issuer: string): Promise<void> {
+// Two guards before an invite is bound to the caller's (issuer, sub):
+//  - the caller must come from this instance's own login provider (the
+//    `default` identity_providers row) — an identity minted by any other
+//    issuer never claims an invite;
+//  - the provider must not have marked the e-mail unverified
+//    (`email_verified === false`): otherwise anyone able to sign up at the
+//    provider with someone else's address unverified (e-mail/password
+//    sign-up, a guest identity) could take over that person's invite. A
+//    missing claim (null) keeps working — some providers omit it.
+export async function reconcilePendingInvites(env: Env, caller: CallerIdentity): Promise<void> {
+  const { sub, email, issuer } = caller;
   if (!email) return;
+  if (caller.emailVerified === false) return;
 
   const { results: pending } = await env.DB.prepare(
     "SELECT * FROM memberships WHERE invited_email = ? AND status = 'pending'"
   )
     .bind(email)
     .all<MembershipRow>();
+  if (!pending?.length) return;
 
-  for (const row of pending || []) {
-    const expectedIssuer = await resolveConfiguredIssuerUrl(env, row.org_id);
-    if (expectedIssuer && expectedIssuer !== issuer) continue;
+  const expectedIssuer = await resolveInstanceIssuerUrl(env);
+  if (expectedIssuer && expectedIssuer !== issuer) return;
 
+  for (const row of pending) {
     await env.DB.prepare("UPDATE memberships SET user_sub = ?, issuer = ?, status = 'active', accepted_at = ? WHERE id = ?")
       .bind(sub, issuer, new Date().toISOString(), row.id)
       .run();

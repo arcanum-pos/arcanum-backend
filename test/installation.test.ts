@@ -1,6 +1,6 @@
 // Installation-level concerns for self-hosting (INSTALLER_PLAN.md phase 1):
 // migration tracking, the fresh-install schema staying in step with the
-// migrations, the admin allowlist, and no hardcoded kaboutersoft.be values.
+// migrations and the admin allowlist.
 import { env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { mayCreateOrganizations } from '../src/organizations/instance-admins';
@@ -80,13 +80,5 @@ describe('admin allowlist (INSTANCE_ADMIN_EMAILS)', () => {
     const org = await seedOrg();
     const invite = await api('POST', `/organizations/${org.orgId}/members`, { user: org.admin, body: { email: outsider.email, role: 'cashier' } });
     expect(invite.status).toBe(201);
-  });
-});
-
-describe('no hardcoded installation values', () => {
-  it("offers the installation's own hostname as the custom-domain CNAME target", async () => {
-    const org = await seedOrg();
-    const res = await api('GET', `/organizations/${org.orgId}/custom-domain`, { user: org.admin });
-    expect(res.body.cnameTarget).toBe(new URL(env.PUBLIC_BASE_URL).hostname);
   });
 });

@@ -1,5 +1,5 @@
-// Dependency-light resolution helpers shared across org-scoped config types
-// (identity providers, SMTP credentials) and invite reconciliation
+// Dependency-light resolution helpers shared by the instance's identity
+// provider, the default SMTP credentials and invite reconciliation
 // (invite-reconciliation.ts). Deliberately separate from
 // identity-providers.ts / smtp-credentials.ts: those depend on
 // organizations.ts (for DEK unwrapping), and organizations.ts depends on
@@ -49,8 +49,8 @@ export interface OidcEndpoints {
 // Fetches and validates an issuer's discovery document. Returns null if
 // unreachable, malformed, or missing device_authorization_endpoint — the
 // feasibility gate, since an IdP without device-grant support can't drive
-// the kiosk (POS/CFD) login flow at all. Called once, at admin-save time
-// (or default-org seed time) — never on the login hot path.
+// the kiosk (POS/CFD) login flow at all. Called once, at default-org seed
+// time — never on the login hot path.
 export async function resolveOidcDiscovery(issuerUrl: string): Promise<OidcEndpoints | null> {
   const base = issuerUrl.replace(/\/+$/, '');
   try {
@@ -81,21 +81,14 @@ export async function resolveOidcDiscovery(issuerUrl: string): Promise<OidcEndpo
   }
 }
 
-// The issuer an org's members are expected to authenticate against: that
-// org's own configured issuer if it has one, otherwise the platform
-// default's. Never decrypts anything — issuer_url isn't secret. Used by
-// members.ts to decide whether to trust an authenticated email claim when
-// reconciling a pending invite (an org-controlled IdP asserting an email
-// that matches a DIFFERENT org's pending invite must not be trusted).
-export async function resolveConfiguredIssuerUrl(env: Env, orgId: string): Promise<string | null> {
+// The issuer this instance's members authenticate against: the `default`
+// identity provider's (the only one — see identity-providers.ts). Never
+// decrypts anything — issuer_url isn't secret. Used by
+// invite-reconciliation.ts: an e-mail claim from any other issuer never
+// claims a pending invite.
+export async function resolveInstanceIssuerUrl(env: Env): Promise<string | null> {
   const row = await env.DB.prepare('SELECT issuer_url FROM identity_providers WHERE org_id = ?')
-    .bind(orgId)
-    .first<Pick<IdentityProviderRow, 'issuer_url'>>();
-  if (row?.issuer_url) return row.issuer_url;
-  if (orgId === DEFAULT_ORG_ID) return null;
-
-  const defaultRow = await env.DB.prepare('SELECT issuer_url FROM identity_providers WHERE org_id = ?')
     .bind(DEFAULT_ORG_ID)
     .first<Pick<IdentityProviderRow, 'issuer_url'>>();
-  return defaultRow?.issuer_url ?? null;
+  return row?.issuer_url ?? null;
 }

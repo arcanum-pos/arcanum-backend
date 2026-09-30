@@ -16,30 +16,11 @@ function rowToOrganization(row: OrganizationRow, env: Env) {
     logoUrl: row.logo_url,
     theme: row.theme,
     createdAt: row.created_at,
-    customDomain: row.custom_domain,
-    customDomainStatus: row.custom_domain_status,
-    customDomainSslStatus: row.custom_domain_ssl_status,
     importStatus: row.import_status ?? null,
     locale: toLocale(row.locale),
     // Non-null only for a demo org (is_locked = 'N') — see demo.ts.
     demo: demoInfo(env, row),
   };
-}
-
-// Used by identity-providers.ts's pre-auth resolve endpoint: the one place
-// an org identifier other than the real id can show up in a URL — the
-// request's own Host header, passed by arcanum-bff for an unprefixed /login
-// or /device/start, letting a custom domain resolve to its org with no path
-// segment at all. Everywhere else in the admin API, orgId always comes from
-// the org list (real ids only), so nothing else needs this.
-export async function resolveOrgId(env: Env, idOrHost: string): Promise<string | null> {
-  const byId = await env.DB.prepare('SELECT id FROM organizations WHERE id = ?').bind(idOrHost).first<{ id: string }>();
-  if (byId) return byId.id;
-
-  const byCustomDomain = await env.DB.prepare('SELECT id FROM organizations WHERE custom_domain = ?')
-    .bind(idOrHost)
-    .first<{ id: string }>();
-  return byCustomDomain?.id ?? null;
 }
 
 export async function createOrganization(request: Request, env: Env): Promise<Response> {
@@ -87,7 +68,7 @@ export async function listMyOrganizations(request: Request, env: Env): Promise<R
   const caller = extractCaller(request);
   if (!caller) return json({ error: 'Unauthorized' }, 401);
 
-  await reconcilePendingInvites(env, caller.sub, caller.email, caller.issuer);
+  await reconcilePendingInvites(env, caller);
 
   const { results } = await env.DB.prepare(
     `SELECT o.* FROM organizations o
@@ -109,7 +90,7 @@ export async function listMyMemberships(request: Request, env: Env): Promise<Res
   const caller = extractCaller(request);
   if (!caller) return json({ error: 'Unauthorized' }, 401);
 
-  await reconcilePendingInvites(env, caller.sub, caller.email, caller.issuer);
+  await reconcilePendingInvites(env, caller);
 
   const { results } = await env.DB.prepare(
     `SELECT o.id as org_id, o.name as org_name, o.locale as org_locale, m.role FROM organizations o
@@ -170,7 +151,7 @@ export async function updateBranding(request: Request, env: Env, orgId: string):
   return json(rowToOrganization(row!, env));
 }
 
-// Internal helper for identity-providers.ts / payment-credentials.ts: gets
+// Internal helper for identity-providers.ts / payment-credentials.ts & co: gets
 // this org's unwrapped data key. Never sent over the API — exists only for
 // the lifetime of the request that needs it.
 export async function getOrgDataKey(env: Env, orgId: string): Promise<string | null> {

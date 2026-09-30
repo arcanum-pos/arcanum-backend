@@ -64,18 +64,10 @@ CREATE TABLE IF NOT EXISTS organizations (
   dek_iv TEXT NOT NULL,
   created_at TEXT NOT NULL,
   created_by_sub TEXT NOT NULL,
-  -- Optional custom domain, registered with Cloudflare's Custom Hostnames
-  -- API against the kaboutersoft.be zone — see organizations/custom-domain.ts.
-  -- Setting one requires this org to already have a complete identity_providers
-  -- row of its own (enforced in custom-domain.ts's setCustomDomain): custom
-  -- domain and own identity provider are a mandatory pair, since login links
-  -- carry no org identifier at all (see identity-providers.ts) — Host header
-  -- is the only thing that can tell such an org apart from the shared default.
-  -- custom_domain_cf_id is Cloudflare's own hostname id (needed to poll/
-  -- delete it); status/ssl_status mirror Cloudflare's `status`/`ssl.status`,
-  -- refreshed only on an explicit Verify, not polled in the background.
-  -- custom_domain_route_id is the exact-hostname Workers Route id created
-  -- alongside it (never a zone-wide wildcard — see custom-domain.ts).
+  -- The former per-org custom domain (Cloudflare for SaaS, migrations 0009/
+  -- 0010), removed from the code in hosting-plan phase 6 — a custom domain
+  -- now belongs to the instance (the installer). Kept, unused, rather than
+  -- dropped: arcanum-cleaner still skips an org that has a custom_domain.
   custom_domain TEXT,
   custom_domain_cf_id TEXT,
   custom_domain_route_id TEXT,
@@ -126,9 +118,9 @@ CREATE TABLE IF NOT EXISTS identity_providers (
   client_secret_ciphertext TEXT,
   client_secret_iv TEXT,
   -- Resolved once from issuer_url's /.well-known/openid-configuration at
-  -- admin-save time (see worker/src/organizations/idp-resolution.ts) — never
-  -- re-fetched at login time, so a login never depends on a live discovery
-  -- fetch to an arbitrary org-run identity provider.
+  -- seed time (see src/organizations/idp-resolution.ts) — never re-fetched
+  -- at login time. Since hosting-plan phase 6 only the org_id = 'default'
+  -- row (the instance's login provider) is used.
   authorization_endpoint TEXT,
   token_endpoint TEXT,
   userinfo_endpoint TEXT,

@@ -255,6 +255,18 @@ describe('import', () => {
     for (const c of charges) expect([c.provider_data, c.pos_terminal_id]).toEqual(['{}', null]);
   });
 
+  it('imports an older file that still carries a custom domain or an identity provider, ignoring both', async () => {
+    const source = await richOrg();
+    const file = (await exportOf(source.org)).body;
+    file.organization = { ...file.organization, custom_domain: 'pos.old-instance.test', custom_domain_status: 'active' };
+    file.tables.identity_providers = [{ org_id: source.org.orgId, issuer_url: 'https://own-idp.test', client_id: 'own' }];
+    const user = importer();
+    const { orgId, finish } = await importFile(file, user);
+    expect(finish.status).toBe(200);
+    expect(await rows('SELECT custom_domain FROM organizations WHERE id = ?', orgId)).toEqual([{ custom_domain: null }]);
+    expect(await rows('SELECT org_id FROM identity_providers WHERE org_id = ?', orgId)).toEqual([]);
+  });
+
   it('is safe to retry a chunk (nothing imported twice)', async () => {
     const source = await richOrg();
     const file = (await exportOf(source.org)).body;

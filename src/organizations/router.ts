@@ -1,7 +1,7 @@
 import type { Env } from '../env';
 import { createOrganization, listMyOrganizations, listMyMemberships, getOrganization, updateBranding } from './organizations';
 import { listMembers, inviteMember, updateMemberRole, removeMember } from './members';
-import { getIdentityProvider, setIdentityProvider, handleResolveIdentityProviderForAuth } from './identity-providers';
+import { handleResolveIdentityProviderForAuth } from './identity-providers';
 import { listPaymentCredentials, setPaymentCredential } from './payment-credentials';
 import { getSmtpCredentials, setSmtpCredentials } from './smtp-credentials';
 import { getGmailApiCredentials, setGmailApiCredentials } from './gmail-api-credentials';
@@ -10,7 +10,6 @@ import { testMailConfiguration } from './mail';
 import { listEvents, createEvent } from './events';
 import { getOrgLocale, setOrgLocale } from './locale';
 import { getCapabilities } from './org-creation';
-import { getCustomDomain, setCustomDomain, verifyCustomDomain, removeCustomDomain } from './custom-domain';
 
 // Handles every /organizations/* path. Returns null for anything it doesn't
 // recognize, so the caller (the main router) can fall through to its own
@@ -51,19 +50,6 @@ export async function dispatchOrganizationsRoute(request: Request, env: Env, pat
     return null;
   }
 
-  const customDomainVerifyMatch = pathname.match(/^\/organizations\/([^/]+)\/custom-domain\/verify$/);
-  if (customDomainVerifyMatch && request.method === 'POST') {
-    return verifyCustomDomain(request, env, customDomainVerifyMatch[1]);
-  }
-
-  const customDomainMatch = pathname.match(/^\/organizations\/([^/]+)\/custom-domain$/);
-  if (customDomainMatch) {
-    if (request.method === 'GET') return getCustomDomain(request, env, customDomainMatch[1]);
-    if (request.method === 'PUT') return setCustomDomain(request, env, customDomainMatch[1]);
-    if (request.method === 'DELETE') return removeCustomDomain(request, env, customDomainMatch[1]);
-    return null;
-  }
-
   const membersMatch = pathname.match(/^\/organizations\/([^/]+)\/members$/);
   if (membersMatch) {
     if (request.method === 'GET') return listMembers(request, env, membersMatch[1]);
@@ -78,20 +64,12 @@ export async function dispatchOrganizationsRoute(request: Request, env: Env, pat
     return null;
   }
 
-  // Pre-authentication lookup for arcanum-bff to drive a login — gated by
-  // BFF_INTERNAL_KEY, not caller identity (see identity-providers.ts's
-  // comment on handleResolveIdentityProviderForAuth for why that matters).
-  // Checked before the plain /identity-provider match below.
-  const idpResolveMatch = pathname.match(/^\/organizations\/([^/]+)\/identity-provider\/resolve$/);
-  if (idpResolveMatch && request.method === 'GET') {
-    return handleResolveIdentityProviderForAuth(request, env, idpResolveMatch[1]);
-  }
-
-  const idpMatch = pathname.match(/^\/organizations\/([^/]+)\/identity-provider$/);
-  if (idpMatch) {
-    if (request.method === 'GET') return getIdentityProvider(request, env, idpMatch[1]);
-    if (request.method === 'PUT') return setIdentityProvider(request, env, idpMatch[1]);
-    return null;
+  // Legacy path of the bff's pre-authentication login lookup — the org/host
+  // segment is ignored (one identity provider per instance). See
+  // identity-providers.ts's handleResolveIdentityProviderForAuth; the
+  // current path, /identity-provider/resolve, is routed in index.ts.
+  if (/^\/organizations\/[^/]+\/identity-provider\/resolve$/.test(pathname) && request.method === 'GET') {
+    return handleResolveIdentityProviderForAuth(request, env, true);
   }
 
   const credsMatch = pathname.match(/^\/organizations\/([^/]+)\/payment-credentials$/);

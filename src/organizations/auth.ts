@@ -4,10 +4,10 @@
 // together are the actual identity; email/name are for display and for
 // reconciling pending invites.
 //
-// A bare sub is only unique within the issuer that minted it — once an org
-// can bring its own identity provider, a malicious org admin fully controls
-// what `sub` (or `email`) their own IdP asserts, and could mint one matching
-// a real member of a *different* org. Since some lookups here span every
+// A bare sub is only unique within the issuer that minted it — and an
+// installation's login provider can change (the installer's IdP change
+// flow), or (before hosting-plan phase 6) an org could bring its own IdP,
+// whose admin fully controls what `sub` (or `email`) it asserts. Since some lookups here span every
 // org a sub belongs to (listMyOrganizations/listMyMemberships), matching on
 // bare sub alone is a cross-tenant impersonation path. issuer+sub together
 // closes it.
@@ -32,7 +32,17 @@ export function extractCaller(request: Request): CallerIdentity | null {
     issuer,
     email: request.headers.get('X-User-Email') || '',
     name: request.headers.get('X-User-Name') || '',
+    emailVerified: parseEmailVerified(request.headers.get('X-User-Email-Verified')),
   };
+}
+
+// 'true' / 'false' as arcanum-bff forwards the provider's email_verified
+// claim; anything else (absent: the provider didn't say, or an older bff)
+// is unknown.
+function parseEmailVerified(value: string | null): boolean | null {
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  return null;
 }
 
 // Returns the caller's active membership in this org if it has one of the

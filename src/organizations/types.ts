@@ -8,6 +8,12 @@ export interface CallerIdentity {
   issuer: string;
   email: string;
   name: string;
+  // The login provider's `email_verified` claim, as the bff forwarded it
+  // (X-User-Email-Verified): true/false when the provider said so, null
+  // when it didn't (some providers omit the claim). A pending invite is
+  // never activated on an e-mail explicitly marked unverified — see
+  // invite-reconciliation.ts.
+  emailVerified: boolean | null;
 }
 
 export interface OrganizationRow {
@@ -19,16 +25,13 @@ export interface OrganizationRow {
   dek_iv: string;
   created_at: string;
   created_by_sub: string;
-  // See organizations/custom-domain.ts. custom_domain_cf_id is Cloudflare's
-  // Custom Hostname id (needed to poll/delete it) — never shown to the
-  // admin. custom_domain_status/ssl_status mirror Cloudflare's own
-  // `status`/`ssl.status` fields, refreshed only when the admin clicks
-  // Verify (no background polling).
+  // The former per-org custom domain (Cloudflare for SaaS), removed in
+  // hosting-plan phase 6: the columns stay (no destructive migration;
+  // arcanum-cleaner still skips an org with a custom_domain) but nothing
+  // here reads or writes them anymore. A custom domain now belongs to the
+  // instance (the installer), not to an org.
   custom_domain: string | null;
   custom_domain_cf_id: string | null;
-  // The exact-hostname Workers Route id created alongside custom_domain_cf_id
-  // — deleted whenever the hostname changes or is removed. See
-  // custom-domain.ts's file header for why this exists (no zone-wide route).
   custom_domain_route_id: string | null;
   custom_domain_status: string | null;
   // See org-transfer.ts — non-null only while an import is in progress.
@@ -69,7 +72,7 @@ export interface IdentityProviderRow {
   end_session_endpoint: string | null;
   scopes: string | null;
   // Optional override, used only for the authorization-code flow (browser
-  // /login, and /:orgId/console) — the device grant always uses client_id/
+  // /login) — the device grant always uses client_id/
   // client_secret_ciphertext above. Needed because some providers (Google)
   // require a different OAuth client per flow, unlike Auth0 where one
   // Application can do both. NULL/unset means "use the fields above for

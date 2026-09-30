@@ -98,16 +98,7 @@ export const ERROR_TEXTS = {
   import_too_many_chunk_rows: 'Maximaal {max} rijen per stuk',
   import_not_abortable: 'Alleen een onafgewerkte import kan geannuleerd worden',
 
-  // --- Custom domain, identity provider, mail ---
-  invalid_domain: 'Vul een geldige domeinnaam in (bv. pos.mijnorganisatie.be)',
-  domain_requires_idp: 'Configureer eerst een eigen identity provider voor deze organisatie (zie Aanmelding) voordat je een aangepast domein instelt.',
-  domain_in_use: 'Dit domein is al in gebruik door een andere organisatie',
-  // Both: `error` is Cloudflare's own (English) message when it gave one —
-  // then also in params.detail — else this text.
-  domain_registration_failed: 'Kon domein niet registreren bij Cloudflare',
-  domain_status_failed: 'Kon status niet ophalen bij Cloudflare',
-  domain_routing_failed: 'Kon geen routing instellen voor dit domein bij Cloudflare',
-  idp_discovery_failed: 'Kon de issuer-URL niet bereiken, of deze ondersteunt geen apparaatcode-aanmelding (vereist voor de kassa-toestellen).',
+  // --- Mail ---
   mail_not_configured: 'Geen e-mailconfiguratie gevonden (en ook geen platform-standaard)',
   mail_send_failed: 'Verzenden mislukt',
 
