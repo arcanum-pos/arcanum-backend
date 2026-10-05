@@ -79,5 +79,8 @@ export default defineConfig({
   ],
   test: {
     setupFiles: ['./test/setup.ts'],
+    // The org export/import tests run hundreds of statements; on the release
+    // workflow's shared runners they've gone past the 5 s default.
+    testTimeout: 30_000,
   },
 });
