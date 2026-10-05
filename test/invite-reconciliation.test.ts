@@ -73,6 +73,19 @@ describe('reconcilePendingInvites', () => {
     expect((await membershipStatus(org.orgId, user.email)).status).toBe('pending');
   });
 
+  it('with the provider row not seeded (the bff has its own settings), the issuer comes from DEFAULT_IDP_ISSUER_URL — still checked', async () => {
+    await env.DB.prepare("DELETE FROM identity_providers WHERE org_id = 'default'").run();
+    const withIssuer = { DEFAULT_IDP_ISSUER_URL: ISSUER };
+    const stranger = invitee('https://someone-elses-idp.test/');
+    const strangerOrg = await invite(stranger);
+    await apiWith(withIssuer, 'GET', '/organizations/memberships', { user: stranger, headers: { 'X-User-Email-Verified': 'true' } });
+    expect((await membershipStatus(strangerOrg.orgId, stranger.email)).status).toBe('pending');
+    const member = invitee();
+    const org = await invite(member);
+    await apiWith(withIssuer, 'GET', '/organizations/memberships', { user: member, headers: { 'X-User-Email-Verified': 'true' } });
+    expect((await membershipStatus(org.orgId, member.email))).toMatchObject({ status: 'active', user_sub: member.sub });
+  });
+
   it('ignores an identity from another issuer than the instance\'s login provider', async () => {
     const user = invitee('https://someone-elses-idp.test/');
     const org = await invite(user);

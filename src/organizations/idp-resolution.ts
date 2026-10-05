@@ -85,10 +85,12 @@ export async function resolveOidcDiscovery(issuerUrl: string): Promise<OidcEndpo
 // identity provider's (the only one — see identity-providers.ts). Never
 // decrypts anything — issuer_url isn't secret. Used by
 // invite-reconciliation.ts: an e-mail claim from any other issuer never
-// claims a pending invite.
+// claims a pending invite. Not seeded yet (the bff signs people in with its
+// own settings since 0.1.22, so nothing may have asked for the row): the
+// same DEFAULT_IDP_ISSUER_URL it would be seeded from.
 export async function resolveInstanceIssuerUrl(env: Env): Promise<string | null> {
   const row = await env.DB.prepare('SELECT issuer_url FROM identity_providers WHERE org_id = ?')
     .bind(DEFAULT_ORG_ID)
     .first<Pick<IdentityProviderRow, 'issuer_url'>>();
-  return row?.issuer_url ?? null;
+  return row?.issuer_url ?? env.DEFAULT_IDP_ISSUER_URL ?? null;
 }
