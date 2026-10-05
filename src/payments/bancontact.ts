@@ -9,6 +9,7 @@
 //
 // Credentials (API key + environment) are per-organization, configured in
 // the admin portal and stored encrypted in payment_provider_credentials.
+import { refuseUnlessOrgMember } from '../organizations/auth';
 import type { Env } from '../env';
 import { json } from '../http';
 import { errorJson } from '../errors';
@@ -75,6 +76,8 @@ export async function createPayment(request: Request, env: Env): Promise<Respons
     return json({ error: 'orgId is required' }, 400);
   }
   const orgId = String(body.orgId);
+  const refused = await refuseUnlessOrgMember(request, env, orgId);
+  if (refused) return refused;
 
   // Checked before calling Bancontact, so a refused tab payment never leaves
   // a provider-side payment behind (see tabs.ts's prepareTabCharge).

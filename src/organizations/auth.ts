@@ -12,6 +12,7 @@
 // bare sub alone is a cross-tenant impersonation path. issuer+sub together
 // closes it.
 import type { Env } from '../env';
+import { json } from '../http';
 import type { CallerIdentity, MembershipRow, OrgRole } from './types';
 
 // Transitional fallback only: a request with no X-User-Issuer header predates
@@ -42,6 +43,16 @@ export function extractCaller(request: Request): CallerIdentity | null {
 function parseEmailVerified(value: string | null): boolean | null {
   if (value === 'true') return true;
   if (value === 'false') return false;
+  return null;
+}
+
+// The payment and ledger routes (kassa, customer display, simulator,
+// settings): only an active admin or cashier of that org. A response to
+// return as is (401/403), or null when the caller may go on.
+export async function refuseUnlessOrgMember(request: Request, env: Env, orgId: string): Promise<Response | null> {
+  const caller = extractCaller(request);
+  if (!caller) return json({ error: 'Unauthorized' }, 401);
+  if (!(await requireOrgRole(env, orgId, caller, ['admin', 'cashier']))) return json({ error: 'Forbidden' }, 403);
   return null;
 }
 

@@ -8,7 +8,7 @@
 // replacing what used to be per-device localStorage.
 import type { Env } from './env';
 import { json } from './http';
-import { extractCaller, requireOrgRole } from './organizations/auth';
+import { extractCaller, refuseUnlessOrgMember, requireOrgRole } from './organizations/auth';
 
 const TRANSACTION_METHODS = new Set(['cash', 'sumup', 'bancontact']);
 
@@ -120,6 +120,8 @@ export async function createTransaction(request: Request, env: Env): Promise<Res
   if (!orgId) {
     return json({ error: 'orgId is required' }, 400);
   }
+  const refused = await refuseUnlessOrgMember(request, env, orgId);
+  if (refused) return refused;
 
   // tabId deliberately dropped: a tab's sales are only ever recorded via its
   // charge resolving (recordChargeTransaction), which is also what settles it.

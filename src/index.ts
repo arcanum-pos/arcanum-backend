@@ -63,7 +63,7 @@ export default {
 
       const sumupStatusMatch = url.pathname.match(/^\/sumup\/status\/([^/]+)$/);
       if (request.method === 'GET' && sumupStatusMatch) {
-        return await getSumupStatus(sumupStatusMatch[1], env);
+        return await getSumupStatus(request, sumupStatusMatch[1], env);
       }
 
       if (request.method === 'GET' && url.pathname === '/sumup/readers') {

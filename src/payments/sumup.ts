@@ -20,6 +20,7 @@ import { json } from '../http';
 import { errorJson, providerErrorJson } from '../errors';
 import { broadcastPaymentEvent, notifyTabChanged } from '../devicehub-client';
 import { getDecryptedPaymentCredential } from '../organizations/payment-credentials';
+import { extractCaller, refuseUnlessOrgMember } from '../organizations/auth';
 import { createSumupReaderCheckout, SumupCloudApiError, listSumupReaders } from './sumup-cloud-api';
 import { createCharge, getCharge, parseTipCents, setChargeProviderRef, resolveCharge, type ChargeRecord } from './charges';
 import { ensureChargePolling } from './charge-poller-client';
@@ -32,6 +33,8 @@ import { customerOrder, isPendingTabChargeConflict, prepareTabCharge } from '../
 export async function listSumupReadersForOrg(request: Request, env: Env): Promise<Response> {
   const orgId = new URL(request.url).searchParams.get('org_id');
   if (!orgId) return json({ error: 'org_id is required' }, 400);
+  const refused = await refuseUnlessOrgMember(request, env, orgId);
+  if (refused) return refused;
 
   const credential = await getDecryptedPaymentCredential(env, orgId, 'sumup');
   const merchantId = credential?.merchantId ? String(credential.merchantId) : '';
@@ -89,6 +92,8 @@ export async function createSumupCharge(request: Request, env: Env): Promise<Res
   // it's just a generic tracked-payment record under a sumup-shaped name.
   const method = (body.method ? String(body.method) : 'sumup') as ChargeRecord['method'];
   const orgId = String(body.orgId);
+  const refused = await refuseUnlessOrgMember(request, env, orgId);
+  if (refused) return refused;
 
   const tipCents = parseTipCents(body.tipCents);
   if (tipCents === null || tipCents > amountCents) return json({ error: 'tipCents must be an integer between 0 and 100000, and not more than the amount' }, 400);
@@ -222,17 +227,28 @@ export async function postSumupCallback(request: Request, env: Env, chargeId: st
 // Called by the webapp itself (reached via the BFF, session-checked) when
 // the cashier taps "confirm" on a manual cash/SumUp payment — the fallback
 // for a sumup charge with no reader linked (e.g. the simulator), or cash.
+// Only by a member of the charge's own org.
 export async function confirmChargeFromPos(request: Request, env: Env): Promise<Response> {
+  if (!extractCaller(request)) return json({ error: 'Unauthorized' }, 401);
   const body = (await request.json().catch(() => ({}))) as { chargeId?: string; success?: boolean };
   if (!body.chargeId) return json({ error: 'chargeId is required' }, 400);
+  const charge = await getCharge(env, body.chargeId);
+  if (!charge) return json({ error: 'Unknown chargeId' }, 404);
+  const refused = await refuseUnlessOrgMember(request, env, charge.orgId);
+  if (refused) return refused;
 
   await resolveCharge(env, body.chargeId, { success: body.success !== false });
   return json({ ok: true, chargeId: body.chargeId });
 }
 
-export async function getSumupStatus(chargeId: string, env: Env): Promise<Response> {
+// The kassa, the customer display and the simulator follow a charge here —
+// a member of the charge's own org only.
+export async function getSumupStatus(request: Request, chargeId: string, env: Env): Promise<Response> {
+  if (!extractCaller(request)) return json({ error: 'Unauthorized' }, 401);
   const charge = await getCharge(env, chargeId);
   if (!charge) return json({ error: 'Unknown chargeId' }, 404);
+  const refused = await refuseUnlessOrgMember(request, env, charge.orgId);
+  if (refused) return refused;
 
   return json({
     status: charge.status,
