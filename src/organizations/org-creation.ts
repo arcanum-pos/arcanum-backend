@@ -12,7 +12,8 @@
 //             come only from POST /internal/demo-orgs (demo-orgs.ts).
 //
 //   GET /organizations/capabilities (any logged-in user) → what this caller
-//   may do right now, so the console can hide "Nieuwe organisatie".
+//   may do right now, so the console can hide "Nieuwe organisatie" — and
+//   whether they're one of the installation's admins (the "Installatie" link).
 //
 // Refusals: `org_creation_disabled` when the mode says no, `not_instance_admin`
 // when the allowlist does (see errors.ts).
@@ -20,7 +21,7 @@ import type { Env } from '../env';
 import { json } from '../http';
 import type { ErrorCode } from '../errors';
 import { extractCaller } from './auth';
-import { mayCreateOrganizations } from './instance-admins';
+import { isInstanceAdmin, mayCreateOrganizations } from './instance-admins';
 import { DEFAULT_ORG_ID } from './idp-resolution';
 import type { CallerIdentity } from './types';
 
@@ -56,5 +57,10 @@ export async function getCapabilities(request: Request, env: Env): Promise<Respo
   // Creating and importing follow exactly the same rules today; two flags
   // so the console doesn't need to change if they ever diverge.
   const allowed = (await orgCreationRefusal(env, caller)) === null;
-  return json({ orgCreation: orgCreationMode(env), canCreateOrganization: allowed, canImportOrganization: allowed });
+  return json({
+    orgCreation: orgCreationMode(env),
+    canCreateOrganization: allowed,
+    canImportOrganization: allowed,
+    instanceAdmin: isInstanceAdmin(env, caller.email, caller.emailVerified),
+  });
 }

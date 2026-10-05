@@ -17,7 +17,7 @@ describe('admins (the default)', () => {
   it('is what an unset or unknown ORG_CREATION means', async () => {
     for (const value of [undefined, '', 'everyone']) {
       const res = await apiWith({ ORG_CREATION: value }, 'GET', '/organizations/capabilities', { user: instanceAdmin() });
-      expect(res.body).toEqual({ orgCreation: 'admins', canCreateOrganization: true, canImportOrganization: true });
+      expect(res.body).toEqual({ orgCreation: 'admins', canCreateOrganization: true, canImportOrganization: true, instanceAdmin: true });
     }
   });
 
@@ -37,7 +37,18 @@ describe('admins (the default)', () => {
       orgCreation: 'admins',
       canCreateOrganization: false,
       canImportOrganization: false,
+      instanceAdmin: false,
     });
+  });
+
+  it("instanceAdmin: only an address on the installation's admin list, not marked unverified — also on the demo, and never for everyone", async () => {
+    const caps = async (overrides: Record<string, string | undefined>, who: TestUser, verified?: 'true' | 'false') =>
+      (await apiWith(overrides, 'GET', '/organizations/capabilities', { user: who, headers: verified ? { 'X-User-Email-Verified': verified } : {} })).body.instanceAdmin;
+    expect(await caps({ ORG_CREATION: 'internal' }, instanceAdmin(), 'true')).toBe(true);
+    expect(await caps({ ORG_CREATION: 'internal' }, outsider(), 'true')).toBe(false); // a demo visitor
+    expect(await caps({ ORG_CREATION: 'internal' }, instanceAdmin(), 'false')).toBe(false);
+    // An empty list lets anyone create orgs (the old default) — but makes nobody an installation admin.
+    expect(await caps({ INSTANCE_ADMIN_EMAILS: '' }, instanceAdmin())).toBe(false);
   });
 
   it('capabilities needs a logged-in caller, and is not read as an org id', async () => {
@@ -58,7 +69,7 @@ describe('internal (the demo instance)', () => {
       expect(create.body.error).toBe('Op deze installatie kunnen geen nieuwe organisaties aangemaakt worden');
       const start = await apiWith(internal, 'POST', '/organizations/import/start', { user: caller, body: { manifest: MANIFEST } });
       expect([start.status, start.body.code]).toEqual([403, 'org_creation_disabled']);
-      expect((await apiWith(internal, 'GET', '/organizations/capabilities', { user: caller })).body).toEqual({
+      expect((await apiWith(internal, 'GET', '/organizations/capabilities', { user: caller })).body).toMatchObject({
         orgCreation: 'internal',
         canCreateOrganization: false,
         canImportOrganization: false,

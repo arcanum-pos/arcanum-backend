@@ -24,3 +24,12 @@ export function mayCreateOrganizations(env: Env, email: string): boolean {
 }
 
 // Refused with error code `not_instance_admin` (see errors.ts).
+
+// One of this installation's own admins (the installer's admin list): an
+// address on INSTANCE_ADMIN_EMAILS — never "everyone" when it's empty — that
+// the login provider didn't mark unverified. The console shows them, and only
+// them, the link to the installer (a demo's visitors are no admins).
+export function isInstanceAdmin(env: Env, email: string, emailVerified: boolean | null): boolean {
+  if (emailVerified === false || !(env.INSTANCE_ADMIN_EMAILS || '').trim()) return false;
+  return mayCreateOrganizations(env, email);
+}

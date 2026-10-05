@@ -30,8 +30,8 @@ describe('single (an own instance)', () => {
     await ensureDefaultOrganizationRow(env);
     expect(await rows("SELECT id FROM organizations WHERE id != 'default'")).toEqual([]);
 
-    expect(await capabilities(owner)).toEqual({ orgCreation: 'single', canCreateOrganization: true, canImportOrganization: true });
-    expect(await capabilities(stranger)).toEqual({ orgCreation: 'single', canCreateOrganization: false, canImportOrganization: false });
+    expect(await capabilities(owner)).toMatchObject({ orgCreation: 'single', canCreateOrganization: true, canImportOrganization: true });
+    expect(await capabilities(stranger)).toMatchObject({ orgCreation: 'single', canCreateOrganization: false, canImportOrganization: false });
     const refused = await create(stranger);
     expect([refused.status, refused.body.code]).toEqual([403, 'not_instance_admin']);
 
@@ -39,7 +39,7 @@ describe('single (an own instance)', () => {
     const imported = await startImport(owner);
     expect(imported.status).toBe(201);
     // ... and while it's there (even unfinished) nothing else can be added.
-    expect(await capabilities(owner)).toEqual({ orgCreation: 'single', canCreateOrganization: false, canImportOrganization: false });
+    expect(await capabilities(owner)).toMatchObject({ orgCreation: 'single', canCreateOrganization: false, canImportOrganization: false });
     for (const res of [await create(owner), await startImport(owner), await create(stranger)]) {
       expect([res.status, res.body.code]).toEqual([403, 'org_creation_disabled']);
     }
