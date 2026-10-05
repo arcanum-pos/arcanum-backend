@@ -7,12 +7,10 @@ export interface Env {
   D1_QUERY_LIMIT?: string;
   // arcanum-devicehub (separate Worker) — see devicehub-client.ts.
   INTERNAL_API_KEY: string;
-  // arcanum-bff's calls to this Worker's own internal-only
-  // /identity-provider/resolve route — see
-  // organizations/identity-providers.ts. Deliberately a separate secret
-  // from INTERNAL_API_KEY above (a different pairwise relationship,
-  // independently rotatable) — not the same value.
-  BFF_INTERNAL_KEY: string;
+  // No longer read here: arcanum-bff signs people in with its own
+  // DEFAULT_IDP_* (it used to ask this Worker's /identity-provider/resolve,
+  // now gone). Still set by the installer (shared with the bff's).
+  BFF_INTERNAL_KEY?: string;
   ARCANUM_DEVICEHUB_SERVICE: Fetcher;
   DEVICEHUB_LOCAL_URL?: string;
   // arcanum-mailer (separate Worker) — see mailer-client.ts. A different

@@ -1,7 +1,6 @@
 import type { Env } from '../env';
 import { createOrganization, listMyOrganizations, listMyMemberships, getOrganization, updateBranding } from './organizations';
 import { listMembers, inviteMember, updateMemberRole, removeMember } from './members';
-import { handleResolveIdentityProviderForAuth } from './identity-providers';
 import { listPaymentCredentials, setPaymentCredential } from './payment-credentials';
 import { getSmtpCredentials, setSmtpCredentials } from './smtp-credentials';
 import { getGmailApiCredentials, setGmailApiCredentials } from './gmail-api-credentials';
@@ -62,14 +61,6 @@ export async function dispatchOrganizationsRoute(request: Request, env: Env, pat
     if (request.method === 'PATCH') return updateMemberRole(request, env, memberMatch[1], memberMatch[2]);
     if (request.method === 'DELETE') return removeMember(request, env, memberMatch[1], memberMatch[2]);
     return null;
-  }
-
-  // Legacy path of the bff's pre-authentication login lookup — the org/host
-  // segment is ignored (one identity provider per instance). See
-  // identity-providers.ts's handleResolveIdentityProviderForAuth; the
-  // current path, /identity-provider/resolve, is routed in index.ts.
-  if (/^\/organizations\/[^/]+\/identity-provider\/resolve$/.test(pathname) && request.method === 'GET') {
-    return handleResolveIdentityProviderForAuth(request, env, true);
   }
 
   const credsMatch = pathname.match(/^\/organizations\/([^/]+)\/payment-credentials$/);

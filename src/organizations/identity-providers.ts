@@ -4,10 +4,10 @@
 // per-org custom domains are gone (phase 6); the identity_providers table
 // keeps its org_id key, but only the 'default' row is ever read.
 //
-// The one place the plaintext client secret ever leaves the DB is
-// handleResolveIdentityProviderForAuth, for arcanum-bff to drive a login.
+// The client secret no longer leaves the DB: arcanum-bff signs people in
+// with its own DEFAULT_IDP_* (the /identity-provider/resolve route is gone).
+// The row is still what invite activation reads the issuer from.
 import type { Env } from '../env';
-import { json } from '../http';
 import { getOrgDataKey } from './organizations';
 import { encryptWithKey, decryptWithKey } from './crypto';
 import { resolveOidcDiscovery, ensureDefaultOrganizationRow, DEFAULT_ORG_ID, type OidcEndpoints } from './idp-resolution';
@@ -162,41 +162,4 @@ export async function resolveIdentityProviderForAuth(env: Env, purpose: AuthPurp
       end_session_endpoint: row.end_session_endpoint,
     },
   };
-}
-
-// Gated by BFF_INTERNAL_KEY (the same shared-secret pattern arcanum-devicehub
-// uses for its own internal routes, just a separate, independently
-// rotatable secret from INTERNAL_API_KEY), NOT by caller identity — there
-// is deliberately no logged-in user yet at this point in the login flow.
-// This is NOT optional: `worker` having no public ingress only blocks
-// *direct* internet access — arcanum-bff's own generic `/api/organizations/*`
-// proxy still reaches the legacy path below for any ordinary logged-in
-// session, and this handler hands back a plaintext client secret. Only the
-// BFF's own pre-auth login code (never the ordinary proxy path, which never
-// sets this header) is meant to call it.
-function hasValidInternalKey(request: Request, env: Env): boolean {
-  const auth = request.headers.get('Authorization') || '';
-  const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
-  return Boolean(env.BFF_INTERNAL_KEY) && token === env.BFF_INTERNAL_KEY;
-}
-
-// GET /identity-provider/resolve?purpose=authcode|device → ResolvedIdpSettings.
-//
-// `legacy`: the pre-phase-6 path, /organizations/:orgIdOrHost/identity-
-// provider/resolve, still answered (the org/host segment is ignored) so a
-// bff deployed before this backend keeps logging people in during a
-// rollout; it also gets the three fields that bff still reads, fixed to
-// "the instance's IdP, no custom domain". Remove once every installation
-// runs a bff that calls the new path.
-export async function handleResolveIdentityProviderForAuth(request: Request, env: Env, legacy = false): Promise<Response> {
-  if (!hasValidInternalKey(request, env)) return json({ error: 'Unauthorized' }, 401);
-
-  const purposeParam = new URL(request.url).searchParams.get('purpose');
-  if (purposeParam !== 'device' && purposeParam !== 'authcode') {
-    return json({ error: "Missing or invalid 'purpose' query param (expected 'device' or 'authcode')" }, 400);
-  }
-
-  const resolved = await resolveIdentityProviderForAuth(env, purposeParam);
-  if (!resolved) return json({ error: 'No identity provider configured' }, 404);
-  return json(legacy ? { orgId: DEFAULT_ORG_ID, customDomain: null, isOwnIdp: false, ...resolved } : resolved);
 }

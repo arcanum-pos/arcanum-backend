@@ -56,67 +56,13 @@ describe('default login provider seed', () => {
   });
 });
 
-// What arcanum-bff calls before anyone is logged in (bff types.ts resolveIdpSettings).
-describe('GET /identity-provider/resolve', () => {
-  const bff = { Authorization: 'Bearer test-bff-key' };
-  const seeded = { ...base, DEFAULT_IDP_AUTH_CODE_CLIENT_ID: 'web-client', DEFAULT_IDP_AUTH_CODE_CLIENT_SECRET: 'web-secret' };
-  const resolve = (path: string) => apiWith(seeded, 'GET', path, { headers: bff });
-
-  // Leftovers of the removed per-org features: an org with its own
-  // identity_providers row and a custom_domain — neither may matter anymore.
-  async function orgWithLeftovers() {
-    const org = await seedOrg();
-    const domain = `pos-${crypto.randomUUID()}.example.test`;
-    await env.DB.batch([
-      env.DB.prepare('UPDATE organizations SET custom_domain = ? WHERE id = ?').bind(domain, org.orgId),
-      env.DB.prepare(
-        `INSERT INTO identity_providers (org_id, issuer_url, client_id, client_secret_ciphertext, client_secret_iv, authorization_endpoint, token_endpoint, userinfo_endpoint, device_authorization_endpoint, updated_at)
-         VALUES (?, 'https://own-idp.test', 'own-client', 'x', 'y', 'https://own-idp.test/a', 'https://own-idp.test/t', 'https://own-idp.test/u', 'https://own-idp.test/d', ?)`
-      ).bind(org.orgId, new Date().toISOString()),
-    ]);
-    return { org, domain };
-  }
-
-  it("answers the instance's login provider — no org, no domain in the contract", async () => {
-    const res = await resolve('/identity-provider/resolve?purpose=authcode');
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({
-      issuerUrl: 'https://accounts.google.test',
-      clientId: 'web-client',
-      clientSecret: 'web-secret',
-      connectionName: null,
-      scopes: null,
-      endpoints: {
-        authorization_endpoint: DISCOVERY.authorization_endpoint,
-        token_endpoint: DISCOVERY.token_endpoint,
-        userinfo_endpoint: DISCOVERY.userinfo_endpoint,
-        device_authorization_endpoint: DISCOVERY.device_authorization_endpoint,
-        end_session_endpoint: null,
-      },
-    });
-    const device = await resolve('/identity-provider/resolve?purpose=device');
-    expect([device.body.clientId, device.body.clientSecret]).toEqual(['tv-client', 'tv-secret']);
-  });
-
-  it('ignores an org of its own IdP row or custom domain', async () => {
-    await orgWithLeftovers();
-    const res = await resolve('/identity-provider/resolve?purpose=device');
-    expect(res.body.issuerUrl).toBe('https://accounts.google.test');
-  });
-
-  it('the legacy per-org path answers the same for any org id or host (an older bff during a rollout)', async () => {
-    const { org, domain } = await orgWithLeftovers();
-    for (const segment of [org.orgId, domain, 'arcanum.kaboutersoft.be', 'default', 'no-such-org']) {
-      const res = await resolve(`/organizations/${encodeURIComponent(segment)}/identity-provider/resolve?purpose=device`);
-      expect(res.status, segment).toBe(200);
-      expect(res.body).toMatchObject({ orgId: 'default', customDomain: null, isOwnIdp: false, issuerUrl: 'https://accounts.google.test', clientId: 'tv-client' });
-    }
-  });
-
-  it('needs the bff key and a purpose', async () => {
-    expect((await apiWith(seeded, 'GET', '/identity-provider/resolve?purpose=device')).status).toBe(401);
-    expect((await apiWith(seeded, 'GET', '/identity-provider/resolve?purpose=device', { headers: { Authorization: 'Bearer wrong' } })).status).toBe(401);
-    expect((await resolve('/identity-provider/resolve')).status).toBe(400);
+// The bff signs people in with its own DEFAULT_IDP_*: the backend no longer
+// hands the instance's client secret out — not even with the old bff key.
+describe('GET /identity-provider/resolve (removed)', () => {
+  it('is gone, also the legacy per-org path', async () => {
+    const bff = { Authorization: 'Bearer test-bff-key' };
+    expect((await apiWith(base, 'GET', '/identity-provider/resolve?purpose=device', { headers: bff })).status).toBe(404);
+    expect((await apiWith(base, 'GET', '/organizations/default/identity-provider/resolve?purpose=device', { headers: bff })).status).toBe(404);
   });
 });
 
