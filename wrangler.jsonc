@@ -17,7 +17,7 @@
 	},
 	"vars": {
 		"AUTH_SCHEME": "Bearer",
-		"PUBLIC_BASE_URL": "https://arcanum.kaboutersoft.be",
+		"PUBLIC_BASE_URL": "https://demo.arcanum.kaboutersoft.be",
 		// This installation is the demo instance (HOSTING_PLAN.md): no new orgs
 		// from the console — demo orgs come only from the bootstrapper, via
 		// POST /internal/demo-orgs (bearer BOOTSTRAP_API_KEY, a secret). Own
@@ -30,7 +30,7 @@
 		// Most live demo orgs at once (Free-plan quotas are per account).
 		"DEMO_MAX_LIVE": "20",
 		// The demo banner's "Eigen installatie" link: the bootstrapper.
-		"DEMO_INSTALL_URL": "https://start.kaboutersoft.be"
+		"DEMO_INSTALL_URL": "https://arcanum.kaboutersoft.be"
 	},
 	"services": [
 		{

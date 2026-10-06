@@ -7,7 +7,7 @@
 //     → 200 { orgId, name, expiresAt, created: false }   this person's live one
 //     → 429 demo_limit_reached                           DEMO_MAX_LIVE live demos already
 //
-// Called by the bootstrapper (start.kaboutersoft.be) over a service binding,
+// Called by the bootstrapper (arcanum.kaboutersoft.be) over a service binding,
 // never by a browser. `sub` is the person's id at the platform's default
 // login provider (the bootstrapper and this instance share it), so the admin
 // membership is bound to (issuer, sub) right away — no invite, the next
