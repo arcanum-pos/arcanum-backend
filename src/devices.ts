@@ -6,7 +6,8 @@
 // checked against the caller's membership, and only then goes to devicehub
 // over the service binding (INTERNAL_API_KEY).
 //
-//   POST   /organizations/:org/device-pairings          admin   { role, name } → { id, code, role, name, expiresAt }
+//   POST   /organizations/:org/device-pairings          admin   { role, name, linkTo? } → { id, code, role, name, expiresAt }
+//                                                               (linkTo: a kassa, for a customer display — linked on claim)
 //   GET    /organizations/:org/device-pairings          admin   the last day's codes and what became of them
 //   DELETE /organizations/:org/device-pairings/:id      admin   revoke an open code
 //   POST   /organizations/device-pairings/claim         member of the code's org   { code } → the device (+ org name, language)
@@ -56,6 +57,8 @@ interface PairingRow {
   claimed_by: string | null;
   terminal_id: string | null;
   revoked_at: string | null;
+  // A customer display's kassa: linked to it as soon as it's paired.
+  link_to: string | null;
 }
 
 interface DeviceRow {
@@ -106,6 +109,7 @@ function pairingJson(row: PairingRow) {
     claimedAt: row.claimed_at,
     claimedBy: row.claimed_by,
     terminalId: row.terminal_id,
+    linkTo: row.link_to,
   };
 }
 
@@ -130,16 +134,27 @@ async function memberOf(request: Request, env: Env, orgId: string, roles: ('admi
 const MEMBER: ('admin' | 'cashier')[] = ['admin', 'cashier'];
 const ADMIN: ('admin' | 'cashier')[] = ['admin'];
 
+// A kassa's own customer display (a second window on the same device).
+export const companionDisplayId = (posId: string) => `display-of-${posId}`;
+const COMPANION_SUFFIX: Record<string, string> = { nl: 'klantscherm', fr: 'écran client', en: 'customer display' };
+const COMPANION_KASSA: Record<string, string> = { nl: 'Kassa', fr: 'Caisse', en: 'Till' };
+
 // --- Pairing codes ---
 
 async function createPairing(request: Request, env: Env, orgId: string): Promise<Response> {
   const caller = await memberOf(request, env, orgId, ADMIN);
   if (caller instanceof Response) return caller;
-  const body = (await request.json().catch(() => null)) as { role?: unknown; name?: unknown } | null;
+  const body = (await request.json().catch(() => null)) as { role?: unknown; name?: unknown; linkTo?: unknown } | null;
   const role = String(body?.role ?? '');
   if (!ROLES.has(role)) return json({ error: "role must be 'pos' or 'cfd'" }, 400);
   const name = (typeof body?.name === 'string' ? body.name.trim() : '').slice(0, MAX_NAME);
   if (!name) return errorJson('device_name_required', 400);
+  // A customer display can be meant for one kassa of this org right away.
+  const linkTo = role === 'cfd' && typeof body?.linkTo === 'string' && body.linkTo ? body.linkTo : null;
+  if (linkTo) {
+    const pos = await orgDevice(env, orgId, linkTo);
+    if (!pos || pos.role !== 'pos') return errorJson('device_not_found', 404);
+  }
 
   const code = newCode();
   const now = new Date();
@@ -155,11 +170,12 @@ async function createPairing(request: Request, env: Env, orgId: string): Promise
     claimed_by: null,
     terminal_id: null,
     revoked_at: null,
+    link_to: linkTo,
   };
   await env.DB.batch([
     env.DB.prepare(
-      'INSERT INTO device_pairings (id, org_id, code_hash, role, name, created_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-    ).bind(row.id, orgId, await sha256(code), row.role, name, row.created_by, row.created_at, row.expires_at),
+      'INSERT INTO device_pairings (id, org_id, code_hash, role, name, created_by, created_at, expires_at, link_to) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    ).bind(row.id, orgId, await sha256(code), row.role, name, row.created_by, row.created_at, row.expires_at, linkTo),
     env.DB.prepare('DELETE FROM device_pairings WHERE created_at < ?').bind(new Date(now.getTime() - KEEP_DAYS * 86_400_000).toISOString()),
   ]);
   return json({ ...pairingJson(row), code: shownCode(code) }, 201);
@@ -232,9 +248,19 @@ async function claimPairing(request: Request, env: Env): Promise<Response> {
     await env.DB.prepare('UPDATE device_pairings SET claimed_at = NULL, claimed_by = NULL, terminal_id = NULL WHERE id = ?').bind(row.id).run();
     return errorJson('devicehub_failed', 502);
   }
+  // A customer display meant for a kassa: linked now — if that kassa is still there.
+  let linkedTo: string | null = null;
+  if (row.role === 'cfd' && row.link_to && (await orgDevice(env, row.org_id, row.link_to))) {
+    const previous = await devicehub(env, `/devices/${encodeURIComponent(row.link_to)}/linked?role=cfd`);
+    if (previous.status === 200 && previous.body?.terminal_id) {
+      await devicehub(env, '/devices/unlink', { method: 'POST', body: JSON.stringify({ terminal_id: previous.body.terminal_id }) });
+    }
+    const linked = await devicehub(env, '/devices/link', { method: 'POST', body: JSON.stringify({ pos_terminal_id: row.link_to, terminal_id: terminalId }) });
+    if (linked.status === 200) linkedTo = row.link_to;
+  }
   // The org's language too: a new device starts in it (unless one was picked on the device).
   const org = await env.DB.prepare('SELECT name, locale FROM organizations WHERE id = ?').bind(row.org_id).first<{ name: string; locale: string | null }>();
-  return json({ terminalId, role: row.role, orgId: row.org_id, orgName: org?.name ?? '', orgLocale: org?.locale ?? null, name: row.name }, 201);
+  return json({ terminalId, role: row.role, orgId: row.org_id, orgName: org?.name ?? '', orgLocale: org?.locale ?? null, name: row.name, linkedTo }, 201);
 }
 
 // --- Devices ---
@@ -280,18 +306,23 @@ async function openDisplay(request: Request, env: Env, orgId: string, posId: str
   if (caller instanceof Response) return caller;
   const pos = await orgDevice(env, orgId, posId);
   if (!pos || pos.role !== 'pos') return errorJson('device_not_found', 404);
-  // The new window replaces the display this kassa had.
-  const previous = await devicehub(env, `/devices/${encodeURIComponent(posId)}/linked?role=cfd`);
-  if (previous.status === 200 && previous.body?.terminal_id) {
-    await devicehub(env, '/devices/unlink', { method: 'POST', body: JSON.stringify({ terminal_id: previous.body.terminal_id }) });
-  }
-  const terminalId = crypto.randomUUID();
-  const name = `${pos.name || 'Kassa'} · klantscherm`.slice(0, MAX_NAME);
+  // Always the same display for this kassa (its id follows from the
+  // kassa's), so opening it again doesn't add another one to Toestellen.
+  // Registering is a no-op when it exists; the name follows the kassa's.
+  const terminalId = companionDisplayId(posId);
+  const org = await env.DB.prepare('SELECT locale FROM organizations WHERE id = ?').bind(orgId).first<{ locale: string | null }>();
+  const name = `${pos.name || COMPANION_KASSA[org?.locale ?? 'nl'] || 'Kassa'} · ${COMPANION_SUFFIX[org?.locale ?? 'nl'] || COMPANION_SUFFIX.nl}`.slice(0, MAX_NAME);
   const registered = await devicehub(env, '/devices/register', {
     method: 'POST',
     body: JSON.stringify({ terminal_id: terminalId, org_id: orgId, role: 'cfd', name }),
   });
   if (registered.status !== 200) return errorJson('devicehub_failed', 502);
+  await devicehub(env, '/devices/rename', { method: 'POST', body: JSON.stringify({ terminal_id: terminalId, name }) });
+  // It replaces whichever display this kassa had (one per kassa).
+  const previous = await devicehub(env, `/devices/${encodeURIComponent(posId)}/linked?role=cfd`);
+  if (previous.status === 200 && previous.body?.terminal_id && previous.body.terminal_id !== terminalId) {
+    await devicehub(env, '/devices/unlink', { method: 'POST', body: JSON.stringify({ terminal_id: previous.body.terminal_id }) });
+  }
   const linked = await devicehub(env, '/devices/link', { method: 'POST', body: JSON.stringify({ pos_terminal_id: posId, terminal_id: terminalId }) });
   if (linked.status !== 200) return errorJson('devicehub_failed', 502);
   return json({ terminalId }, 201);

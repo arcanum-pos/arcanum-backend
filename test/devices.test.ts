@@ -30,7 +30,8 @@ beforeEach(() => {
     if (hubDown) return Response.json({ error: 'down' }, { status: 503 });
     const p = url.pathname;
     if (p === '/devices/register') {
-      registry.set(body.terminal_id, { terminal_id: body.terminal_id, org_id: body.org_id, role: body.role, linked_to: null, name: body.name ?? null });
+      // Like devicehub: an existing registration is left as it is.
+      if (!registry.has(body.terminal_id)) registry.set(body.terminal_id, { terminal_id: body.terminal_id, org_id: body.org_id, role: body.role, linked_to: null, name: body.name ?? null });
       return Response.json(registry.get(body.terminal_id));
     }
     if (p === '/devices/rename') {
@@ -176,6 +177,34 @@ describe('pairing codes', () => {
   });
 });
 
+describe('a pairing code for a customer display, for a given kassa', () => {
+  it('links the display to that kassa as soon as it is paired', async () => {
+    const org = await seedOrg();
+    const kassa = await pairedKassa(org);
+    const res = await api('POST', pairings(org), { user: org.admin, body: { role: 'cfd', name: 'Tablet toog', linkTo: kassa } });
+    expect(res.body.linkTo).toBe(kassa);
+    const claimed = await claim(org.cashier, res.body.code);
+    expect(claimed.body.linkedTo).toBe(kassa);
+    expect(registry.get(claimed.body.terminalId)!.linked_to).toBe(kassa);
+  });
+
+  it("only a kassa of the org; ignored for a kassa code; the kassa gone by then: paired, just not linked", async () => {
+    const org = await seedOrg();
+    const other = await seedOrg();
+    const theirs = await pairedKassa(other);
+    expect((await api('POST', pairings(org), { user: org.admin, body: { role: 'cfd', name: 'X', linkTo: theirs } })).status).toBe(404);
+    const kassa = await pairedKassa(org);
+    expect((await api('POST', pairings(org), { user: org.admin, body: { role: 'pos', name: 'K', linkTo: kassa } })).body.linkTo).toBeNull();
+
+    const { code } = (await api('POST', pairings(org), { user: org.admin, body: { role: 'cfd', name: 'Tablet', linkTo: kassa } })).body;
+    await api('DELETE', devices(org, `/${kassa}`), { user: org.admin });
+    const claimed = await claim(org.cashier, code);
+    expect(claimed.status).toBe(201);
+    expect(claimed.body.linkedTo).toBeNull();
+    expect(registry.get(claimed.body.terminalId)!.linked_to).toBeNull();
+  });
+});
+
 describe('devices', () => {
   it("members list and look up their org's devices; another org's device is \"not found\"", async () => {
     const org = await seedOrg();
@@ -207,17 +236,40 @@ describe('devices', () => {
     expect(registry.has(kassa)).toBe(false);
   });
 
-  it('"Klantscherm openen": a customer display registered and linked to this kassa at once', async () => {
+  it('"Klantscherm openen": its own customer display, registered and linked at once — the same one every time', async () => {
     const org = await seedOrg();
     const kassa = await pairedKassa(org);
     const res = await api('POST', devices(org, `/${kassa}/display`), { user: org.cashier });
     expect(res.status).toBe(201);
+    expect(res.body.terminalId).toBe(`display-of-${kassa}`);
     expect(registry.get(res.body.terminalId)).toMatchObject({ role: 'cfd', org_id: org.orgId, linked_to: kassa, name: 'Kassa 1 · klantscherm' });
     expect((await api('GET', devices(org, `/${kassa}/linked`), { user: org.cashier })).body).toMatchObject({ terminal_id: res.body.terminalId });
-    // A second window replaces the first: the old one is unlinked.
+
+    // Again (and after renaming the kassa): the same display, renamed along — nothing piles up.
+    await api('PATCH', devices(org, `/${kassa}`), { user: org.cashier, body: { name: 'Toog' } });
     const again = await api('POST', devices(org, `/${kassa}/display`), { user: org.cashier });
-    expect(registry.get(res.body.terminalId)!.linked_to).toBeNull();
-    expect(registry.get(again.body.terminalId)!.linked_to).toBe(kassa);
+    expect(again.body.terminalId).toBe(res.body.terminalId);
+    expect(registry.get(again.body.terminalId)).toMatchObject({ linked_to: kassa, name: 'Toog · klantscherm' });
+    expect([...registry.values()].filter((d) => d.role === 'cfd')).toHaveLength(1);
+  });
+
+  it('"Klantscherm openen" takes over from a separate display that was linked to the kassa', async () => {
+    const org = await seedOrg();
+    const kassa = await pairedKassa(org);
+    const { code } = await newCode(org, 'cfd', 'Tablet');
+    const tablet = (await claim(org.cashier, code)).body.terminalId;
+    await api('POST', devices(org, `/${kassa}/link`), { user: org.cashier, body: { terminalId: tablet } });
+    const window = (await api('POST', devices(org, `/${kassa}/display`), { user: org.cashier })).body.terminalId;
+    expect(registry.get(tablet)!.linked_to).toBeNull();
+    expect(registry.get(window)!.linked_to).toBe(kassa);
+  });
+
+  it("the companion display's name follows the organisation's language", async () => {
+    const org = await seedOrg();
+    await env.DB.prepare("UPDATE organizations SET locale = 'fr' WHERE id = ?").bind(org.orgId).run();
+    const kassa = await pairedKassa(org);
+    const res = await api('POST', devices(org, `/${kassa}/display`), { user: org.cashier });
+    expect(registry.get(res.body.terminalId)!.name).toBe('Kassa 1 · écran client');
   });
 
   it("linking only between two devices of the caller's org", async () => {

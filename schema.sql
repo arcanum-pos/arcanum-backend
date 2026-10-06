@@ -477,7 +477,9 @@ CREATE TABLE IF NOT EXISTS device_pairings (
   claimed_at TEXT,
   claimed_by TEXT,
   terminal_id TEXT,
-  revoked_at TEXT
+  revoked_at TEXT,
+  -- A customer display's kassa, linked on claim (migration 0024).
+  link_to TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_device_pairings_code ON device_pairings(code_hash);
 CREATE INDEX IF NOT EXISTS idx_device_pairings_org ON device_pairings(org_id, created_at);
@@ -525,3 +527,4 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0020_org_locale.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0021_charges_tab_index.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0022_org_is_locked.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0023_device_pairings.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0024_device_pairing_link.sql');
