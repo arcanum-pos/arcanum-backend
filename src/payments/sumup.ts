@@ -20,8 +20,8 @@ import { json } from '../http';
 import { errorJson, providerErrorJson } from '../errors';
 import { broadcastPaymentEvent, notifyTabChanged } from '../devicehub-client';
 import { getDecryptedPaymentCredential } from '../organizations/payment-credentials';
-import { extractCaller, refuseUnlessOrgMember } from '../organizations/auth';
-import { createSumupReaderCheckout, SumupCloudApiError, listSumupReaders } from './sumup-cloud-api';
+import { extractCaller, refuseUnlessOrgMember, requireOrgRole } from '../organizations/auth';
+import { createSumupReaderCheckout, SumupCloudApiError, listSumupReaders, pairSumupReader, removeSumupReader } from './sumup-cloud-api';
 import { createCharge, getCharge, parseTipCents, setChargeProviderRef, resolveCharge, type ChargeRecord } from './charges';
 import { ensureChargePolling } from './charge-poller-client';
 import { customerOrder, isPendingTabChargeConflict, prepareTabCharge } from '../tabs';
@@ -48,6 +48,53 @@ export async function listSumupReadersForOrg(request: Request, env: Env): Promis
     return json({ configured: true, readers });
   } catch (err) {
     return providerErrorJson('sumup_readers_failed', err instanceof SumupCloudApiError ? err.message : null, 502, { configured: true, readers: [] });
+  }
+}
+
+// The console's Toestellen page: pair a reader by its code, or unpair one —
+// an admin of the org only. Nothing is stored here either: the list above
+// shows the result on its next fetch.
+async function sumupAccountForAdmin(request: Request, env: Env, orgId: string): Promise<Response | { merchantId: string; apiKey: string }> {
+  const caller = extractCaller(request);
+  if (!caller) return json({ error: 'Unauthorized' }, 401);
+  if (!(await requireOrgRole(env, orgId, caller, ['admin']))) return json({ error: 'Forbidden' }, 403);
+  const credential = await getDecryptedPaymentCredential(env, orgId, 'sumup');
+  const merchantId = credential?.merchantId ? String(credential.merchantId) : '';
+  const apiKey = credential?.apiKey ? String(credential.apiKey) : '';
+  if (!merchantId || !apiKey) return errorJson('sumup_not_configured', 409);
+  return { merchantId, apiKey };
+}
+
+export async function pairSumupReaderForOrg(request: Request, env: Env): Promise<Response> {
+  const body = (await request.json().catch(() => null)) as { orgId?: unknown; pairingCode?: unknown; name?: unknown } | null;
+  const orgId = typeof body?.orgId === 'string' ? body.orgId : '';
+  if (!orgId) return json({ error: 'orgId is required' }, 400);
+  const account = await sumupAccountForAdmin(request, env, orgId);
+  if (account instanceof Response) return account;
+
+  // As shown on the device; spaces and case don't matter to the person typing it.
+  const pairingCode = typeof body?.pairingCode === 'string' ? body.pairingCode.replace(/\s+/g, '').toUpperCase() : '';
+  if (!/^[A-Z0-9]{8,9}$/.test(pairingCode)) return errorJson('sumup_pairing_code_invalid', 400);
+  const name = (typeof body?.name === 'string' ? body.name.trim() : '').slice(0, 100) || 'Solo';
+
+  try {
+    const reader = await pairSumupReader(account.merchantId, account.apiKey, pairingCode, name);
+    return json({ reader }, 201);
+  } catch (err) {
+    return providerErrorJson('sumup_pair_failed', err instanceof SumupCloudApiError ? err.message : null, 502);
+  }
+}
+
+export async function removeSumupReaderForOrg(request: Request, env: Env, readerId: string): Promise<Response> {
+  const orgId = new URL(request.url).searchParams.get('org_id');
+  if (!orgId) return json({ error: 'org_id is required' }, 400);
+  const account = await sumupAccountForAdmin(request, env, orgId);
+  if (account instanceof Response) return account;
+  try {
+    await removeSumupReader(account.merchantId, account.apiKey, readerId);
+    return json({ ok: true });
+  } catch (err) {
+    return providerErrorJson('sumup_remove_failed', err instanceof SumupCloudApiError ? err.message : null, 502);
   }
 }
 

@@ -21,7 +21,7 @@ export type { Env };
 
 import { json, CORS_HEADERS } from './http';
 import { createPayment, postBancontactCallback } from './payments/bancontact';
-import { createSumupCharge, postSumupCallback, confirmChargeFromPos, getSumupStatus, listSumupReadersForOrg } from './payments/sumup';
+import { createSumupCharge, postSumupCallback, confirmChargeFromPos, getSumupStatus, listSumupReadersForOrg, pairSumupReaderForOrg, removeSumupReaderForOrg } from './payments/sumup';
 import { ChargePoller } from './payments/poller';
 import { createTransaction, listTransactions } from './transactions';
 import { dispatchOrganizationsRoute } from './organizations/router';
@@ -67,6 +67,15 @@ export default {
 
       if (request.method === 'GET' && url.pathname === '/sumup/readers') {
         return await listSumupReadersForOrg(request, env);
+      }
+
+      if (request.method === 'POST' && url.pathname === '/sumup/readers') {
+        return await pairSumupReaderForOrg(request, env);
+      }
+
+      const sumupReaderMatch = url.pathname.match(/^\/sumup\/readers\/([^/]+)$/);
+      if (request.method === 'DELETE' && sumupReaderMatch) {
+        return await removeSumupReaderForOrg(request, env, decodeURIComponent(sumupReaderMatch[1]));
       }
 
       // Payment-provider webhook callbacks — reached via the BFF's

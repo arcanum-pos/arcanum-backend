@@ -106,6 +106,11 @@ export const ERROR_TEXTS = {
   bancontact_not_configured: 'Bancontact niet geconfigureerd voor deze organisatie',
   // `error` is SumUp's own message when it gave one — then also in params.detail.
   sumup_readers_failed: 'Kon SumUp readers niet ophalen',
+  sumup_not_configured: 'SumUp is niet ingesteld voor deze organisatie',
+  sumup_pairing_code_invalid: 'Een koppelcode bestaat uit 8 of 9 letters en cijfers',
+  // `error` is SumUp's own message when it gave one — then also in params.detail.
+  sumup_pair_failed: 'Koppelen van de reader mislukt',
+  sumup_remove_failed: 'Loskoppelen van de reader mislukt',
 } as const satisfies Record<string, string>;
 
 export type ErrorCode = keyof typeof ERROR_TEXTS;

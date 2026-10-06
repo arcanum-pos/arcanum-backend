@@ -54,6 +54,25 @@ export async function listSumupReaders(merchantCode: string, apiKey: string): Pr
   return data.items.map((r) => ({ id: r.id, name: r.name, status: r.status, model: r.device?.model || null }));
 }
 
+// Pairs a reader with the merchant account: the 8–9 character code a Solo
+// (or the Virtual Solo, virtual-solo.sumup.com) shows after "pair" is
+// chosen on it. SumUp answers with the reader in 'processing' until the
+// device confirms, then 'paired'.
+export async function pairSumupReader(merchantCode: string, apiKey: string, pairingCode: string, name: string): Promise<SumupReader> {
+  const response = await sumupFetch(`/v0.1/merchants/${encodeURIComponent(merchantCode)}/readers`, apiKey, {
+    method: 'POST',
+    body: JSON.stringify({ pairing_code: pairingCode, name }),
+  });
+  const r = (await response.json()) as { id: string; name: string; status: string; device?: { model?: string } };
+  return { id: r.id, name: r.name, status: r.status, model: r.device?.model || null };
+}
+
+// Unpairs it: the reader leaves the merchant account (on the device itself
+// it has to be paired again to be used).
+export async function removeSumupReader(merchantCode: string, apiKey: string, readerId: string): Promise<void> {
+  await sumupFetch(`/v0.1/merchants/${encodeURIComponent(merchantCode)}/readers/${encodeURIComponent(readerId)}`, apiKey, { method: 'DELETE' });
+}
+
 export interface SumupReaderCheckout {
   checkoutId: string;
   clientTransactionId: string;
