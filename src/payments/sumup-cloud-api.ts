@@ -1,8 +1,9 @@
 // Thin client for SumUp's Cloud API (https://developer.sumup.com/api/readers),
 // used to dispatch a payment request straight to a paired Solo reader and
-// poll for its result — as opposed to the local pending-queue flow in
-// sumup.ts, which is only for the browser simulator and the iOS Bluetooth
-// bridge. Schema confirmed against sumup/sumup-openapi (2026-09).
+// poll for its result — as opposed to a charge without a reader, which
+// stays pending in sumup.ts until the cashier confirms it on the kassa.
+// Pairing and unpairing readers (the console's Toestellen) too. Schema
+// confirmed against sumup/sumup-openapi (2026-09).
 const SUMUP_API_BASE = 'https://api.sumup.com';
 
 export class SumupCloudApiError extends Error {

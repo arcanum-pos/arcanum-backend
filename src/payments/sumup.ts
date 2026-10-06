@@ -111,7 +111,7 @@ interface CreateChargeBody {
   // Set when this POS has a real SumUp Solo reader selected in Instellingen
   // — routes the charge through the Cloud API instead of just sitting
   // 'pending' for a manual confirm (cash always takes that path; sumup does
-  // too when no reader is linked, e.g. testing via the simulator).
+  // too when no reader is linked: the cashier confirms it on the kassa).
   readerId?: string;
   // The tab this charge settles — see tabs.ts.
   tabId?: string;
@@ -273,7 +273,7 @@ export async function postSumupCallback(request: Request, env: Env, chargeId: st
 
 // Called by the webapp itself (reached via the BFF, session-checked) when
 // the cashier taps "confirm" on a manual cash/SumUp payment — the fallback
-// for a sumup charge with no reader linked (e.g. the simulator), or cash.
+// for a sumup charge with no reader linked, or cash.
 // Only by a member of the charge's own org.
 export async function confirmChargeFromPos(request: Request, env: Env): Promise<Response> {
   if (!extractCaller(request)) return json({ error: 'Unauthorized' }, 401);
@@ -288,7 +288,7 @@ export async function confirmChargeFromPos(request: Request, env: Env): Promise<
   return json({ ok: true, chargeId: body.chargeId });
 }
 
-// The kassa, the customer display and the simulator follow a charge here —
+// The kassa and the customer display follow a charge here —
 // a member of the charge's own org only.
 export async function getSumupStatus(request: Request, chargeId: string, env: Env): Promise<Response> {
   if (!extractCaller(request)) return json({ error: 'Unauthorized' }, 401);

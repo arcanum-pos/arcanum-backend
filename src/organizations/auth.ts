@@ -46,7 +46,7 @@ function parseEmailVerified(value: string | null): boolean | null {
   return null;
 }
 
-// The payment and ledger routes (kassa, customer display, simulator,
+// The payment and ledger routes (kassa, customer display,
 // settings): only an active admin or cashier of that org. A response to
 // return as is (401/403), or null when the caller may go on.
 export async function refuseUnlessOrgMember(request: Request, env: Env, orgId: string): Promise<Response | null> {
