@@ -9,7 +9,7 @@ function internalKeyHeader(env: Env): Record<string, string> {
   return { Authorization: `Bearer ${env.INTERNAL_API_KEY}` };
 }
 
-async function callDeviceHub(env: Env, path: string, init: RequestInit): Promise<Response> {
+export async function callDeviceHub(env: Env, path: string, init: RequestInit): Promise<Response> {
   const headers = {
     'Content-Type': 'application/json',
     ...internalKeyHeader(env),

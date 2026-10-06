@@ -9,6 +9,7 @@ import { testMailConfiguration } from './mail';
 import { listEvents, createEvent } from './events';
 import { getOrgLocale, setOrgLocale } from './locale';
 import { getCapabilities } from './org-creation';
+import { dispatchDeviceRoute } from '../devices';
 
 // Handles every /organizations/* path. Returns null for anything it doesn't
 // recognize, so the caller (the main router) can fall through to its own
@@ -19,6 +20,11 @@ export async function dispatchOrganizationsRoute(request: Request, env: Env, pat
     if (request.method === 'GET') return listMyOrganizations(request, env);
     return null;
   }
+
+  // Devices and their pairing codes (devices.ts) — incl. the claim, whose
+  // "device-pairings" isn't an organization id.
+  const deviceResponse = await dispatchDeviceRoute(request, env, pathname);
+  if (deviceResponse) return deviceResponse;
 
   // Checked before the generic /organizations/:id match below, since
   // "memberships" would otherwise be parsed as an organization id.

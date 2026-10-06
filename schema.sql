@@ -462,6 +462,34 @@ CREATE TABLE IF NOT EXISTS prep_stations (
 CREATE INDEX IF NOT EXISTS idx_prep_stations_org ON prep_stations(org_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_prep_stations_org_name ON prep_stations(org_id, lower(name));
 
+-- Device pairing (migration 0023, DOMAIN_MODEL.md "Devices: control plane
+-- and data plane"): a device is registered only by claiming a code an admin
+-- made in the console. Only the code's SHA-256 is stored; rows kept 30 days.
+CREATE TABLE IF NOT EXISTS device_pairings (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES organizations(id),
+  code_hash TEXT NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('pos', 'cfd')),
+  name TEXT NOT NULL,
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  claimed_at TEXT,
+  claimed_by TEXT,
+  terminal_id TEXT,
+  revoked_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_device_pairings_code ON device_pairings(code_hash);
+CREATE INDEX IF NOT EXISTS idx_device_pairings_org ON device_pairings(org_id, created_at);
+
+-- Failed claims per person (issuer + sub), for the rate limit: a code is 8
+-- characters, so guessing is hopeless anyway — this keeps it that way.
+CREATE TABLE IF NOT EXISTS device_pairing_failures (
+  caller TEXT NOT NULL,
+  at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_device_pairing_failures ON device_pairing_failures(caller, at);
+
 -- --- Migration tracking ---
 -- wrangler's own table (`wrangler d1 migrations apply`), with the exact DDL
 -- wrangler uses. A database built from this file already contains every
@@ -496,3 +524,4 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0019_charge_lines.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0020_org_locale.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0021_charges_tab_index.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0022_org_is_locked.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0023_device_pairings.sql');
