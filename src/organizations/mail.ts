@@ -6,7 +6,7 @@
 import type { Env } from '../env';
 import { json } from '../http';
 import { errorJson } from '../errors';
-import { sendEmail, type SendEmailRequest } from '../mailer-client';
+import { sendEmail, sendMessage, type SendEmailRequest } from '../mailer-client';
 import { extractCaller, requireOrgRole } from './auth';
 import { resolveMailProvider } from './mail-provider';
 import { resolveSmtpCredentialsForSend } from './smtp-credentials';
@@ -37,11 +37,29 @@ async function buildSendRequest(env: Env, orgId: string, message: MailMessage): 
   return { ...message, provider: 'smtp', credentials };
 }
 
-// Best-effort send for an org's configured transport (invites, and anything
-// else that must never fail its own action just because mail didn't go
-// out) — throws on failure, same as sendEmail itself; the caller decides
-// whether that's fatal or just logged.
+// The installation's mail account (MAIL_CONFIG, MAIL.md), as the mailer's
+// provider { type, …settings }; null when the installer hasn't set one.
+// Either form: flat {"provider":"brevo","apiKey",…} or {"provider","credentials":{…}}.
+export function installationMailProvider(env: Env): ({ type: string } & Record<string, unknown>) | null {
+  if (!env.MAIL_CONFIG) return null;
+  const config = JSON.parse(env.MAIL_CONFIG) as { provider?: unknown; credentials?: unknown } & Record<string, unknown>;
+  if (typeof config.provider !== 'string' || !config.provider) throw new Error('MAIL_CONFIG must name its "provider"');
+  const { provider, credentials, ...settings } = config;
+  return { ...(credentials && typeof credentials === 'object' ? (credentials as Record<string, unknown>) : settings), type: provider };
+}
+
+// Best-effort send for an org's mail (invites, and anything else that must
+// never fail its own action just because mail didn't go out) — throws on
+// failure; the caller decides whether that's fatal or just logged. The
+// installation's account when it has one (sender name: the organisation's),
+// else — until MAIL.md phase 4 — the org's own or the `default` settings.
 export async function sendOrgEmail(env: Env, orgId: string, message: MailMessage): Promise<void> {
+  const installation = installationMailProvider(env);
+  if (installation) {
+    const fromName = message.fromName ?? (await env.DB.prepare('SELECT name FROM organizations WHERE id = ?').bind(orgId).first<{ name: string }>())?.name;
+    await sendMessage(env, installation, { ...message, ...(fromName ? { fromName } : {}) });
+    return;
+  }
   const request = await buildSendRequest(env, orgId, message);
   if (!request) throw new Error('No mail transport configured for this organization (and no platform default either)');
   await sendEmail(env, request);
@@ -59,6 +77,22 @@ export async function testMailConfiguration(request: Request, env: Env, orgId: s
 
   const membership = await requireOrgRole(env, orgId, caller, ['admin']);
   if (!membership) return json({ error: 'Forbidden' }, 403);
+
+  // The installation's account, when it has one: that's what the org's mail goes through.
+  const installation = installationMailProvider(env);
+  if (installation) {
+    try {
+      await sendOrgEmail(env, orgId, {
+        to: caller.email,
+        subject: 'Testmail van Arcanum',
+        text: 'Als je dit leest, werkt de e-mail van deze installatie voor deze organisatie.',
+        html: '<p>Als je dit leest, werkt de e-mail van deze installatie voor deze organisatie.</p>',
+      });
+      return json({ ok: true, provider: installation.type });
+    } catch (err) {
+      return errorJson('mail_send_failed', 502, { details: (err as Error).message, provider: installation.type });
+    }
+  }
 
   const provider = await resolveMailProvider(env, orgId);
   const sendRequest = await buildSendRequest(env, orgId, {

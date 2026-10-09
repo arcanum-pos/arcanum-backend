@@ -76,4 +76,10 @@ export interface Env {
   DEFAULT_SMTP_PASS?: string;
   DEFAULT_SMTP_FROM_ADDRESS?: string;
   DEFAULT_SMTP_FROM_NAME?: string;
+  // The installation's mail account (MAIL.md), set by its installer
+  // (Geavanceerd → E-mail): {"provider":"smtp"|"gmail_api"|"brevo"|"resend"|…,
+  // …that service's settings} — or {"provider", "credentials": {…}}. When
+  // set, every organisation's mail goes through it; the per-org and
+  // `default` settings above are only a fallback until MAIL.md phase 4.
+  MAIL_CONFIG?: string;
 }

@@ -81,16 +81,17 @@ export async function resolveOidcDiscovery(issuerUrl: string): Promise<OidcEndpo
   }
 }
 
-// The issuer this instance's members authenticate against: the `default`
-// identity provider's (the only one — see identity-providers.ts). Never
-// decrypts anything — issuer_url isn't secret. Used by
-// invite-reconciliation.ts: an e-mail claim from any other issuer never
-// claims a pending invite. Not seeded yet (the bff signs people in with its
-// own settings since 0.1.22, so nothing may have asked for the row): the
-// same DEFAULT_IDP_ISSUER_URL it would be seeded from.
+// The issuer this instance's members authenticate against (invites, demo
+// orgs): DEFAULT_IDP_ISSUER_URL, straight from the secret the installer
+// sets (MAIL.md decision 6 — the bff signs people in with its own
+// settings). Only without it: the `default` identity_providers row an older
+// installation may still have. Never decrypts anything — not secret.
 export async function resolveInstanceIssuerUrl(env: Env): Promise<string | null> {
+  // As is: memberships store the issuer exactly as the provider names it.
+  const fromSecret = env.DEFAULT_IDP_ISSUER_URL?.trim();
+  if (fromSecret) return fromSecret;
   const row = await env.DB.prepare('SELECT issuer_url FROM identity_providers WHERE org_id = ?')
     .bind(DEFAULT_ORG_ID)
     .first<Pick<IdentityProviderRow, 'issuer_url'>>();
-  return row?.issuer_url ?? env.DEFAULT_IDP_ISSUER_URL ?? null;
+  return row?.issuer_url ?? null;
 }

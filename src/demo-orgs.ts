@@ -29,8 +29,7 @@ import { json } from './http';
 import { errorJson } from './errors';
 import { jsonRowsStatement, present } from './sql-json';
 import { generateDataKey, wrapDataKey } from './organizations/crypto';
-import { ensureDefaultOrganization } from './organizations/identity-providers';
-import { DEFAULT_ORG_ID } from './organizations/idp-resolution';
+import { resolveInstanceIssuerUrl } from './organizations/idp-resolution';
 import { orgCreationMode } from './organizations/org-creation';
 import { demoExpiresAt, demoLifetimeHours, demoMaxLive } from './organizations/demo';
 import { toLocale, type Locale } from './organizations/locale';
@@ -197,14 +196,8 @@ export async function createDemoOrg(request: Request, env: Env): Promise<Respons
   if (!email.includes('@') || email.length > 254) return json({ error: 'email is required' }, 400);
 
   // The shared login provider's issuer: what the bootstrapper's `sub` belongs to.
-  try {
-    await ensureDefaultOrganization(env);
-  } catch (err) {
-    return json({ error: 'Default identity provider is not configured', details: (err as Error).message }, 503);
-  }
-  const idp = await env.DB.prepare('SELECT issuer_url FROM identity_providers WHERE org_id = ?').bind(DEFAULT_ORG_ID).first<{ issuer_url: string | null }>();
-  if (!idp?.issuer_url) return json({ error: 'Default identity provider is not configured' }, 503);
-  const issuer = idp.issuer_url;
+  const issuer = await resolveInstanceIssuerUrl(env);
+  if (!issuer) return json({ error: 'Default identity provider is not configured' }, 503);
 
   const nowMs = Date.now();
   const now = new Date(nowMs).toISOString();

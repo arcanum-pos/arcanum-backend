@@ -63,18 +63,22 @@ export async function inviteMember(request: Request, env: Env, orgId: string): P
   // default's, whichever transport is active) must never fail invite
   // creation itself — worst case, the admin has to tell them out of band,
   // exactly like before this existed.
+  // `mailSent`: whether it went out — if not, the console tells the admin
+  // to pass the address on themselves (MAIL.md decision 3).
+  let mailSent = false;
   try {
     // The mail is in the org's default language (the invitee has no language of their own yet).
     const org = await env.DB.prepare('SELECT name, locale FROM organizations WHERE id = ?').bind(orgId).first<{ name: string; locale: string }>();
     if (org) {
       const content = buildInviteEmail({ orgName: org.name, role, loginUrl: `${env.PUBLIC_BASE_URL}/login`, locale: toLocale(org.locale) });
-      await sendOrgEmail(env, orgId, { to: email, ...content });
+      await sendOrgEmail(env, orgId, { to: email, fromName: org.name, ...content });
+      mailSent = true;
     }
   } catch (err) {
     console.error('Kon uitnodigingsmail niet versturen', err);
   }
 
-  return json(rowToMember(row!), 201);
+  return json({ ...rowToMember(row!), mailSent, loginUrl: `${env.PUBLIC_BASE_URL}/login` }, 201);
 }
 
 export async function updateMemberRole(request: Request, env: Env, orgId: string, membershipId: string): Promise<Response> {

@@ -60,6 +60,25 @@ async function callMailer(env: Env, path: string, init: RequestInit): Promise<Re
 // admin it didn't work) depends on the caller, not on this function —
 // so each call site wraps this itself instead of the error being silently
 // swallowed here for everyone.
+// The mailer's one contract (MAIL.md): a message, and the service to send
+// it with — { type, …its settings }. Throws with the mailer's own answer.
+export interface OutgoingMessage {
+  to: string | string[];
+  subject: string;
+  text?: string;
+  html?: string;
+  fromName?: string;
+  replyTo?: string;
+}
+
+export async function sendMessage(env: Env, provider: { type: string } & Record<string, unknown>, message: OutgoingMessage): Promise<void> {
+  const res = await callMailer(env, '/send', { method: 'POST', body: JSON.stringify({ message, provider }) });
+  if (!res.ok) {
+    const details = await res.text().catch(() => '');
+    throw new Error(`arcanum-mailer returned ${res.status}: ${details}`);
+  }
+}
+
 export async function sendEmail(env: Env, request: SendEmailRequest): Promise<void> {
   const res = await callMailer(env, '/send', {
     method: 'POST',
