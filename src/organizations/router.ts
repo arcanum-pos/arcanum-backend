@@ -5,7 +5,7 @@ import { listPaymentCredentials, setPaymentCredential } from './payment-credenti
 import { getSmtpCredentials, setSmtpCredentials } from './smtp-credentials';
 import { getGmailApiCredentials, setGmailApiCredentials } from './gmail-api-credentials';
 import { getMailProvider, setMailProvider } from './mail-provider';
-import { testMailConfiguration } from './mail';
+import { testInstallationMail, testMailConfiguration } from './mail';
 import { listEvents, createEvent } from './events';
 import { getOrgLocale, setOrgLocale } from './locale';
 import { getCapabilities } from './org-creation';
@@ -30,6 +30,11 @@ export async function dispatchOrganizationsRoute(request: Request, env: Env, pat
   // "memberships" would otherwise be parsed as an organization id.
   if (pathname === '/organizations/memberships' && request.method === 'GET') {
     return listMyMemberships(request, env);
+  }
+
+  // The installer's test mail (MAIL.md) — not an organization id either.
+  if (pathname === '/organizations/mail-test' && request.method === 'POST') {
+    return testInstallationMail(request, env);
   }
 
   // Same reason: "capabilities" isn't an organization id.

@@ -71,6 +71,14 @@ export interface OutgoingMessage {
   replyTo?: string;
 }
 
+// The mailer's answer as it is ({ ok, id? } or { ok: false, code, error,
+// detail? }) — for the installer's test mail, which shows it.
+export async function sendMessageVerbose(env: Env, provider: { type: string } & Record<string, unknown>, message: OutgoingMessage): Promise<{ status: number; body: Record<string, unknown> }> {
+  const res = await callMailer(env, '/send', { method: 'POST', body: JSON.stringify({ message, provider }) });
+  const body = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+  return { status: res.status, body: body ?? { ok: false, code: 'unreachable', error: `arcanum-mailer returned ${res.status}` } };
+}
+
 export async function sendMessage(env: Env, provider: { type: string } & Record<string, unknown>, message: OutgoingMessage): Promise<void> {
   const res = await callMailer(env, '/send', { method: 'POST', body: JSON.stringify({ message, provider }) });
   if (!res.ok) {

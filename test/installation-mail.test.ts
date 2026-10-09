@@ -70,3 +70,35 @@ describe('the issuer', () => {
     expect(member!.issuer).toBe('https://login.test/');
   });
 });
+
+describe("the installer's test mail (POST /organizations/mail-test)", () => {
+  const boss = { sub: 'boss-1', issuer: 'https://issuer.test/', name: 'Boss', email: 'boss@example.test' };
+  const verified = { 'X-User-Email-Verified': 'true' };
+
+  it('an instance admin: one mail to their own address through the live MAIL_CONFIG, with the mailer\'s verdict', async () => {
+    const res = await apiWith({ MAIL_CONFIG: BREVO }, 'POST', '/organizations/mail-test', { user: boss, headers: verified });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ok: true, provider: 'brevo', to: 'boss@example.test' });
+    expect((await recordedCalls('mailer')).at(-1)!.body).toMatchObject({ provider: { type: 'brevo' }, message: { to: 'boss@example.test', fromName: 'Arcanum' } });
+  });
+
+  it("the mailer's refusal comes back as it is (code and detail)", async () => {
+    const spy = vi.spyOn(env.ARCANUM_MAILER_SERVICE, 'fetch').mockResolvedValueOnce(Response.json({ ok: false, code: 'auth_failed', error: 'Brevo refused the API key (401)', detail: 'Key not found' }, { status: 502 }));
+    const res = await apiWith({ MAIL_CONFIG: BREVO }, 'POST', '/organizations/mail-test', { user: boss, headers: verified });
+    spy.mockRestore();
+    expect(res.status).toBe(502);
+    expect(res.body).toMatchObject({ ok: false, code: 'auth_failed', detail: 'Key not found', provider: 'brevo' });
+  });
+
+  it('nothing set up: says so; a malformed one: invalid_config', async () => {
+    expect((await apiWith({ MAIL_CONFIG: undefined }, 'POST', '/organizations/mail-test', { user: boss, headers: verified })).body.code).toBe('mail_not_configured');
+    expect((await apiWith({ MAIL_CONFIG: '{"apiKey":"x"}' }, 'POST', '/organizations/mail-test', { user: boss, headers: verified })).body.code).toBe('invalid_config');
+  });
+
+  it('only an instance admin with a verified address', async () => {
+    const org = await seedOrg();
+    expect((await apiWith({ MAIL_CONFIG: BREVO, INSTANCE_ADMIN_EMAILS: 'boss@example.test' }, 'POST', '/organizations/mail-test', { user: org.admin, headers: verified })).status).toBe(403);
+    expect((await apiWith({ MAIL_CONFIG: BREVO, INSTANCE_ADMIN_EMAILS: 'boss@example.test' }, 'POST', '/organizations/mail-test', { user: boss, headers: { 'X-User-Email-Verified': 'false' } })).status).toBe(403);
+    expect((await apiWith({ MAIL_CONFIG: BREVO }, 'POST', '/organizations/mail-test', { user: null })).status).toBe(401);
+  });
+});

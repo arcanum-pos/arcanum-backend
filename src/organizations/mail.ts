@@ -6,7 +6,8 @@
 import type { Env } from '../env';
 import { json } from '../http';
 import { errorJson } from '../errors';
-import { sendEmail, sendMessage, type SendEmailRequest } from '../mailer-client';
+import { sendEmail, sendMessage, sendMessageVerbose, type SendEmailRequest } from '../mailer-client';
+import { isInstanceAdmin } from './instance-admins';
 import { extractCaller, requireOrgRole } from './auth';
 import { resolveMailProvider } from './mail-provider';
 import { resolveSmtpCredentialsForSend } from './smtp-credentials';
@@ -63,6 +64,32 @@ export async function sendOrgEmail(env: Env, orgId: string, message: MailMessage
   const request = await buildSendRequest(env, orgId, message);
   if (!request) throw new Error('No mail transport configured for this organization (and no platform default either)');
   await sendEmail(env, request);
+}
+
+// The installer's "Testmail sturen" (Geavanceerd → E-mail, MAIL.md): one
+// mail to the signed-in instance admin's own (verified) address, through
+// the installation's live MAIL_CONFIG — answered with the mailer's own
+// verdict ({ ok } or { ok: false, code, error, detail }).
+//   POST /organizations/mail-test
+export async function testInstallationMail(request: Request, env: Env): Promise<Response> {
+  const caller = extractCaller(request);
+  if (!caller) return json({ error: 'Unauthorized' }, 401);
+  if (!caller.email || !isInstanceAdmin(env, caller.email, caller.emailVerified)) return json({ error: 'Forbidden' }, 403);
+  let provider: ReturnType<typeof installationMailProvider>;
+  try {
+    provider = installationMailProvider(env);
+  } catch (err) {
+    return json({ ok: false, code: 'invalid_config', error: (err as Error).message }, 400);
+  }
+  if (!provider) return errorJson('mail_not_configured', 404);
+  const answer = await sendMessageVerbose(env, provider, {
+    to: caller.email,
+    subject: 'Testmail van Arcanum',
+    text: `Als je dit leest, werkt de e-mail van deze installatie (${provider.type}).`,
+    html: `<p>Als je dit leest, werkt de e-mail van deze installatie (${provider.type}).</p>`,
+    fromName: 'Arcanum',
+  });
+  return json({ ...answer.body, provider: provider.type, to: caller.email }, answer.status);
 }
 
 // Admin action: sends a real test email to the admin's own address, using
