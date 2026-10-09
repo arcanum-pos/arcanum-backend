@@ -3,7 +3,7 @@
 // mail it picks the language of.
 import { env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { buildInviteEmail } from '../src/email-templates/invite';
+import { buildInviteEmail, buildTestInviteEmail } from '../src/email-templates/invite';
 import { api, apiWith, recordedCalls, rows, seedOrg, type TestOrg, type TestUser } from './helpers';
 
 const localePath = (org: TestOrg) => `/organizations/${org.orgId}/locale`;
@@ -138,6 +138,21 @@ describe('the invite mail', () => {
     );
     expect(mail.html).toContain('<a href="https://pos.example.test/login">Log in to activate your invitation</a>');
     expect(buildInviteEmail({ ...params, role: 'admin', locale: 'en' }).text).toContain('as an administrator.');
+  });
+
+  it('as the installer\'s test mail: the same invitation, marked as a test in every language', () => {
+    for (const [locale, subject, note] of [
+      ['nl', 'Testmail — Uitnodiging voor Scouts <Sint-Jan>', 'Dit is een testmail'],
+      ['fr', 'E-mail de test — Invitation à rejoindre Scouts <Sint-Jan>', 'Ceci est un e-mail de test'],
+      ['en', 'Test mail — Invitation to join Scouts <Sint-Jan>', 'This is a test mail'],
+    ] as const) {
+      const real = buildInviteEmail({ ...params, locale });
+      const test = buildTestInviteEmail({ ...params, locale });
+      expect(test.subject).toBe(subject);
+      expect(test.text.startsWith(note)).toBe(true);
+      expect(test.text.endsWith(real.text)).toBe(true);
+      expect(test.html.endsWith(real.html)).toBe(true);
+    }
   });
 
   it("is sent in the org's language when a member is invited", async () => {

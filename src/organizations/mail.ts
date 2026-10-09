@@ -10,7 +10,7 @@ import { errorJson } from '../errors';
 import { sendMessage, sendMessageVerbose } from '../mailer-client';
 import { extractCaller } from './auth';
 import { isInstanceAdmin } from './instance-admins';
-import { buildInviteEmail } from '../email-templates/invite';
+import { buildTestInviteEmail } from '../email-templates/invite';
 import { toLocale } from './locale';
 
 interface MailMessage {
@@ -44,8 +44,8 @@ export async function sendOrgEmail(env: Env, orgId: string, message: MailMessage
 }
 
 // The installer's "Testmail sturen" (Geavanceerd → E-mail, MAIL.md): a real
-// invitation — what members get, so a checker like mail-tester.com scores
-// what matters — through the installation's live MAIL_CONFIG, answered with
+// invitation, marked as a test — what members get, so a checker like
+// mail-tester.com scores what matters — through the installation's live MAIL_CONFIG, answered with
 // the mailer's own verdict ({ ok } or { ok: false, code, error, detail }).
 // To the signed-in instance admin's own (verified) address, or the one
 // given (a checker's address).
@@ -82,7 +82,7 @@ export async function testInstallationMail(request: Request, env: Env): Promise<
   // An invitation from this installation's first organisation, in its language.
   const org = await env.DB.prepare("SELECT name, locale FROM organizations WHERE id <> 'default' ORDER BY created_at LIMIT 1").first<{ name: string; locale: string }>();
   const orgName = org?.name ?? 'Arcanum';
-  const content = buildInviteEmail({ orgName, role: 'cashier', loginUrl: `${env.PUBLIC_BASE_URL}/login`, locale: toLocale(org?.locale) });
+  const content = buildTestInviteEmail({ orgName, role: 'cashier', loginUrl: `${env.PUBLIC_BASE_URL}/login`, locale: toLocale(org?.locale) });
   const answer = await sendMessageVerbose(env, provider, { to, fromName: orgName, ...content });
   return json({ ...answer.body, provider: provider.type, to }, answer.status);
 }

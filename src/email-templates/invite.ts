@@ -87,3 +87,22 @@ function escapeHtml(value: string): string {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 }
+
+// The installer's test mail (organizations/mail.ts): the same invitation —
+// so a checker like mail-tester.com scores what members get — but marked
+// as a test, so nobody mistakes it for a real one.
+const TEST: Record<Locale, { subject: string; note: string }> = {
+  nl: { subject: 'Testmail', note: 'Dit is een testmail van je Arcanum-installatie: zo ziet een uitnodiging eruit. Je hoeft er niets mee te doen.' },
+  fr: { subject: 'E-mail de test', note: 'Ceci est un e-mail de test de votre installation Arcanum : voici à quoi ressemble une invitation. Vous n’avez rien à faire.' },
+  en: { subject: 'Test mail', note: 'This is a test mail from your Arcanum installation: this is what an invitation looks like. There is nothing you need to do.' },
+};
+
+export function buildTestInviteEmail(params: { orgName: string; role: string; loginUrl: string; locale: Locale }): InviteEmailContent {
+  const invite = buildInviteEmail(params);
+  const test = TEST[params.locale];
+  return {
+    subject: `${test.subject} — ${invite.subject}`,
+    text: `${test.note}\n\n${invite.text}`,
+    html: `<p><em>${test.note}</em></p>\n${invite.html}`,
+  };
+}

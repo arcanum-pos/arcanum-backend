@@ -75,9 +75,12 @@ describe("the installer's test mail (POST /organizations/mail-test)", () => {
     const sent = (await recordedCalls('mailer')).at(-1)!.body;
     expect(sent.provider).toMatchObject({ type: 'brevo' });
     expect(sent.message.to).toBe('boss@example.test');
-    expect(sent.message.subject).toMatch(/^Uitnodiging voor /);
+    // …marked as a test, so nobody takes it for a real one.
+    expect(sent.message.subject).toMatch(/^Testmail — Uitnodiging voor /);
+    expect(sent.message.text).toMatch(/^Dit is een testmail van je Arcanum-installatie/);
+    expect(sent.message.html).toContain('<em>Dit is een testmail');
     expect(sent.message.text).toContain('/login');
-    expect(sent.message.fromName).toBe(sent.message.subject.replace('Uitnodiging voor ', ''));
+    expect(sent.message.fromName).toBe(sent.message.subject.replace('Testmail — Uitnodiging voor ', ''));
   });
 
   it('to another address when given (a checker like mail-tester.com); not to something that is no address', async () => {
