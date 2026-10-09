@@ -50,21 +50,10 @@ export interface Env {
   // (issuer, sub) belongs to (invites, demo orgs). Only the issuer: the bff
   // signs people in with its own client id and secret (MAIL.md decision 6).
   DEFAULT_IDP_ISSUER_URL?: string;
-  // Seeds the platform-default SMTP account (the fallback used by any org
-  // that hasn't configured its own) — see organizations/smtp-credentials.ts
-  // `ensureDefaultSmtpCredentials`. Consumed only once, at first seed; safe
-  // to remove afterward. A personal Gmail account + an app password works
-  // fine (smtp.gmail.com, port 587).
-  DEFAULT_SMTP_HOST?: string;
-  DEFAULT_SMTP_PORT?: string;
-  DEFAULT_SMTP_USER?: string;
-  DEFAULT_SMTP_PASS?: string;
-  DEFAULT_SMTP_FROM_ADDRESS?: string;
-  DEFAULT_SMTP_FROM_NAME?: string;
   // The installation's mail account (MAIL.md), set by its installer
   // (Geavanceerd → E-mail): {"provider":"smtp"|"gmail_api"|"brevo"|"resend"|…,
   // …that service's settings} — or {"provider", "credentials": {…}}. When
-  // set, every organisation's mail goes through it; the per-org and
-  // `default` settings above are only a fallback until MAIL.md phase 4.
+  // set, every organisation's mail goes through it; without it, invites
+  // aren't mailed (the console offers the invitation to copy).
   MAIL_CONFIG?: string;
 }

@@ -49,7 +49,7 @@ export interface TableSpec {
   // Columns holding ids (own id + references) — remapped on import.
   remap: string[];
   orderBy: string;
-  secret?: 'payment' | 'smtp' | 'gmail';
+  secret?: 'payment';
 }
 
 const ORG = { org_id: 'set to the new org on import' };
@@ -149,7 +149,6 @@ export const EXPORT_TABLES: TableSpec[] = [
     remap: ['id', 'event_id', 'tab_id'],
     orderBy: 'completed_at, rowid',
   },
-  { table: 'mail_provider', columns: ['provider', 'updated_at'], excluded: ORG, remap: [], orderBy: 'org_id' },
   // --- Secrets: only with ?secrets=1, exported decrypted, re-encrypted with the new org's key on import.
   {
     table: 'payment_provider_credentials',
@@ -159,22 +158,9 @@ export const EXPORT_TABLES: TableSpec[] = [
     orderBy: 'provider',
     secret: 'payment',
   },
-  {
-    table: 'smtp_credentials',
-    columns: ['host', 'port', 'username', 'from_address', 'from_name', 'updated_at'],
-    excluded: { ...ORG, password_ciphertext: 'exported decrypted as `password`', password_iv: 'exported decrypted as `password`' },
-    remap: [],
-    orderBy: 'org_id',
-    secret: 'smtp',
-  },
-  {
-    table: 'gmail_api_credentials',
-    columns: ['client_email', 'impersonated_user', 'from_name', 'updated_at'],
-    excluded: { ...ORG, private_key_ciphertext: 'exported decrypted as `private_key`', private_key_iv: 'exported decrypted as `private_key`' },
-    remap: [],
-    orderBy: 'org_id',
-    secret: 'gmail',
-  },
+  // The mail settings per organisation (smtp_credentials, gmail_api_credentials,
+  // mail_provider) aren't exported any more: mail belongs to the installation
+  // (MAIL.md). An older export that still has them imports without them.
 ];
 
 const SPEC_BY_TABLE = new Map(EXPORT_TABLES.map((s) => [s.table, s]));
@@ -219,7 +205,7 @@ async function exportOrg(request: Request, env: Env, orgId: string): Promise<Res
   const specs = EXPORT_TABLES.filter((s) => !s.secret || includeSecrets);
   const results = await env.DB.batch(
     specs.map((s) => {
-      const extra = s.secret === 'payment' ? ', config_ciphertext, config_iv' : s.secret === 'smtp' ? ', password_ciphertext, password_iv' : s.secret === 'gmail' ? ', private_key_ciphertext, private_key_iv' : '';
+      const extra = s.secret === 'payment' ? ', config_ciphertext, config_iv' : '';
       return env.DB.prepare(`SELECT ${s.columns.join(', ')}${extra} FROM ${s.table} WHERE org_id = ? ORDER BY ${s.orderBy}`).bind(orgId);
     })
   );
@@ -257,8 +243,6 @@ async function decryptSecretRow(spec: TableSpec, row: Record<string, unknown>, d
   const decrypt = async (c: string, iv: string) =>
     row[c] && row[iv] ? decryptWithKey({ ciphertext: row[c] as string, iv: row[iv] as string }, dek) : null;
   if (spec.secret === 'payment') out.config = JSON.parse((await decrypt('config_ciphertext', 'config_iv')) || '{}');
-  if (spec.secret === 'smtp') out.password = await decrypt('password_ciphertext', 'password_iv');
-  if (spec.secret === 'gmail') out.private_key = await decrypt('private_key_ciphertext', 'private_key_iv');
   return out;
 }
 
@@ -379,13 +363,11 @@ async function importChunk(request: Request, env: Env, orgId: string): Promise<R
     const dek = await getOrgDataKey(env, orgId);
     if (!dek) return errorJson('org_not_found', 404);
     const raw = body.rows as Record<string, unknown>[];
-    const secretCols =
-      spec.secret === 'payment' ? ['config_ciphertext', 'config_iv'] : spec.secret === 'smtp' ? ['password_ciphertext', 'password_iv'] : ['private_key_ciphertext', 'private_key_iv'];
+    const secretCols = ['config_ciphertext', 'config_iv'];
     columns = [...columns, ...secretCols];
     rows = await Promise.all(
       rows.map(async (r, i) => {
-        const plain =
-          spec.secret === 'payment' ? JSON.stringify(raw[i]?.config ?? {}) : ((spec.secret === 'smtp' ? raw[i]?.password : raw[i]?.private_key) as string | null | undefined);
+        const plain = JSON.stringify(raw[i]?.config ?? {});
         if (plain === null || plain === undefined || plain === '') return { ...r, [secretCols[0]]: null, [secretCols[1]]: null };
         const enc = await encryptWithKey(String(plain), dek);
         return { ...r, [secretCols[0]]: enc.ciphertext, [secretCols[1]]: enc.iv };

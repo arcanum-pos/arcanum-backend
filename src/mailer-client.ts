@@ -1,40 +1,10 @@
 // Outbound email lives in a separate Worker (arcanum-mailer) — a raw-TCP SMTP
 // client is a different kind of thing from an HTTP request handler, kept
 // apart on purpose (same reasoning as arcanum-devicehub's own split).
-// arcanum-mailer holds no SMTP secrets of its own — it's a pure transport:
-// every send carries the full connection details for whichever org's
-// config resolved (see organizations/smtp-credentials.ts), so each org can
-// genuinely bring its own SMTP account rather than everything going out
-// under one platform-wide identity.
+// arcanum-mailer holds no mail account of its own: every send names the
+// service and carries its settings — here always the installation's
+// MAIL_CONFIG (organizations/mail.ts, MAIL.md).
 import type { Env } from './env';
-import type { ResolvedGmailApiCredentials } from './organizations/gmail-api-credentials';
-
-// Defined here (the consumer) rather than in organizations/smtp-credentials.ts
-// (the producer) so that file can import this type from here.
-export interface ResolvedSmtpCredentials {
-  host: string;
-  port: number;
-  username: string;
-  password: string;
-  fromAddress: string;
-  fromName: string | null;
-}
-
-interface MailMessage {
-  to: string | string[];
-  subject: string;
-  text?: string;
-  html?: string;
-  fromName?: string;
-}
-
-// Tagged by provider so arcanum-mailer knows which adapter to use — see
-// organizations/mail.ts, the one place this gets constructed. SMTP and the
-// Gmail API need entirely different credentials (a host/port/password vs a
-// service account + impersonated user), so this can't be one flat shape.
-export type SendEmailRequest =
-  | (MailMessage & { provider: 'smtp'; credentials: ResolvedSmtpCredentials })
-  | (MailMessage & { provider: 'gmail_api'; credentials: ResolvedGmailApiCredentials });
 
 function internalKeyHeader(env: Env): Record<string, string> {
   return { Authorization: `Bearer ${env.MAILER_INTERNAL_KEY}` };
@@ -53,15 +23,10 @@ async function callMailer(env: Env, path: string, init: RequestInit): Promise<Re
   return env.ARCANUM_MAILER_SERVICE.fetch(`https://arcanum-mailer${path}`, { ...init, headers });
 }
 
-// Throws on failure — deliberately, unlike arcanum-devicehub's own
-// broadcastPaymentEvent. Whether a failed send should be best-effort
-// (inviteMember: never fail invite creation just because email didn't go
-// out) or surfaced (testSmtpCredentials: the whole point is telling the
-// admin it didn't work) depends on the caller, not on this function —
-// so each call site wraps this itself instead of the error being silently
-// swallowed here for everyone.
 // The mailer's one contract (MAIL.md): a message, and the service to send
-// it with — { type, …its settings }. Throws with the mailer's own answer.
+// it with — { type, …its settings }. sendMessage throws on failure —
+// deliberately: whether that's best-effort (an invite is still made) or
+// shown (the installer's test mail) is the caller's call.
 export interface OutgoingMessage {
   to: string | string[];
   subject: string;
@@ -87,13 +52,3 @@ export async function sendMessage(env: Env, provider: { type: string } & Record<
   }
 }
 
-export async function sendEmail(env: Env, request: SendEmailRequest): Promise<void> {
-  const res = await callMailer(env, '/send', {
-    method: 'POST',
-    body: JSON.stringify(request),
-  });
-  if (!res.ok) {
-    const details = await res.text().catch(() => '');
-    throw new Error(`arcanum-mailer returned ${res.status}: ${details}`);
-  }
-}

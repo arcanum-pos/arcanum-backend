@@ -3,7 +3,6 @@
 // needs an installation without orgs — each test file gets its own storage.
 import { env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { ensureDefaultOrganizationRow } from '../src/organizations/idp-resolution';
 import { apiWith, rows, type TestUser } from './helpers';
 
 const single = { ORG_CREATION: 'single' };
@@ -26,8 +25,10 @@ describe('single (an own instance)', () => {
   const stranger = user('stranger@elsewhere.example');
 
   it('allows the first org only, created or imported, and only for an instance admin', async () => {
-    // The platform 'default' row (login provider / mail fallback) isn't an org of anyone's.
-    await ensureDefaultOrganizationRow(env);
+    // The platform's former 'default' row (an older installation may still have it) isn't an org of anyone's.
+    await env.DB.prepare("INSERT OR IGNORE INTO organizations (id, name, dek_ciphertext, dek_iv, created_at, created_by_sub) VALUES ('default', 'Platform default', 'x', 'x', ?, 'system')")
+      .bind(new Date().toISOString())
+      .run();
     expect(await rows("SELECT id FROM organizations WHERE id != 'default'")).toEqual([]);
 
     expect(await capabilities(owner)).toMatchObject({ orgCreation: 'single', canCreateOrganization: true, canImportOrganization: true });

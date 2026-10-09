@@ -1,8 +1,8 @@
 // The installation's mail account (MAIL_CONFIG, MAIL.md phase 2): when the
 // installer set one, every organisation's mail goes through it — in the
 // mailer's one contract, with the organisation as the sender's name — and
-// an invite says whether its mail went out. Without one: the per-org and
-// `default` settings, as before (until phase 4). The issuer comes straight
+// an invite says whether its mail went out. Without one, invites aren't
+// mailed (phase 4: the old per-org and `default` settings are gone). The issuer comes straight
 // from DEFAULT_IDP_ISSUER_URL.
 import { env } from 'cloudflare:test';
 import { describe, expect, it, vi } from 'vitest';
@@ -46,21 +46,13 @@ describe('MAIL_CONFIG', () => {
     expect(broken.res.body.mailSent).toBe(false);
   });
 
-  it("the console's test mail tests the installation's account", async () => {
-    const org = await seedOrg();
-    const res = await apiWith({ MAIL_CONFIG: BREVO }, 'POST', `/organizations/${org.orgId}/smtp-credentials/test`, { user: org.admin });
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ ok: true, provider: 'brevo' });
-    expect((await recordedCalls('mailer')).at(-1)!.body).toMatchObject({ provider: { type: 'brevo' }, message: { to: org.admin.email } });
-  });
 });
 
 describe('the issuer', () => {
   it('comes straight from DEFAULT_IDP_ISSUER_URL — no copied row, no client secret needed (demo orgs)', async () => {
-    await env.DB.prepare("DELETE FROM identity_providers WHERE org_id = 'default'").run();
     const sub = `guest-${crypto.randomUUID()}`;
     const res = await apiWith(
-      { ORG_CREATION: 'internal', DEFAULT_IDP_ISSUER_URL: 'https://login.test/', DEFAULT_IDP_CLIENT_ID: undefined, DEFAULT_IDP_CLIENT_SECRET: undefined },
+      { ORG_CREATION: 'internal', DEFAULT_IDP_ISSUER_URL: 'https://login.test/' },
       'POST',
       '/internal/demo-orgs',
       { headers: { Authorization: 'Bearer test-bootstrap-key' }, body: { sub, email: `${sub}@guest.invalid`, name: 'Gast' } }

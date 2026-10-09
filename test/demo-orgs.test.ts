@@ -4,7 +4,6 @@
 // admin membership bound to (issuer, sub) so the person lands straight in it.
 import { env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { ensureDefaultOrganizationRow } from '../src/organizations/idp-resolution';
 import { api, apiWith, DEVICE, rows, type TestUser } from './helpers';
 
 const ISSUER = 'https://issuer.test/';
@@ -24,17 +23,11 @@ function demo(body: Record<string, unknown>, options: { overrides?: Record<strin
 const demoFor = (p: TestUser, extra: Record<string, unknown> = {}, overrides?: Record<string, string | undefined>) =>
   demo({ sub: p.sub, email: p.email, name: p.name, ...extra }, { overrides });
 
-// The platform default login provider, as seeded from DEFAULT_IDP_* — only its issuer matters here.
-async function seedDefaultIdp() {
-  await ensureDefaultOrganizationRow(env);
-  await env.DB.prepare("INSERT OR IGNORE INTO identity_providers (org_id, issuer_url, updated_at) VALUES ('default', ?, ?)").bind(ISSUER, new Date().toISOString()).run();
-}
 
 describe('POST /internal/demo-orgs — access', () => {
-  it('answers 503 while the default login provider is not configured (its issuer is what `sub` belongs to)', async () => {
-    const res = await demoFor(person(), {}, { DEFAULT_IDP_ISSUER_URL: undefined, DEFAULT_IDP_CLIENT_ID: undefined, DEFAULT_IDP_CLIENT_SECRET: undefined });
+  it('answers 503 while the login provider is not configured (its issuer is what `sub` belongs to)', async () => {
+    const res = await demoFor(person(), {}, { DEFAULT_IDP_ISSUER_URL: undefined });
     expect(res.status).toBe(503);
-    await seedDefaultIdp();
   });
 
   it('needs the bootstrap key', async () => {
@@ -73,7 +66,6 @@ describe('POST /internal/demo-orgs — access', () => {
 
 describe('POST /internal/demo-orgs — the demo org', () => {
   it('creates a demo org with its person as active admin, seen in their org list with its demo info', async () => {
-    await seedDefaultIdp();
     const p = person('Bert');
     const before = Date.now();
     const res = await demoFor(p);

@@ -25,7 +25,7 @@ beforeEach(() => {
   vi.spyOn(env.ARCANUM_DEVICEHUB_SERVICE, 'fetch').mockImplementation(async (input: any, init?: any) => {
     const request = new Request(input, init);
     const url = new URL(request.url);
-    const body = request.method === 'GET' ? null : await request.json().catch(() => null);
+    const body = (request.method === 'GET' ? null : await request.json().catch(() => null)) as any;
     hubCalls.push({ path: url.pathname + url.search, auth: request.headers.get('Authorization'), body });
     if (hubDown) return Response.json({ error: 'down' }, { status: 503 });
     const p = url.pathname;

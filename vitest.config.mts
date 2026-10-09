@@ -53,6 +53,8 @@ export default defineConfig({
           ),
           // A self-hosted installation's allowlist (see instance-admins.ts): test users are *@test.
           INSTANCE_ADMIN_EMAILS: '*@test, boss@example.test',
+          // The installation's login provider's issuer — the test users' (helpers.ts).
+          DEFAULT_IDP_ISSUER_URL: 'https://issuer.test/',
           // wrangler.jsonc is the demo instance's (internal); the suite runs
           // as the default kind — tests of the other modes pass their own env.
           ORG_CREATION: 'admins',

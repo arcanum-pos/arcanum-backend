@@ -2,20 +2,12 @@
 // invitee's first login — but only for an identity from this instance's
 // login provider, and never on an e-mail the provider explicitly marked
 // unverified (the bff forwards `email_verified` as X-User-Email-Verified).
-import { env } from 'cloudflare:test';
-import { beforeEach, describe, expect, it } from 'vitest';
-import { ensureDefaultOrganizationRow } from '../src/organizations/idp-resolution';
+import { describe, expect, it } from 'vitest';
 import { api, apiWith, rows, seedOrg, type TestUser } from './helpers';
 
 const ISSUER = 'https://issuer.test/';
 
-beforeEach(async () => {
-  await ensureDefaultOrganizationRow(env);
-  await env.DB.prepare("INSERT OR REPLACE INTO identity_providers (org_id, issuer_url, updated_at) VALUES ('default', ?, ?)")
-    .bind(ISSUER, new Date().toISOString())
-    .run();
-});
-
+// The installation's issuer is DEFAULT_IDP_ISSUER_URL (vitest.config.mts: ISSUER).
 function invitee(issuer = ISSUER): TestUser {
   const sub = `invitee-${crypto.randomUUID()}`;
   return { sub, issuer, name: 'Invitee', email: `${sub}@test` };
@@ -73,17 +65,16 @@ describe('reconcilePendingInvites', () => {
     expect((await membershipStatus(org.orgId, user.email)).status).toBe('pending');
   });
 
-  it('with the provider row not seeded (the bff has its own settings), the issuer comes from DEFAULT_IDP_ISSUER_URL — still checked', async () => {
-    await env.DB.prepare("DELETE FROM identity_providers WHERE org_id = 'default'").run();
-    const withIssuer = { DEFAULT_IDP_ISSUER_URL: ISSUER };
-    const stranger = invitee('https://someone-elses-idp.test/');
-    const strangerOrg = await invite(stranger);
-    await apiWith(withIssuer, 'GET', '/organizations/memberships', { user: stranger, headers: { 'X-User-Email-Verified': 'true' } });
-    expect((await membershipStatus(strangerOrg.orgId, stranger.email)).status).toBe('pending');
+  it('the issuer is DEFAULT_IDP_ISSUER_URL, as the installer sets it — another one in it, another check', async () => {
+    const other = { DEFAULT_IDP_ISSUER_URL: 'https://someone-elses-idp.test/' };
     const member = invitee();
     const org = await invite(member);
-    await apiWith(withIssuer, 'GET', '/organizations/memberships', { user: member, headers: { 'X-User-Email-Verified': 'true' } });
-    expect((await membershipStatus(org.orgId, member.email))).toMatchObject({ status: 'active', user_sub: member.sub });
+    await apiWith(other, 'GET', '/organizations/memberships', { user: member, headers: { 'X-User-Email-Verified': 'true' } });
+    expect((await membershipStatus(org.orgId, member.email)).status).toBe('pending');
+    const stranger = invitee('https://someone-elses-idp.test/');
+    const strangerOrg = await invite(stranger);
+    await apiWith(other, 'GET', '/organizations/memberships', { user: stranger, headers: { 'X-User-Email-Verified': 'true' } });
+    expect((await membershipStatus(strangerOrg.orgId, stranger.email))).toMatchObject({ status: 'active', user_sub: stranger.sub });
   });
 
   it('ignores an identity from another issuer than the instance\'s login provider', async () => {

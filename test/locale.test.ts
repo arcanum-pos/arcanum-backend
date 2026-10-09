@@ -4,7 +4,7 @@
 import { env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { buildInviteEmail } from '../src/email-templates/invite';
-import { api, recordedCalls, rows, seedOrg, type TestOrg, type TestUser } from './helpers';
+import { api, apiWith, recordedCalls, rows, seedOrg, type TestOrg, type TestUser } from './helpers';
 
 const localePath = (org: TestOrg) => `/organizations/${org.orgId}/locale`;
 
@@ -142,23 +142,19 @@ describe('the invite mail', () => {
 
   it("is sent in the org's language when a member is invited", async () => {
     const org = await seedOrg();
-    const smtp = await api('PUT', `/organizations/${org.orgId}/smtp-credentials`, {
-      user: org.admin,
-      body: { host: 'smtp.example.test', port: 587, username: 'u', password: 'p', fromAddress: 'kassa@example.test' },
-    });
-    expect(smtp.status).toBe(200);
-
-    const sent = async (email: string) => (await recordedCalls('mailer')).filter((c) => c.path === '/send' && c.body?.to === email);
+    // The installation's mail account (MAIL.md).
+    const mail = { MAIL_CONFIG: JSON.stringify({ provider: 'resend', apiKey: 're_test', fromAddress: 'kassa@example.test' }) };
+    const sent = async (email: string) => (await recordedCalls('mailer')).filter((c) => c.path === '/send' && c.body?.message?.to === email);
 
     const nl = `nl-${crypto.randomUUID()}@example.test`;
-    expect((await api('POST', `/organizations/${org.orgId}/members`, { user: org.admin, body: { email: nl, role: 'cashier' } })).status).toBe(201);
-    expect((await sent(nl)).map((c) => c.body.subject)).toEqual(['Uitnodiging voor Test org']);
+    expect((await apiWith(mail, 'POST', `/organizations/${org.orgId}/members`, { user: org.admin, body: { email: nl, role: 'cashier' } })).status).toBe(201);
+    expect((await sent(nl)).map((c) => c.body.message.subject)).toEqual(['Uitnodiging voor Test org']);
 
     await api('PUT', localePath(org), { user: org.admin, body: { locale: 'fr' } });
     const fr = `fr-${crypto.randomUUID()}@example.test`;
-    expect((await api('POST', `/organizations/${org.orgId}/members`, { user: org.admin, body: { email: fr, role: 'admin' } })).status).toBe(201);
+    expect((await apiWith(mail, 'POST', `/organizations/${org.orgId}/members`, { user: org.admin, body: { email: fr, role: 'admin' } })).status).toBe(201);
     const [frMail] = await sent(fr);
-    expect(frMail.body.subject).toBe('Invitation à rejoindre Test org');
-    expect(frMail.body.text).toContain('en tant qu’administrateur.');
+    expect(frMail.body.message.subject).toBe('Invitation à rejoindre Test org');
+    expect(frMail.body.message.text).toContain('en tant qu’administrateur.');
   });
 });
