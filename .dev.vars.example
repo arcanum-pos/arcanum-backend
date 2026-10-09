@@ -12,19 +12,12 @@ ENCRYPTION_KEY=change-me-to-a-long-random-value
 # one's for this Worker's own calls to arcanum-devicehub).
 BFF_INTERNAL_KEY=change-me-to-a-long-random-value
 
-# Seeds the platform-default identity provider the first time it's needed
-# (see organizations/identity-providers.ts ensureDefaultOrganization) — an
-# existing OIDC app's issuer/client id/secret. Consumed once; can be left
-# unset if you don't need to test login locally.
+# The installation's login provider's issuer (invites check it; the bff
+# signs people in with its own client — MAIL.md decision 6).
 DEFAULT_IDP_ISSUER_URL=
-DEFAULT_IDP_CLIENT_ID=
-DEFAULT_IDP_CLIENT_SECRET=
-DEFAULT_IDP_CONNECTION_NAME=
-# Optional (Google): scopes without offline_access, e.g. "openid profile email",
-# and a separate Web-application client for browser login.
-DEFAULT_IDP_SCOPES=
-DEFAULT_IDP_AUTH_CODE_CLIENT_ID=
-DEFAULT_IDP_AUTH_CODE_CLIENT_SECRET=
+# The installation's mail account (MAIL.md), e.g.
+# {"provider":"resend","apiKey":"…","fromAddress":"noreply@example.test"}
+MAIL_CONFIG=
 
 # Local `wrangler dev` URL for the arcanum-mailer Worker (run it on a different port).
 MAILER_LOCAL_URL=http://localhost:8792
