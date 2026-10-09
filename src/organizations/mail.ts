@@ -10,6 +10,8 @@ import { errorJson } from '../errors';
 import { sendMessage, sendMessageVerbose } from '../mailer-client';
 import { extractCaller } from './auth';
 import { isInstanceAdmin } from './instance-admins';
+import { buildInviteEmail } from '../email-templates/invite';
+import { toLocale } from './locale';
 
 interface MailMessage {
   to: string;
@@ -41,15 +43,34 @@ export async function sendOrgEmail(env: Env, orgId: string, message: MailMessage
   await sendMessage(env, provider, { ...message, ...(fromName ? { fromName } : {}) });
 }
 
-// The installer's "Testmail sturen" (Geavanceerd → E-mail, MAIL.md): one
-// mail to the signed-in instance admin's own (verified) address, through
-// the installation's live MAIL_CONFIG — answered with the mailer's own
-// verdict ({ ok } or { ok: false, code, error, detail }).
-//   POST /organizations/mail-test
+// The installer's "Testmail sturen" (Geavanceerd → E-mail, MAIL.md): a real
+// invitation — what members get, so a checker like mail-tester.com scores
+// what matters — through the installation's live MAIL_CONFIG, answered with
+// the mailer's own verdict ({ ok } or { ok: false, code, error, detail }).
+// To the signed-in instance admin's own (verified) address, or the one
+// given (a checker's address).
+//   POST /organizations/mail-test  { to? }
+// At most TEST_MAILS_PER_HOUR per admin — counted in this isolate's memory:
+// best effort, enough to keep the field from being a free mail cannon.
+const TEST_MAILS_PER_HOUR = 10;
+const testMailsSent = new Map<string, number[]>();
+
+function overTestLimit(who: string, now = Date.now()): boolean {
+  const recent = (testMailsSent.get(who) ?? []).filter((t) => now - t < 3600_000);
+  if (recent.length >= TEST_MAILS_PER_HOUR) return true;
+  testMailsSent.set(who, [...recent, now]);
+  return false;
+}
+
+const EMAIL = /^[^@\s]+@[^@\s]+$/;
+
 export async function testInstallationMail(request: Request, env: Env): Promise<Response> {
   const caller = extractCaller(request);
   if (!caller) return json({ error: 'Unauthorized' }, 401);
   if (!caller.email || !isInstanceAdmin(env, caller.email, caller.emailVerified)) return json({ error: 'Forbidden' }, 403);
+  const body = (await request.json().catch(() => ({}))) as { to?: unknown };
+  const to = typeof body.to === 'string' && body.to.trim() ? body.to.trim() : caller.email;
+  if (!EMAIL.test(to)) return errorJson('invalid_email', 400);
   let provider: ReturnType<typeof installationMailProvider>;
   try {
     provider = installationMailProvider(env);
@@ -57,12 +78,11 @@ export async function testInstallationMail(request: Request, env: Env): Promise<
     return json({ ok: false, code: 'invalid_config', error: (err as Error).message }, 400);
   }
   if (!provider) return errorJson('mail_not_configured', 404);
-  const answer = await sendMessageVerbose(env, provider, {
-    to: caller.email,
-    subject: 'Testmail van Arcanum',
-    text: `Als je dit leest, werkt de e-mail van deze installatie (${provider.type}).`,
-    html: `<p>Als je dit leest, werkt de e-mail van deze installatie (${provider.type}).</p>`,
-    fromName: 'Arcanum',
-  });
-  return json({ ...answer.body, provider: provider.type, to: caller.email }, answer.status);
+  if (overTestLimit(caller.email.toLowerCase())) return errorJson('too_many_test_mails', 429);
+  // An invitation from this installation's first organisation, in its language.
+  const org = await env.DB.prepare("SELECT name, locale FROM organizations WHERE id <> 'default' ORDER BY created_at LIMIT 1").first<{ name: string; locale: string }>();
+  const orgName = org?.name ?? 'Arcanum';
+  const content = buildInviteEmail({ orgName, role: 'cashier', loginUrl: `${env.PUBLIC_BASE_URL}/login`, locale: toLocale(org?.locale) });
+  const answer = await sendMessageVerbose(env, provider, { to, fromName: orgName, ...content });
+  return json({ ...answer.body, provider: provider.type, to }, answer.status);
 }

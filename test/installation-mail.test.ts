@@ -71,7 +71,31 @@ describe("the installer's test mail (POST /organizations/mail-test)", () => {
     const res = await apiWith({ MAIL_CONFIG: BREVO }, 'POST', '/organizations/mail-test', { user: boss, headers: verified });
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ ok: true, provider: 'brevo', to: 'boss@example.test' });
-    expect((await recordedCalls('mailer')).at(-1)!.body).toMatchObject({ provider: { type: 'brevo' }, message: { to: 'boss@example.test', fromName: 'Arcanum' } });
+    // A real invitation, from the installation's first organisation.
+    const sent = (await recordedCalls('mailer')).at(-1)!.body;
+    expect(sent.provider).toMatchObject({ type: 'brevo' });
+    expect(sent.message.to).toBe('boss@example.test');
+    expect(sent.message.subject).toMatch(/^Uitnodiging voor /);
+    expect(sent.message.text).toContain('/login');
+    expect(sent.message.fromName).toBe(sent.message.subject.replace('Uitnodiging voor ', ''));
+  });
+
+  it('to another address when given (a checker like mail-tester.com); not to something that is no address', async () => {
+    const to = 'test-abc123@srv1.mail-tester.com';
+    const res = await apiWith({ MAIL_CONFIG: BREVO }, 'POST', '/organizations/mail-test', { user: { ...boss, sub: 'boss-to', email: 'boss-to@test' }, headers: verified, body: { to } });
+    expect(res.body).toMatchObject({ ok: true, to });
+    expect((await recordedCalls('mailer')).at(-1)!.body.message.to).toBe(to);
+    const bad = await apiWith({ MAIL_CONFIG: BREVO }, 'POST', '/organizations/mail-test', { user: boss, headers: verified, body: { to: 'geen adres' } });
+    expect(bad.status).toBe(400);
+    expect(bad.body.code).toBe('invalid_email');
+  });
+
+  it('at most 10 an hour per admin', async () => {
+    const busy = { ...boss, sub: 'boss-busy', email: 'busy@test' };
+    const statuses: number[] = [];
+    for (let i = 0; i < 11; i++) statuses.push((await apiWith({ MAIL_CONFIG: BREVO }, 'POST', '/organizations/mail-test', { user: busy, headers: verified })).status);
+    expect(statuses.slice(0, 10)).toEqual(Array(10).fill(200));
+    expect(statuses[10]).toBe(429);
   });
 
   it("the mailer's refusal comes back as it is (code and detail)", async () => {

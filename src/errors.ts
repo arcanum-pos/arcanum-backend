@@ -101,6 +101,8 @@ export const ERROR_TEXTS = {
   // --- Mail ---
   mail_not_configured: 'Geen e-mailconfiguratie gevonden (en ook geen platform-standaard)',
   mail_send_failed: 'Verzenden mislukt',
+  invalid_email: 'Dat is geen geldig e-mailadres',
+  too_many_test_mails: 'Te veel testmails — probeer het over een uur opnieuw',
 
   // --- Payments ---
   bancontact_not_configured: 'Bancontact niet geconfigureerd voor deze organisatie',
