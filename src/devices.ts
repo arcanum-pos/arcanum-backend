@@ -156,14 +156,22 @@ async function createPairing(request: Request, env: Env, orgId: string): Promise
     if (!pos || pos.role !== 'pos') return errorJson('device_not_found', 404);
   }
 
+  const { row, code } = await issuePairingCode(env, orgId, role as Role, name, who(caller), linkTo);
+  return json({ ...pairingJson(row), code }, 201);
+}
+
+// A new pairing code (shown form, XXXX-XXXX) — by an admin above, or by the
+// system for a demo's own kassa (demo-orgs.ts), which then pairs the
+// browser the demo starts in.
+export async function issuePairingCode(env: Env, orgId: string, role: Role, name: string, createdBy: string, linkTo: string | null = null): Promise<{ row: PairingRow; code: string }> {
   const code = newCode();
   const now = new Date();
   const row: PairingRow = {
     id: crypto.randomUUID(),
     org_id: orgId,
-    role: role as Role,
+    role,
     name,
-    created_by: who(caller),
+    created_by: createdBy,
     created_at: now.toISOString(),
     expires_at: new Date(now.getTime() + CODE_MINUTES * 60_000).toISOString(),
     claimed_at: null,
@@ -178,7 +186,7 @@ async function createPairing(request: Request, env: Env, orgId: string): Promise
     ).bind(row.id, orgId, await sha256(code), row.role, name, row.created_by, row.created_at, row.expires_at, linkTo),
     env.DB.prepare('DELETE FROM device_pairings WHERE created_at < ?').bind(new Date(now.getTime() - KEEP_DAYS * 86_400_000).toISOString()),
   ]);
-  return json({ ...pairingJson(row), code: shownCode(code) }, 201);
+  return { row, code: shownCode(code) };
 }
 
 async function listPairings(request: Request, env: Env, orgId: string): Promise<Response> {

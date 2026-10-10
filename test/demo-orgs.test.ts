@@ -145,7 +145,7 @@ describe('POST /internal/demo-orgs — the demo org', () => {
     const first = await demoFor(p);
     const again = await demoFor(p, { name: 'Iemand anders' });
     expect(again.status).toBe(200);
-    expect(again.body).toEqual({ orgId: first.body.orgId, name: first.body.name, expiresAt: first.body.expiresAt, created: false });
+    expect(again.body).toEqual({ orgId: first.body.orgId, name: first.body.name, expiresAt: first.body.expiresAt, created: false, pairingCode: expect.any(String) });
     expect(await rows('SELECT id FROM memberships WHERE user_sub = ?', p.sub)).toHaveLength(1);
 
     // Simultaneous clicks: still one.
@@ -176,6 +176,24 @@ describe('POST /internal/demo-orgs — the demo org', () => {
     expect((await rows<{ n: number }>("SELECT COUNT(*) AS n FROM organizations WHERE is_locked = 'N'"))[0].n).toBe(n + 1);
     // Refused means nothing was written.
     expect(await rows("SELECT id FROM categories WHERE org_id NOT IN (SELECT id FROM organizations)")).toEqual([]);
+  });
+
+  it("comes with a pairing code for its 'Kassa 1': single use, claimed by its person, a fresh one on every call", async () => {
+    const p = person();
+    const res = await demoFor(p);
+    expect(res.body.pairingCode).toMatch(/^[A-Z2-9]{4}-[A-Z2-9]{4}$/);
+    const claimed = await api('POST', '/organizations/device-pairings/claim', { user: p, body: { code: res.body.pairingCode } });
+    expect(claimed.status).toBe(201);
+    expect(claimed.body).toMatchObject({ role: 'pos', name: 'Kassa 1', orgId: res.body.orgId });
+    expect((await api('POST', '/organizations/device-pairings/claim', { user: p, body: { code: res.body.pairingCode } })).body.code).toBe('pairing_code_invalid');
+    // Their demo again (another browser, a second click): a new code.
+    const again = await demoFor(p);
+    expect(again.body.pairingCode).not.toBe(res.body.pairingCode);
+    // Nobody outside the demo org can use it.
+    expect((await api('POST', '/organizations/device-pairings/claim', { user: person(), body: { code: again.body.pairingCode } })).body.code).toBe('pairing_not_member');
+    // In the demo's language.
+    const fr = await demoFor(person(), { locale: 'fr' });
+    expect(await rows('SELECT name, created_by FROM device_pairings WHERE org_id = ?', fr.body.orgId)).toEqual([{ name: 'Caisse 1', created_by: 'Demo' }]);
   });
 
   it('stays far inside the Free-plan query budget', async () => {

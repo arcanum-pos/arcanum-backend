@@ -3,8 +3,12 @@
 //
 //   POST /internal/demo-orgs   Authorization: Bearer <BOOTSTRAP_API_KEY>
 //     { sub, email, name?, locale? }
-//     → 201 { orgId, name, expiresAt, created: true }    a new demo org
-//     → 200 { orgId, name, expiresAt, created: false }   this person's live one
+//     → 201 { orgId, name, expiresAt, created: true, pairingCode }    a new demo org
+//     → 200 { orgId, name, expiresAt, created: false, pairingCode }   this person's live one
+//
+// pairingCode: a fresh code for the demo's "Kassa 1" — the bootstrapper
+// opens the demo's start page with it (/?code=…), which pairs the browser
+// the demo starts in and opens the kassa (what people will use most).
 //     → 429 demo_limit_reached                           DEMO_MAX_LIVE live demos already
 //
 // Called by the bootstrapper (arcanum.kaboutersoft.be) over a service binding,
@@ -33,6 +37,7 @@ import { resolveInstanceIssuerUrl } from './organizations/idp-resolution';
 import { orgCreationMode } from './organizations/org-creation';
 import { demoExpiresAt, demoLifetimeHours, demoMaxLive } from './organizations/demo';
 import { toLocale, type Locale } from './organizations/locale';
+import { issuePairingCode } from './devices';
 
 // Constant-time, so the key can't be guessed byte by byte from timings.
 function sameKey(given: string, expected: string): boolean {
@@ -182,8 +187,11 @@ function liveDemoOf(env: Env, issuer: string, sub: string, cutoff: string) {
     .first<LiveDemo>();
 }
 
-function demoResponse(env: Env, org: LiveDemo, created: boolean): Response {
-  return json({ orgId: org.id, name: org.name, expiresAt: demoExpiresAt(env, org.created_at), created }, created ? 201 : 200);
+const DEMO_KASSA = t('Kassa 1', 'Caisse 1', 'Till 1');
+
+async function demoResponse(env: Env, org: LiveDemo, created: boolean, locale: Locale): Promise<Response> {
+  const { code } = await issuePairingCode(env, org.id, 'pos', DEMO_KASSA[locale], 'Demo');
+  return json({ orgId: org.id, name: org.name, expiresAt: demoExpiresAt(env, org.created_at), created, pairingCode: code }, created ? 201 : 200);
 }
 
 export async function createDemoOrg(request: Request, env: Env): Promise<Response> {
@@ -204,7 +212,7 @@ export async function createDemoOrg(request: Request, env: Env): Promise<Respons
   const cutoff = new Date(nowMs - demoLifetimeHours(env) * 3600_000).toISOString();
 
   const existing = await liveDemoOf(env, issuer, sub, cutoff);
-  if (existing) return demoResponse(env, existing, false);
+  if (existing) return demoResponse(env, existing, false, locale);
 
   const orgId = crypto.randomUUID();
   const orgName = personName ? DEMO_NAME_OF[locale].replace('{name}', personName) : DEMO_NAME[locale];
@@ -249,10 +257,10 @@ export async function createDemoOrg(request: Request, env: Env): Promise<Respons
   if ((inserted.meta.changes || 0) === 0) {
     // Lost a race against this person's own other click — or the cap is reached.
     const raced = await liveDemoOf(env, issuer, sub, cutoff);
-    if (raced) return demoResponse(env, raced, false);
+    if (raced) return demoResponse(env, raced, false, locale);
     return errorJson('demo_limit_reached', 429);
   }
-  return demoResponse(env, { id: orgId, name: orgName, created_at: now }, true);
+  return demoResponse(env, { id: orgId, name: orgName, created_at: now }, true, locale);
 }
 
 // Handles /internal/demo-orgs. Anything else under /internal, a missing
