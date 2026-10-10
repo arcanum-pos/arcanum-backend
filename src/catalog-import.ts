@@ -92,19 +92,20 @@ function norm(value: string): string {
   return value.replace(/\s+/g, ' ').trim().toLocaleLowerCase('nl-BE');
 }
 
+// Negative is allowed: a discount (catalog.ts parsePrice).
 function parsePrice(cell: Cell): number | CodedError {
   if (typeof cell === 'number') {
-    if (!Number.isFinite(cell) || cell < 0) return codedError('import_price_negative');
+    if (!Number.isFinite(cell)) return codedError('import_price_invalid', { value: text(cell) });
     const cents = Math.round(cell * 100);
-    return cents <= 1_000_000 ? cents : codedError('import_price_too_high');
+    return Math.abs(cents) <= 1_000_000 ? cents : codedError('import_price_too_high');
   }
   let s = text(cell).replace(/€/g, '').replace(/\s/g, '');
   if (!s) return codedError('import_price_missing');
   if (s.includes(',') && s.includes('.')) s = s.replace(/\./g, ''); // 1.234,50
-  s = s.replace(',', '.');
-  if (!/^\d+(\.\d{1,2})?$/.test(s)) return codedError('import_price_invalid', { value: text(cell) });
+  s = s.replace(',', '.').replace(/^−/, '-');
+  if (!/^-?\d+(\.\d{1,2})?$/.test(s)) return codedError('import_price_invalid', { value: text(cell) });
   const cents = Math.round(Number(s) * 100);
-  return cents <= 1_000_000 ? cents : codedError('import_price_too_high');
+  return Math.abs(cents) <= 1_000_000 ? cents : codedError('import_price_too_high');
 }
 
 // Accepts 21, "21", "21%", and 0.21 (a %-formatted Excel cell's value).

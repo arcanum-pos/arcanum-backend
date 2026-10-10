@@ -179,10 +179,13 @@ function parseVat(raw: unknown): Parsed<number | null> {
   return { ok: true, value: n };
 }
 
+// Negative is allowed: a discount ("Korting") is a product with a negative
+// price, which lowers the tab's total. A tab is only ever paid while
+// something is still outstanding (tabs.ts), so a discount can't pay out.
 function parsePrice(raw: unknown): Parsed<number> {
   const n = Number(raw);
-  if (raw === undefined || raw === null || !Number.isInteger(n) || n < 0 || n > 1_000_000) {
-    return { ok: false, error: 'priceCents must be an integer between 0 and 1000000' };
+  if (raw === undefined || raw === null || !Number.isInteger(n) || n < -1_000_000 || n > 1_000_000) {
+    return { ok: false, error: 'priceCents must be an integer between -1000000 and 1000000' };
   }
   return { ok: true, value: n };
 }

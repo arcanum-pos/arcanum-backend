@@ -253,7 +253,7 @@ describe('catalogs', () => {
     expect((await post({ sectionId: s.s1.id, variantId: foreign.variants[0].id, priceCents: 100 })).status).toBe(400);
     expect((await post({ sectionId: otherSection.id, variantId: s.steak.variants[0].id, priceCents: 100 })).status).toBe(400);
     const fresh = await product(org, { name: 'Water' });
-    expect((await post({ sectionId: s.s1.id, variantId: fresh.variants[0].id, priceCents: -5 })).status).toBe(400);
+    expect((await post({ sectionId: s.s1.id, variantId: fresh.variants[0].id, priceCents: -1_000_001 })).status).toBe(400);
     expect((await post({ sectionId: s.s1.id, variantId: fresh.variants[0].id, priceCents: 1.5 })).status).toBe(400);
     expect((await post({ sectionId: s.s1.id, variantId: fresh.variants[0].id, priceCents: 100, quickQuantities: [0] })).status).toBe(400);
   });

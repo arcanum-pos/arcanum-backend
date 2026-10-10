@@ -121,12 +121,26 @@ describe('import: reading cells', () => {
     const res = await importNew(
       org,
       'Fout',
-      sheet(['G', 'A', '', 'acht'], [null, 'B', '', ''], [null, 'C', '', -1], [null, 'D', '', 1, null, 19], [null, 'E', '', 1, null, null, null, 'veel'], [null, 'F', '', 1, null, null, null, null, 'misschien']),
+      sheet(['G', 'A', '', 'acht'], [null, 'B', '', ''], [null, 'C', '', 'gratis'], [null, 'D', '', 1, null, 19], [null, 'E', '', 1, null, null, null, 'veel'], [null, 'F', '', 1, null, null, null, null, 'misschien']),
       true
     );
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(false);
     expect(errorsOf(res.body).map(([row]) => row)).toEqual([2, 3, 4, 5, 6, 7]);
+  });
+});
+
+describe('import: korting', () => {
+  it('takes a negative price (a discount), as a number or as text', async () => {
+    const org = await seedOrg();
+    const res = await importNew(org, 'Met korting', sheet(['Drank', 'Pintje', '', '2,50'], ['Korting', 'Korting', 'lid', -1], [null, null, 'jeugd', '-0,50'], [null, null, 'groep', '€ −2,00']));
+    expect(res.status).toBe(200);
+    expect(res.body.ok, JSON.stringify(res.body)).toBe(true);
+    const k = await kassa(org, res.body.catalog.id);
+    expect(k.sections.map((s: any) => [s.name, s.entries.map((e: any) => [e.name, e.priceCents])])).toEqual([
+      ['Drank', [['Pintje', 250]]],
+      ['Korting', [['Korting (lid)', -100], ['Korting (jeugd)', -50], ['Korting (groep)', -200]]],
+    ]);
   });
 });
 
