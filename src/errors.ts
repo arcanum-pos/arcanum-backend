@@ -76,6 +76,7 @@ export const ERROR_TEXTS = {
   import_station_conflict: '{product}: ander station ("{value}") dan op rij {otherRow} ("{otherValue}") — rijen {otherRow} en {row}',
   import_vat_conflict: '{product}: ander BTW-tarief ({value}) dan op rij {otherRow} ({otherValue}) — rijen {otherRow} en {row}',
   import_duplicate_variant: '{name} staat al op rij {otherRow}',
+  import_product_ambiguous: '"{product}" staat in meer dan één categorie — vul op deze rij de categorie in',
   import_duplicate_code: 'Code "{code}" staat al op rij {otherRow}',
   import_code_other_product: 'Code "{code}" hoort bij product "{owner}", niet bij "{product}" (dat bestaat al apart)',
   import_same_existing_product: '"{product}" en "{other}" verwijzen naar hetzelfde bestaande product "{existing}"',

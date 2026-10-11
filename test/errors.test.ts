@@ -134,7 +134,8 @@ describe('coded error responses', () => {
           { row: 3, groep: null, product: 'B', variant: '', prijs: 1, btw: 19 },
           { row: 4, groep: null, product: 'C', variant: '', prijs: 1, snelknoppen: 'veel', zichtbaar: 'misschien' },
           { row: 5, groep: null, product: 'D', variant: '', prijs: 1, categorie: 'Eten' },
-          { row: 6, groep: null, product: 'D', variant: 'groot', prijs: 1, categorie: 'Drank' },
+          // Filled down: the same product D, so another category is a conflict.
+          { row: 6, groep: null, product: null, variant: 'groot', prijs: 1, categorie: 'Drank' },
         ],
       },
     });

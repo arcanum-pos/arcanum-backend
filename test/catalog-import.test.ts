@@ -3,7 +3,7 @@
 // cell values; every interpretation rule lives here and is tested here.
 import { env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { api, seedOrg, type TestOrg } from './helpers';
+import { api, rows, seedOrg, type TestOrg } from './helpers';
 
 type Cell = string | number | boolean | null;
 interface Row {
@@ -378,5 +378,50 @@ describe('export', () => {
     const duvel = products.find((p: any) => p.name === 'Duvel');
     await api('PATCH', `/organizations/${org.orgId}/catalog/products/${duvel.id}`, { user: org.admin, body: { archived: true } });
     expect((await exportOf(org, id)).body.rows.map((r: any) => r.product)).not.toContain('Duvel');
+  });
+});
+
+describe('import: two products with the same name in different categories (as the console allows)', () => {
+  // The user's own menu, shortened: Bolognese for take away and for eating in.
+  const SPAGHETTI = () =>
+    sheet(
+      ['Take Away', 'Bolognese', 'groot', 13, 'Take away'],
+      [null, 'Bolognese', 'klein', 10, 'Take away'],
+      [null, 'Korting leiding', '', -3, 'Take away'],
+      ['Ter plaatse', 'Bolognese', 'groot', 13, 'Ter plaatse'],
+      [null, 'Bolognese', 'klein', 10, 'Ter plaatse'],
+      [null, 'Korting leiding', '', -4, 'Ter plaatse']
+    );
+
+  it('makes them two products; importing the export back changes nothing', async () => {
+    const org = await seedOrg();
+    const res = await importNew(org, 'Spaghetti Fouriers', SPAGHETTI());
+    expect(res.body.ok).toBe(true);
+    expect(res.body.summary.newProducts).toEqual(['Bolognese', 'Korting leiding', 'Bolognese', 'Korting leiding']);
+    const products = (await rows<{ name: string; n: number }>('SELECT name, COUNT(*) AS n FROM products WHERE org_id = ? GROUP BY name ORDER BY name', org.orgId));
+    expect(products).toEqual([{ name: 'Bolognese', n: 2 }, { name: 'Korting leiding', n: 2 }]);
+
+    const id = res.body.catalog.id;
+    const exported = (await exportOf(org, id)).body.rows as any[];
+    const back = sheet(...exported.map((r) => [r.groep, r.product, r.variant, r.prijsCents / 100, r.categorie]));
+    const again = await importInto(org, id, back, true);
+    expect(again.body.ok).toBe(true);
+    expect(again.body.summary).toMatchObject({ newProducts: [], newVariants: [], updatedProducts: [], priceChanges: [], added: [], removed: [], unchanged: 6 });
+  });
+
+  it('a row without a category, for a name in two: must say which; filled down, it is the product above', async () => {
+    const org = await seedOrg();
+    const ambiguous = await importNew(org, 'X', sheet(['A', 'Bolognese', 'groot', 13, 'Take away'], ['B', 'Bolognese', 'groot', 13, 'Ter plaatse'], [null, 'Bolognese', 'klein', 10]), true);
+    expect(ambiguous.body.errors).toEqual([expect.objectContaining({ row: 4, code: 'import_product_ambiguous' })]);
+    const filled = await importNew(org, 'X', sheet(['A', 'Bolognese', 'groot', 13, 'Take away'], ['B', 'Bolognese', 'groot', 13, 'Ter plaatse'], [null, null, 'klein', 10]), true);
+    expect(filled.body.ok).toBe(true);
+    expect(filled.body.summary.newProducts).toEqual(['Bolognese', 'Bolognese']);
+  });
+
+  it('an existing product of that name in another category: its category changes (when it is the only one)', async () => {
+    const org = await seedOrg();
+    const first = await importNew(org, 'X', sheet(['G', 'Soep', '', 4, 'Eten']));
+    const res = await importInto(org, first.body.catalog.id, sheet(['G', 'Soep', '', 4, 'Voorgerecht']), true);
+    expect(res.body.summary).toMatchObject({ newProducts: [], updatedProducts: [{ name: 'Soep', changes: ['categorie: Eten → Voorgerecht'] }] });
   });
 });

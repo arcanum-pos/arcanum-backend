@@ -15,9 +15,16 @@
 //     menukaarten, so a sparse file for one menukaart never wipes org-level
 //     product data.
 //   - Prijs, Variant, Code, Snelknoppen, Zichtbaar are never inherited.
+//   - A product in the file is its name together with its category: two
+//     products may share a name in different categories ("Bolognese" for
+//     take away and for eating in), as the console allows. A row without a
+//     category belongs to the one product of that name that states one (or
+//     to the one without any); with several, it must say which. A row with
+//     an empty Product cell continues the product above — its category too.
 //   - Matching (active products/variants only): variant by Code first,
-//     else product by name and variant by name within it (case- and
-//     whitespace-insensitive). A Code kept with a new name = a rename.
+//     else product by name and category, then by name alone, and variant by
+//     name within it (case- and whitespace-insensitive). A Code kept with a
+//     new name = a rename.
 //   - An import replaces the menukaart's groups, order and prices. It never
 //     deletes or archives products; history (order lines) is untouched.
 //   - dryRun previews every change; apply is one D1 batch — all or nothing —
@@ -58,6 +65,8 @@ interface ParsedRow {
   code: string | null;
   quick: number[] | null;
   visible: boolean;
+  // Product cell empty: the product of the row above (fill-down).
+  productFilled: boolean;
 }
 
 // `message` is the Dutch text; `code` + `params` the same error for a
@@ -182,6 +191,7 @@ function parseRows(raw: RawRow[], errors: ImportError[]): ParsedRow[] {
       row,
       groep: limit(lastGroep, 60, 'Groep', errors, row),
       product: limit(lastProduct, 100, 'Product', errors, row),
+      productFilled: !productCell,
       variant: limit(text(r.variant), 60, 'Variant', errors, row),
       priceCents: typeof price === 'number' ? price : 0,
       categorie: categorie ? limit(categorie, 60, 'Categorie', errors, row) : null,
@@ -291,31 +301,67 @@ async function importCatalog(request: Request, env: Env, orgId: string): Promise
   const rows = parseRows(body.rows as RawRow[], errors);
   const existing = await loadOrgCatalogData(env, orgId, catalogId);
 
-  // Group rows per file product and check the product-level rules.
+  // Group rows per file product (name + category) and check the product-level rules.
   interface FileProduct {
     key: string;
+    nameKey: string;
     name: string;
     rows: ParsedRow[];
     categorie: { value: string; row: number } | null;
     station: { value: string; row: number } | null;
     vat: { value: number | null; row: number } | undefined;
   }
+  // The categories each name is given in the file.
+  const categoriesOf = new Map<string, Set<string>>();
+  for (const r of rows) {
+    const nameKey = norm(r.product);
+    if (!categoriesOf.has(nameKey)) categoriesOf.set(nameKey, new Set());
+    if (r.categorie) categoriesOf.get(nameKey)!.add(norm(r.categorie));
+  }
+  // Each row's product: its name and category (a row without a category: the
+  // name's only one) — null when that's ambiguous.
+  const rowKey = new Map<number, string>();
+  const keyOf = (r: ParsedRow) => rowKey.get(r.row)!;
+  const firstRowOf = new Map<string, { value: string; row: number }>(); // product key -> the category's first row
+  let previous: ParsedRow | null = null;
+  for (const r of rows) {
+    const nameKey = norm(r.product);
+    const above = previous;
+    previous = r;
+    if (!nameKey) continue;
+    // Filled down: the product above, whose category it can't change.
+    if (r.productFilled && above && rowKey.has(above.row) && norm(above.product) === nameKey) {
+      const key = rowKey.get(above.row)!;
+      const stated = firstRowOf.get(key);
+      if (r.categorie && stated && norm(stated.value) !== norm(r.categorie)) {
+        const row = Math.abs(r.row);
+        errors.push(rowError(row, 'import_category_conflict', { product: r.product, value: r.categorie, otherRow: stated.row, otherValue: stated.value, row }));
+      } else if (r.categorie && !stated) firstRowOf.set(key, { value: r.categorie, row: Math.abs(r.row) });
+      rowKey.set(r.row, key);
+      continue;
+    }
+    const cats = categoriesOf.get(nameKey)!;
+    if (!r.categorie && cats.size > 1) {
+      errors.push(rowError(Math.abs(r.row), 'import_product_ambiguous', { product: r.product }));
+      continue;
+    }
+    const catKey = r.categorie ? norm(r.categorie) : cats.size === 1 ? [...cats][0] : '';
+    const key = `${nameKey}\u0000${catKey}`;
+    rowKey.set(r.row, key);
+    if (r.categorie && !firstRowOf.has(key)) firstRowOf.set(key, { value: r.categorie, row: Math.abs(r.row) });
+  }
   const fileProducts = new Map<string, FileProduct>();
   for (const r of rows) {
-    const key = norm(r.product);
+    const key = rowKey.get(r.row);
     if (!key) continue;
     let fp = fileProducts.get(key);
     if (!fp) {
-      fp = { key, name: r.product, rows: [], categorie: null, station: null, vat: undefined };
+      fp = { key, nameKey: norm(r.product), name: r.product, rows: [], categorie: null, station: null, vat: undefined };
       fileProducts.set(key, fp);
     }
     fp.rows.push(r);
     const row = Math.abs(r.row);
-    if (r.categorie) {
-      if (fp.categorie && norm(fp.categorie.value) !== norm(r.categorie)) {
-        errors.push(rowError(row, 'import_category_conflict', { product: fp.name, value: r.categorie, otherRow: fp.categorie.row, otherValue: fp.categorie.value, row }));
-      } else if (!fp.categorie) fp.categorie = { value: r.categorie, row };
-    }
+    if (r.categorie && !fp.categorie) fp.categorie = { value: r.categorie, row };
     if (r.station) {
       if (fp.station && norm(fp.station.value) !== norm(r.station)) {
         errors.push(rowError(row, 'import_station_conflict', { product: fp.name, value: r.station, otherRow: fp.station.row, otherValue: fp.station.value, row }));
@@ -344,9 +390,12 @@ async function importCatalog(request: Request, env: Env, orgId: string): Promise
   const seenCode = new Map<string, number>();
   for (const r of rows) {
     const row = Math.abs(r.row);
-    const key = `${norm(r.product)}\u0000${norm(r.variant)}`;
-    if (seenVariant.has(key)) errors.push(rowError(row, 'import_duplicate_variant', { name: displayName(r.product, r.variant), otherRow: seenVariant.get(key)! }));
-    else seenVariant.set(key, row);
+    const productKey = rowKey.get(r.row);
+    if (productKey) {
+      const key = `${productKey}\u0000${norm(r.variant)}`;
+      if (seenVariant.has(key)) errors.push(rowError(row, 'import_duplicate_variant', { name: displayName(r.product, r.variant), otherRow: seenVariant.get(key)! }));
+      else seenVariant.set(key, row);
+    }
     if (r.code) {
       if (seenCode.has(r.code)) errors.push(rowError(row, 'import_duplicate_code', { code: r.code, otherRow: seenCode.get(r.code)! }));
       else seenCode.set(r.code, row);
@@ -355,24 +404,15 @@ async function importCatalog(request: Request, env: Env, orgId: string): Promise
 
   // Resolve file products to existing products.
   const productById = new Map(existing.products.map((p) => [p.id, p]));
-  const productByName = new Map<string, ExistingProduct>();
-  for (const p of existing.products) if (!productByName.has(norm(p.name))) productByName.set(norm(p.name), p);
+  const categoryNameOf = new Map(existing.categories.map((c) => [c.id, norm(c.name)]));
+  const productsByName = new Map<string, ExistingProduct[]>();
+  for (const p of existing.products) productsByName.set(norm(p.name), [...(productsByName.get(norm(p.name)) ?? []), p]);
+  const catKeyOf = (p: ExistingProduct) => (p.category_id ? categoryNameOf.get(p.category_id) ?? '' : '');
   const variantByCode = new Map(existing.variants.filter((v) => v.code).map((v) => [v.code as string, v]));
   const claimedProducts = new Map<string, string>(); // existing product id -> file product name
 
   const resolvedProduct = new Map<string, ExistingProduct | null>();
-  for (const fp of fileProducts.values()) {
-    let match: ExistingProduct | null = null;
-    const coded = fp.rows.find((r) => r.code && variantByCode.has(r.code));
-    if (coded) {
-      const owner = productById.get(variantByCode.get(coded.code as string)!.product_id)!;
-      const byName = productByName.get(fp.key);
-      if (norm(owner.name) !== fp.key && byName && byName.id !== owner.id) {
-        errors.push(rowError(Math.abs(coded.row), 'import_code_other_product', { code: coded.code as string, owner: owner.name, product: fp.name }));
-      } else match = owner;
-    } else {
-      match = productByName.get(fp.key) ?? null;
-    }
+  const claim = (fp: FileProduct, match: ExistingProduct | null) => {
     if (match) {
       const claimedBy = claimedProducts.get(match.id);
       if (claimedBy !== undefined) {
@@ -381,6 +421,32 @@ async function importCatalog(request: Request, env: Env, orgId: string): Promise
       } else claimedProducts.set(match.id, fp.name);
     }
     resolvedProduct.set(fp.key, match);
+  };
+  // First by Code, and by name and category; then by name alone (a product
+  // whose category changes), never one another file product already has.
+  const later: FileProduct[] = [];
+  for (const fp of fileProducts.values()) {
+    const coded = fp.rows.find((r) => r.code && variantByCode.has(r.code));
+    const catKey = fp.key.split('\u0000')[1];
+    const sameName = productsByName.get(fp.nameKey) ?? [];
+    if (coded) {
+      const owner = productById.get(variantByCode.get(coded.code as string)!.product_id)!;
+      const byName = sameName[0];
+      if (norm(owner.name) !== fp.nameKey && byName && byName.id !== owner.id) {
+        errors.push(rowError(Math.abs(coded.row), 'import_code_other_product', { code: coded.code as string, owner: owner.name, product: fp.name }));
+        resolvedProduct.set(fp.key, null);
+      } else claim(fp, owner);
+      continue;
+    }
+    const exact = sameName.find((p) => catKeyOf(p) === catKey && !claimedProducts.has(p.id));
+    if (exact) claim(fp, exact);
+    else later.push(fp);
+  }
+  for (const fp of later) {
+    const free = (productsByName.get(fp.nameKey) ?? []).filter((p) => !claimedProducts.has(p.id));
+    // Only when it's clear which: one product of that name left over (one
+    // in another file product's category was taken by it above).
+    claim(fp, free.length === 1 ? free[0] : null);
   }
 
   // Resolve every row to an existing or new variant.
@@ -390,13 +456,14 @@ async function importCatalog(request: Request, env: Env, orgId: string): Promise
   const resolvedRows: ResolvedRow[] = [];
   const claimedVariants = new Map<string, number>();
   for (const r of rows) {
-    const product = resolvedProduct.get(norm(r.product)) ?? null;
+    if (!rowKey.has(r.row)) continue;
+    const product = resolvedProduct.get(keyOf(r)) ?? null;
     let variant: ExistingVariant | null = null;
     const row = Math.abs(r.row);
     if (r.code && variantByCode.has(r.code)) {
       const v = variantByCode.get(r.code)!;
       if (product && v.product_id === product.id) variant = v;
-      else if (product || !resolvedProduct.has(norm(r.product))) {
+      else if (product || !resolvedProduct.has(keyOf(r))) {
         errors.push(rowError(row, 'import_code_in_use', { code: r.code }));
       }
     } else if (product) {
@@ -487,7 +554,7 @@ async function importCatalog(request: Request, env: Env, orgId: string): Promise
     productIdFor.set(fp.key, match.id);
     const changes: string[] = [];
     // Renamed only via a kept Code; a name-only match keeps the existing name.
-    const renamed = fp.rows.some((r) => r.code && variantByCode.get(r.code)?.product_id === match.id) && norm(match.name) !== fp.key;
+    const renamed = fp.rows.some((r) => r.code && variantByCode.get(r.code)?.product_id === match.id) && norm(match.name) !== fp.nameKey;
     const name = renamed ? fp.name : match.name;
     finalName.set(fp.key, name);
     if (renamed) changes.push(`naam: ${match.name} → ${fp.name}`);
@@ -523,7 +590,7 @@ async function importCatalog(request: Request, env: Env, orgId: string): Promise
   for (const v of existing.variants) nextPosition.set(v.product_id, Math.max(nextPosition.get(v.product_id) ?? 0, v.position + 1));
   const variantFor = new Map<number, string>(); // row -> variant id
   for (const r of resolvedRows) {
-    const key = norm(r.product);
+    const key = keyOf(r);
     const productId = productIdFor.get(key)!;
     if (r.variantId) {
       variantFor.set(r.row, r.variantId);
@@ -547,7 +614,7 @@ async function importCatalog(request: Request, env: Env, orgId: string): Promise
   const current = new Map(existing.entries.map((e) => [e.variant_id, e]));
   const inFile = new Set<string>();
   for (const r of resolvedRows) {
-    const name = displayName(finalName.get(norm(r.product))!, r.variant);
+    const name = displayName(finalName.get(keyOf(r))!, r.variant);
     const was = r.variantId ? current.get(r.variantId) : undefined;
     if (r.variantId) inFile.add(r.variantId);
     if (!was) {
