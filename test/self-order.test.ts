@@ -56,16 +56,11 @@ async function enableSelfOrder(org: TestOrg, v: Awaited<ReturnType<typeof venue>
 const patchMode = (org: TestOrg, v: Awaited<ReturnType<typeof venue>>, body: unknown) => api('PATCH', modesPath(org, v, (v as any).modeId), { user: org.admin, body });
 
 describe('an event: its menu, self-ordering, its own numbers', () => {
-  it('self-ordering needs a mode with a menu; switching it on makes a code; a new code replaces it; admins only', async () => {
+  it('switching self-ordering on makes a code (and a mode when there is none); a new code replaces it; admins only', async () => {
     const org = await seedOrg();
     const v = await venue(org);
     const patch = (body: unknown, user = org.admin) => api('PATCH', `/organizations/${org.orgId}/events/${v.event.id}`, { user, body });
-    expect((await patch({ selfOrderEnabled: true })).body.code).toBe('self_order_needs_menu');
-    // A kassa-only mode isn't enough.
-    await api('POST', modesPath(org, v), { user: org.admin, body: { name: 'Alleen aan de kassa' } });
-    expect((await patch({ selfOrderEnabled: true })).body.code).toBe('self_order_needs_menu');
     expect((await api('POST', modesPath(org, v), { user: org.cashier, body: { name: 'Ter plaatse', catalogId: v.catalog.id } })).status).toBe(403);
-    expect((await api('POST', modesPath(org, v), { user: org.admin, body: { name: 'Ter plaatse', catalogId: v.catalog.id } })).status).toBe(201);
     expect((await patch({ selfOrderEnabled: true }, org.cashier)).status).toBe(403);
     const on = (await patch({ selfOrderEnabled: true })).body;
     expect(on).toMatchObject({ selfOrder: { enabled: true } });
@@ -411,6 +406,27 @@ describe('self-ordering on a tab (pay when leaving)', () => {
 });
 
 describe('ordering modes (bestelwijzen)', () => {
+  it('self-ordering switched on without a mode to order with: one made ready — never a reason to refuse', async () => {
+    // No modes: "Ter plaatse" with the org's menu.
+    const org = await seedOrg();
+    const v = await venue(org);
+    const patch = (body: unknown) => api('PATCH', `/organizations/${org.orgId}/events/${v.event.id}`, { user: org.admin, body });
+    const on = (await patch({ selfOrderEnabled: true })).body;
+    expect(on).toMatchObject({ selfOrder: { enabled: true }, modes: [{ name: 'Ter plaatse', catalogId: v.catalog.id, selfOrder: true }] });
+
+    // A kassa-only mode (no menu): it gets the menu and the QR.
+    const other = await api('POST', `/organizations/${org.orgId}/events`, { user: org.admin, body: { name: 'Quiz', date: '2026-11-01' } });
+    const otherPath = `/organizations/${org.orgId}/events/${other.body.id}`;
+    await api('POST', `${otherPath}/modes`, { user: org.admin, body: { name: 'Alleen aan de kassa' } });
+    const on2 = (await api('PATCH', otherPath, { user: org.admin, body: { selfOrderEnabled: true } })).body;
+    expect(on2.modes).toEqual([expect.objectContaining({ name: 'Alleen aan de kassa', catalogId: v.catalog.id, selfOrder: true })]);
+
+    // An org without any menu: says so.
+    const empty = await seedOrg();
+    const ev = (await api('POST', `/organizations/${empty.orgId}/events`, { user: empty.admin, body: { name: 'X', date: '2026-11-01' } })).body;
+    expect((await api('PATCH', `/organizations/${empty.orgId}/events/${ev.id}`, { user: empty.admin, body: { selfOrderEnabled: true } })).body.code).toBe('self_order_needs_catalog');
+  });
+
   it('1..n per event, free text, in order; with the QR only with a menu; removing the last QR mode switches self-ordering off', async () => {
     const org = await seedOrg();
     const v = await venue(org);

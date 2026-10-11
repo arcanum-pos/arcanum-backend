@@ -194,8 +194,10 @@ export async function updateEvent(request: Request, env: Env, orgId: string, eve
     if (!DATE_RE.test(date)) return json({ error: 'date must be in YYYY-MM-DD format' }, 400);
   }
   if (body.selfOrderEnabled !== undefined) enabled = body.selfOrderEnabled === true ? 1 : 0;
-  // Switching it on needs a mode guests can order with.
-  if (body.selfOrderEnabled === true && !(await loadModes(env, eventId)).some(usable)) return errorJson('self_order_needs_menu', 400);
+  // Switching it on needs a mode guests can order with: made when there's none.
+  if (body.selfOrderEnabled === true && !(await loadModes(env, eventId)).some(usable) && !(await makeSelfOrderMode(env, orgId, eventId))) {
+    return errorJson('self_order_needs_catalog', 400);
+  }
   if (enabled && !code) code = newSelfOrderCode();
 
   if (body.linkName !== undefined && (typeof body.linkName !== 'string' || !body.linkName.trim())) return errorJson('self_order_link_name', 400);
@@ -207,6 +209,37 @@ export async function updateEvent(request: Request, env: Env, orgId: string, eve
   // Another name in the readable link (a fresh suffix: the old readable link stops working).
   if (typeof body.linkName === 'string') await setSlug(env, eventId, linkNameOf(body.linkName));
   return eventResponse(env, orgId, eventId);
+}
+
+// Self-ordering switched on without a mode guests can order with: one made
+// ready — the first mode with a menu gets self-ordering; else the first mode
+// gets the org's default menu (or its first); else a new mode, "Ter plaatse"
+// in the org's language, with that menu. False when the org has no menu at
+// all. The admin adjusts it afterwards — the switch never waits on a setup.
+const FIRST_MODE_NAME: Record<string, string> = { nl: 'Ter plaatse', fr: 'Sur place', en: 'Eat in' };
+
+async function makeSelfOrderMode(env: Env, orgId: string, eventId: string): Promise<boolean> {
+  const modes = await loadModes(env, eventId);
+  const withMenu = modes.find((m) => m.catalog_id);
+  if (withMenu) {
+    await env.DB.prepare('UPDATE event_order_modes SET self_order = 1 WHERE id = ?').bind(withMenu.id).run();
+    return true;
+  }
+  const catalog = await env.DB.prepare('SELECT id FROM catalogs WHERE org_id = ? AND archived_at IS NULL ORDER BY is_default DESC, created_at LIMIT 1')
+    .bind(orgId)
+    .first<{ id: string }>();
+  if (!catalog) return false;
+  if (modes.length) {
+    await env.DB.prepare('UPDATE event_order_modes SET catalog_id = ?, self_order = 1 WHERE id = ?').bind(catalog.id, modes[0].id).run();
+    return true;
+  }
+  const org = await env.DB.prepare('SELECT locale FROM organizations WHERE id = ?').bind(orgId).first<{ locale: string | null }>();
+  await env.DB.prepare(
+    `INSERT INTO event_order_modes (id, org_id, event_id, name, position, catalog_id, self_order, created_at) VALUES (?, ?, ?, ?, 0, ?, 1, ?)`
+  )
+    .bind(crypto.randomUUID().replace(/-/g, ''), orgId, eventId, FIRST_MODE_NAME[org?.locale ?? 'nl'] ?? FIRST_MODE_NAME.nl, catalog.id, new Date().toISOString())
+    .run();
+  return true;
 }
 
 type ModeBody = Partial<Record<'name' | 'catalogId' | 'selfOrder' | 'payAtCounter' | 'payBancontact' | 'tabs' | 'tabContact' | 'notifySms' | 'move', unknown>>;

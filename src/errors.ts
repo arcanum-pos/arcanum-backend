@@ -103,6 +103,7 @@ export const ERROR_TEXTS = {
   ticket_not_found: 'Bon niet gevonden',
   event_not_found: 'Evenement niet gevonden',
   self_order_needs_menu: 'Kies eerst een menukaart voor dit evenement',
+  self_order_needs_catalog: 'Maak eerst een menukaart (Menukaarten)',
   self_order_needs_payment: 'Kies minstens één manier om te betalen',
   self_order_payment_unavailable: 'Op deze manier betalen kan hier niet',
   self_order_closed: 'Bestellen kan hier nu niet',
