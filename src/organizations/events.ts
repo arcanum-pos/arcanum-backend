@@ -6,7 +6,8 @@
 //   GET   /organizations/:org/events                          member
 //   POST  /organizations/:org/events { name, date }           admin
 //   PATCH /organizations/:org/events/:id                      admin  { name?, date?, catalogId?, selfOrderEnabled?,
-//                                                                     payAtCounter?, payBancontact? } (how guests pay)
+//                                                                     payAtCounter?, payBancontact? (how guests pay),
+//                                                                     tabs? (keep ordering on a tab, pay when leaving) }
 //   POST  /organizations/:org/events/:id/self-order-code      admin  a new code (the old URL/QR stops working)
 //   POST  /organizations/:org/events/:id/reset-numbers        admin  the next order is #1 again
 import type { Env } from '../env';
@@ -27,6 +28,7 @@ export interface EventRow {
   order_counter: number;
   self_order_pay_counter: number;
   self_order_pay_bancontact: number;
+  self_order_tabs: number;
 }
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -44,6 +46,8 @@ function rowToEvent(row: EventRow) {
       // How guests may pay: at the counter, and/or with Bancontact on their phone.
       payAtCounter: !!row.self_order_pay_counter,
       payBancontact: !!row.self_order_pay_bancontact,
+      // Guests keep ordering on their tab and pay when they leave.
+      tabs: !!row.self_order_tabs,
     },
     // The last number given out (0: the next order is #1).
     lastOrderNumber: row.order_counter,
@@ -79,10 +83,11 @@ export async function updateEvent(request: Request, env: Env, orgId: string, eve
     selfOrderEnabled?: unknown;
     payAtCounter?: unknown;
     payBancontact?: unknown;
+    tabs?: unknown;
   };
 
   let { name, event_date: date, catalog_id: catalogId, self_order_enabled: enabled, self_order_code: code } = event;
-  let { self_order_pay_counter: payCounter, self_order_pay_bancontact: payBancontact } = event;
+  let { self_order_pay_counter: payCounter, self_order_pay_bancontact: payBancontact, self_order_tabs: tabs } = event;
   if (body.name !== undefined) {
     name = typeof body.name === 'string' ? body.name.trim() : '';
     if (!name) return json({ error: 'name is required' }, 400);
@@ -102,6 +107,7 @@ export async function updateEvent(request: Request, env: Env, orgId: string, eve
   if (body.selfOrderEnabled !== undefined) enabled = body.selfOrderEnabled === true ? 1 : 0;
   if (body.payAtCounter !== undefined) payCounter = body.payAtCounter === true ? 1 : 0;
   if (body.payBancontact !== undefined) payBancontact = body.payBancontact === true ? 1 : 0;
+  if (body.tabs !== undefined) tabs = body.tabs === true ? 1 : 0;
   if (enabled && !catalogId) return errorJson('self_order_needs_menu', 400);
   if (!payCounter && !payBancontact) return errorJson('self_order_needs_payment', 400);
   // Bancontact only for an org that has it set up (Instellingen → Betalingen).
@@ -109,9 +115,9 @@ export async function updateEvent(request: Request, env: Env, orgId: string, eve
   if (enabled && !code) code = newSelfOrderCode();
 
   await env.DB.prepare(
-    'UPDATE events SET name = ?, event_date = ?, catalog_id = ?, self_order_enabled = ?, self_order_code = ?, self_order_pay_counter = ?, self_order_pay_bancontact = ? WHERE id = ?'
+    'UPDATE events SET name = ?, event_date = ?, catalog_id = ?, self_order_enabled = ?, self_order_code = ?, self_order_pay_counter = ?, self_order_pay_bancontact = ?, self_order_tabs = ? WHERE id = ?'
   )
-    .bind(name, date, catalogId, enabled, code, payCounter, payBancontact, eventId)
+    .bind(name, date, catalogId, enabled, code, payCounter, payBancontact, tabs, eventId)
     .run();
   return json(rowToEvent((await loadEvent(env, orgId, eventId))!));
 }

@@ -299,11 +299,11 @@ describe('self-ordering: how guests pay (per event)', () => {
     const v = await venue(org);
     const code = await enableSelfOrder(org, v);
     const patch = (body: unknown) => api('PATCH', `/organizations/${org.orgId}/events/${v.event.id}`, { user: org.admin, body });
-    expect((await call('GET', `/public/self-order/${code}`)).body.payment).toEqual({ counter: true, bancontact: false });
+    expect((await call('GET', `/public/self-order/${code}`)).body.payment).toEqual({ counter: true, bancontact: false, tab: false });
     expect((await patch({ payBancontact: true })).body.code).toBe('bancontact_not_configured');
     await withBancontact(org);
     expect((await patch({ payBancontact: true, payAtCounter: false })).body.selfOrder).toMatchObject({ payAtCounter: false, payBancontact: true });
-    expect((await call('GET', `/public/self-order/${code}`)).body.payment).toEqual({ counter: false, bancontact: true });
+    expect((await call('GET', `/public/self-order/${code}`)).body.payment).toEqual({ counter: false, bancontact: true, tab: false });
     expect((await patch({ payBancontact: false })).body.code).toBe('self_order_needs_payment');
   });
 
@@ -347,5 +347,49 @@ describe('self-ordering: how guests pay (per event)', () => {
     const kassa = (await kassaTab(org, v, [{ variantId: v.pils, quantity: 1 }])).body;
     const token = (await rows<{ order_token: string }>('SELECT order_token FROM tabs WHERE id = ?', kassa.id))[0].order_token;
     expect((await call('POST', `/public/orders/${token}/bancontact`)).body.code).toBe('self_order_payment_unavailable');
+  });
+});
+
+describe('self-ordering on a tab (pay when leaving)', () => {
+  it('keeps ordering on one tab, prepared unpaid, never cancelled for being unpaid; settled at the end', async () => {
+    const org = await seedOrg();
+    const v = await venue(org);
+    const code = await enableSelfOrder(org, v);
+    const patch = await api('PATCH', `/organizations/${org.orgId}/events/${v.event.id}`, { user: org.admin, body: { tabs: true } });
+    expect(patch.body.selfOrder.tabs).toBe(true);
+    expect((await call('GET', `/public/self-order/${code}`)).body.payment).toEqual({ counter: true, bancontact: false, tab: true });
+
+    const placed = (await call('POST', `/public/self-order/${code}/orders`, { lines: [{ variantId: v.pils, quantity: 2 }] })).body;
+    const follow = async () => (await call('GET', `/public/orders/${placed.token}`)).body;
+    // Being prepared right away — unpaid, on the tab.
+    expect(await follow()).toMatchObject({ payLater: true, tabOpen: true, state: 'preparing', payment: { counter: true, bancontact: false, pending: false, failed: false } });
+    const [bar] = await stationTickets(org, v.bar.id);
+    expect(bar).toMatchObject({ paid: false, payLater: true, selfOrder: true });
+
+    // Delivered, still open: not the end — no "delivered", a ticket for live updates.
+    await setStatus(org, bar.id, 'delivered');
+    expect(await follow()).toMatchObject({ state: 'delivered', tabOpen: true, hubTicket: expect.any(String) });
+
+    // An hour later: a second round, on the same tab and number.
+    await env.DB.prepare('UPDATE tabs SET opened_at = ? WHERE order_token = ?').bind(new Date(Date.now() - 60 * 60_000).toISOString(), placed.token).run();
+    expect((await call('POST', `/public/orders/${placed.token}/orders`, { lines: [{ variantId: v.frieten, quantity: 1 }] })).status).toBe(201);
+    expect(await follow()).toMatchObject({ number: 1, state: 'preparing', totalCents: 900, tabOpen: true });
+    expect((await rows<any>('SELECT status FROM tabs WHERE order_token = ?', placed.token))[0].status).toBe('open');
+    expect(await stationTickets(org, v.kitchen.id)).toHaveLength(1);
+
+    // Leaving: paid at the toog as a whole — closed, no more rounds.
+    const tabId = (await rows<{ id: string }>('SELECT id FROM tabs WHERE order_token = ?', placed.token))[0].id;
+    await payCash(org, tabId, 900);
+    expect(await follow()).toMatchObject({ tabOpen: false, payment: null });
+    expect((await call('POST', `/public/orders/${placed.token}/orders`, { lines: [{ variantId: v.pils, quantity: 1 }] })).body.code).toBe('tab_not_open');
+  });
+
+  it('a pay-now order (no tab) takes no extra rounds', async () => {
+    const org = await seedOrg();
+    const v = await venue(org);
+    const code = await enableSelfOrder(org, v);
+    const placed = (await call('POST', `/public/self-order/${code}/orders`, { lines: [{ variantId: v.pils, quantity: 1 }] })).body;
+    expect((await call('POST', `/public/orders/${placed.token}/orders`, { lines: [{ variantId: v.pils, quantity: 1 }] })).body.code).toBe('self_order_closed');
+    expect((await call('GET', `/public/orders/${placed.token}`)).body).toMatchObject({ payLater: false, tabOpen: false, state: 'awaiting_payment' });
   });
 });

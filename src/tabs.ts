@@ -56,6 +56,7 @@ interface TabRow {
   event_number: number | null;
   source: string;
   order_token: string | null;
+  pay_later: number;
 }
 
 interface TabSummaryRow extends TabRow {
@@ -151,6 +152,8 @@ function rowToTabSummary(row: TabSummaryRow) {
     // The event's short number (1, 2, 3…) — what's called out; null without an event.
     eventNumber: row.event_number ?? null,
     source: row.source,
+    // A self-order tab paid when the guest leaves.
+    payLater: !!row.pay_later,
     label: row.label,
     status: row.status,
     slotId: row.slot_id,
@@ -562,6 +565,8 @@ export async function openTab(
     source: 'kassa' | 'self_order';
     lines: LineInput[];
     catalogId: string | null;
+    // A self-order tab paid when the guest leaves (self-order.ts).
+    payLater?: boolean;
   }
 ): Promise<string> {
   const { orgId, eventId, who } = o;
@@ -589,9 +594,9 @@ export async function openTab(
   statements.push(
     env.DB.prepare(
       `INSERT INTO tabs (id, org_id, number, label, status, slot_id, event_id, opened_device_id, opened_device_name, opened_by_name, opened_by_email, opened_at,
-         event_number, source, order_token)
-       SELECT ?, ?, value, ?, 'open', ?, ?, ?, ?, ?, ?, ?, (SELECT order_counter FROM events WHERE id = ?), ?, ? FROM org_counters WHERE org_id = ? AND name = 'tab'`
-    ).bind(tabId, orgId, o.label, o.slotId, eventId, who.deviceId, who.deviceName, who.userName, who.userEmail, now, eventId, o.source, newOrderToken(), orgId)
+         event_number, source, order_token, pay_later)
+       SELECT ?, ?, value, ?, 'open', ?, ?, ?, ?, ?, ?, ?, (SELECT order_counter FROM events WHERE id = ?), ?, ?, ? FROM org_counters WHERE org_id = ? AND name = 'tab'`
+    ).bind(tabId, orgId, o.label, o.slotId, eventId, who.deviceId, who.deviceName, who.userName, who.userEmail, now, eventId, o.source, newOrderToken(), o.payLater ? 1 : 0, orgId)
   );
 
   if (o.lines.length > 0) {
@@ -636,23 +641,41 @@ async function addOrder(request: Request, env: Env, orgId: string, tabId: string
   const { lines, catalogId } = prepared;
 
   const who = attribution(request, body);
+  if (!(await addOrderToTab(env, { orgId, tabId, lines, catalogId, source: 'kassa', who }))) return refusalResponse(env, orgId, tabId);
+  return json(await loadTabDetail(env, orgId, tabId), 201);
+}
+
+// One more order on an open tab — from a kassa (addOrder) or a guest's
+// next round on their tab (self-order.ts) — with its lines and prep
+// tickets, only while the tab is open and no payment is in progress.
+// False when refused (the caller says why).
+export async function addOrderToTab(
+  env: Env,
+  o: {
+    orgId: string;
+    tabId: string;
+    lines: LineInput[];
+    catalogId: string | null;
+    source: 'kassa' | 'self_order';
+    who: { deviceId: string | null; deviceName: string | null; userName: string | null; userEmail: string | null };
+  }
+): Promise<boolean> {
+  const { orgId, tabId, who } = o;
   const orderId = crypto.randomUUID();
   const now = new Date().toISOString();
-
   const [orderResult] = await env.DB.batch([
     env.DB.prepare(
       `INSERT INTO orders (id, org_id, tab_id, source, catalog_id, device_id, device_name, user_name, user_email, submitted_at)
-       SELECT ?, ?, ?, 'kassa', ?, ?, ?, ?, ?, ?
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
        WHERE EXISTS (SELECT 1 FROM tabs WHERE id = ? AND org_id = ? AND status = 'open')
          AND NOT EXISTS (SELECT 1 FROM charges WHERE tab_id = ? AND status = 'pending')`
-    ).bind(orderId, orgId, tabId, catalogId, who.deviceId, who.deviceName, who.userName, who.userEmail, now, tabId, orgId, tabId),
-    ...lineInsertStatements(env, orgId, tabId, orderId, lines, now),
+    ).bind(orderId, orgId, tabId, o.source, o.catalogId, who.deviceId, who.deviceName, who.userName, who.userEmail, now, tabId, orgId, tabId),
+    ...lineInsertStatements(env, orgId, tabId, orderId, o.lines, now),
     ticketInsertStatement(env, orgId, tabId, orderId, now),
   ]);
-
-  if ((orderResult.meta.changes || 0) === 0) return refusalResponse(env, orgId, tabId);
+  if ((orderResult.meta.changes || 0) === 0) return false;
   notifyTabChanged(env, orgId, tabId);
-  return json(await loadTabDetail(env, orgId, tabId), 201);
+  return true;
 }
 
 // POST /organizations/:orgId/tabs/:tabId/lines/:lineId/void { reason, quantity?, deviceId?, deviceName? }

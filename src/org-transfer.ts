@@ -93,7 +93,7 @@ export const EXPORT_TABLES: TableSpec[] = [
   // on again there.
   {
     table: 'events',
-    columns: ['id', 'name', 'event_date', 'created_at', 'catalog_id', 'order_counter', 'self_order_pay_counter', 'self_order_pay_bancontact'],
+    columns: ['id', 'name', 'event_date', 'created_at', 'catalog_id', 'order_counter', 'self_order_pay_counter', 'self_order_pay_bancontact', 'self_order_tabs'],
     excluded: {
       ...ORG,
       self_order_enabled: 'switched on again on the new installation (new public URL)',
@@ -107,7 +107,7 @@ export const EXPORT_TABLES: TableSpec[] = [
     table: 'tabs',
     columns: [
       'id', 'number', 'label', 'status', 'slot_id', 'event_id', 'opened_device_id', 'opened_device_name', 'opened_by_name', 'opened_by_email',
-      'opened_at', 'closed_at', 'receipt_number', 'cancel_reason', 'split_parts', 'split_paid', 'event_number', 'source',
+      'opened_at', 'closed_at', 'receipt_number', 'cancel_reason', 'split_parts', 'split_paid', 'event_number', 'source', 'pay_later',
     ],
     excluded: { ...ORG, order_token: "a follow-your-order page of this installation" },
     remap: ['id', 'event_id'],

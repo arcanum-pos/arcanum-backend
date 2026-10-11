@@ -15,7 +15,9 @@ CREATE TABLE IF NOT EXISTS events (
   order_counter INTEGER NOT NULL DEFAULT 0,
   -- How guests may pay (migration 0026): at the counter and/or with Bancontact.
   self_order_pay_counter INTEGER NOT NULL DEFAULT 1,
-  self_order_pay_bancontact INTEGER NOT NULL DEFAULT 0
+  self_order_pay_bancontact INTEGER NOT NULL DEFAULT 0,
+  -- Guests may keep ordering on their tab and pay when they leave (migration 0027).
+  self_order_tabs INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_org ON events(org_id);
@@ -315,7 +317,10 @@ CREATE TABLE IF NOT EXISTS tabs (
   -- ('kassa' | 'self_order'), the token of its "follow your order" page.
   event_number INTEGER,
   source TEXT NOT NULL DEFAULT 'kassa',
-  order_token TEXT
+  order_token TEXT,
+  -- A self-order tab paid when the guest leaves (migration 0027): never
+  -- cancelled for being unpaid; its orders go to the stations unpaid.
+  pay_later INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tabs_org_number ON tabs(org_id, number);
@@ -574,3 +579,4 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0023_device_pairings.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0024_device_pairing_link.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0025_self_order.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0026_self_order_payment.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0027_self_order_tabs.sql');

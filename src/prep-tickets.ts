@@ -40,7 +40,8 @@ export function ticketInsertStatement(env: Env, orgId: string, tabId: string, or
   ).bind(orgId, tabId, orderId, now, now, orderId);
 }
 
-// Unpaid self-orders older than SELF_ORDER_PAY_MINUTES: cancelled. Run
+// Unpaid self-orders older than SELF_ORDER_PAY_MINUTES: cancelled — not a
+// tab that's paid when the guest leaves (pay_later). Run
 // whenever something looks (the kassa's tab list, a station screen, a new
 // self-order, a "follow your order" page) — no timer needed.
 export async function cancelExpiredSelfOrders(env: Env, orgId: string): Promise<void> {
@@ -48,7 +49,7 @@ export async function cancelExpiredSelfOrders(env: Env, orgId: string): Promise<
   const cutoff = new Date(now.getTime() - SELF_ORDER_PAY_MINUTES * 60_000).toISOString();
   const { results } = await env.DB.prepare(
     `UPDATE tabs SET status = 'cancelled', closed_at = ?, cancel_reason = 'Niet betaald binnen ${SELF_ORDER_PAY_MINUTES} minuten'
-     WHERE org_id = ? AND source = 'self_order' AND status = 'open' AND opened_at < ?
+     WHERE org_id = ? AND source = 'self_order' AND pay_later = 0 AND status = 'open' AND opened_at < ?
        AND NOT EXISTS (SELECT 1 FROM charges WHERE charges.tab_id = tabs.id AND charges.status IN ('pending', 'succeeded'))
      RETURNING id`
   )
@@ -77,6 +78,7 @@ interface TicketRow {
   label: string;
   tab_status: string;
   source: string;
+  pay_later: number;
 }
 
 interface TicketLineRow {
@@ -99,7 +101,7 @@ async function listStationTickets(request: Request, env: Env, orgId: string, sta
 
   const { results } = await env.DB.prepare(
     `SELECT t.id, t.tab_id, t.order_id, t.status, t.created_at, t.updated_at,
-       tabs.number, tabs.event_number, tabs.label, tabs.status AS tab_status, tabs.source
+       tabs.number, tabs.event_number, tabs.label, tabs.status AS tab_status, tabs.source, tabs.pay_later
      FROM prep_tickets t JOIN tabs ON tabs.id = t.tab_id
      WHERE t.org_id = ? AND t.station_id = ? AND t.created_at >= ? AND tabs.status <> 'cancelled'
        ${withDelivered ? '' : "AND t.status <> 'delivered'"}
@@ -134,6 +136,9 @@ async function listStationTickets(request: Request, env: Env, orgId: string, sta
       label: t.label,
       paid: t.tab_status === 'closed',
       selfOrder: t.source === 'self_order',
+      // On a tab paid when the guest leaves: prepared unpaid (shown even with
+      // the screen's "only paid" filter on).
+      payLater: !!t.pay_later,
       lines: (byOrder.get(t.order_id) || []).map((l) => ({ name: l.name, quantity: l.quantity, voided: l.voided, note: l.note })),
     }))
   );
@@ -168,11 +173,12 @@ export async function dispatchPrepTicketsRoute(request: Request, env: Env, pathn
 // What a "follow your order" page shows (self-order.ts): per station how
 // far it is, and overall — waiting for payment, being prepared, ready,
 // delivered (or nothing to prepare / cancelled).
-export function followState(tabStatus: string, tickets: { station_name: string; status: TicketStatus }[]) {
+// A tab paid when leaving (payLater) follows its tickets while it's open.
+export function followState(tabStatus: string, tickets: { station_name: string; status: TicketStatus }[], payLater = false) {
   const stations = tickets.map((t) => ({ name: t.station_name, status: t.status }));
   let state: 'cancelled' | 'awaiting_payment' | 'nothing_to_prepare' | 'preparing' | 'ready' | 'delivered';
   if (tabStatus === 'cancelled') state = 'cancelled';
-  else if (tabStatus !== 'closed') state = 'awaiting_payment';
+  else if (tabStatus !== 'closed' && !payLater) state = 'awaiting_payment';
   else if (!stations.length) state = 'nothing_to_prepare';
   else if (stations.every((s) => s.status === 'delivered')) state = 'delivered';
   else if (stations.every((s) => s.status === 'ready' || s.status === 'delivered')) state = 'ready';

@@ -9,6 +9,8 @@
 //   GET  /public/orders/:token             a "follow your order" page: number, lines, state
 //                                          per station, how it can be paid, and a ticket for
 //                                          devicehub's order hub
+//   POST /public/orders/:token/orders      { lines } — one more round on a tab paid when leaving
+//                                          (when the event lets guests order on a tab)
 //   POST /public/orders/:token/bancontact  pay it with Bancontact (when the event allows it):
 //                                          → { deeplinkUrl, checkoutUrl, qrCodeUrl } — the app opens,
 //                                          and sends the phone back to /volg/<token>
@@ -25,7 +27,7 @@ import { json } from './http';
 import { sellableCatalog } from './catalog';
 import { orderHubTicket } from './devicehub-client';
 import { cancelExpiredSelfOrders, followState, type TicketStatus } from './prep-tickets';
-import { openAmount, openTab, prepareOrderLines, prepareTabChargeFor } from './tabs';
+import { addOrderToTab, openAmount, openTab, prepareOrderLines, prepareTabChargeFor } from './tabs';
 import { getDecryptedPaymentCredential } from './organizations/payment-credentials';
 import { startBancontactPayment } from './payments/bancontact';
 
@@ -42,6 +44,7 @@ interface SelfOrderEvent {
   self_order_enabled: number;
   self_order_pay_counter: number;
   self_order_pay_bancontact: number;
+  self_order_tabs: number;
   org_name: string;
   org_locale: string | null;
 }
@@ -56,7 +59,7 @@ async function paymentOptions(env: Env, e: { org_id: string; self_order_pay_coun
 async function eventByCode(env: Env, code: string): Promise<SelfOrderEvent | null> {
   if (!/^[A-Za-z0-9_-]{16,64}$/.test(code)) return null;
   return env.DB.prepare(
-    `SELECT e.id, e.org_id, e.name, e.catalog_id, e.self_order_enabled, e.self_order_pay_counter, e.self_order_pay_bancontact, o.name AS org_name, o.locale AS org_locale
+    `SELECT e.id, e.org_id, e.name, e.catalog_id, e.self_order_enabled, e.self_order_pay_counter, e.self_order_pay_bancontact, e.self_order_tabs, o.name AS org_name, o.locale AS org_locale
      FROM events e JOIN organizations o ON o.id = e.org_id WHERE e.self_order_code = ?`
   )
     .bind(code)
@@ -75,7 +78,8 @@ async function menu(env: Env, code: string): Promise<Response> {
   return json({
     ...base,
     open: true,
-    payment: await paymentOptions(env, event),
+    // tab: guests keep ordering on their tab and pay when they leave.
+    payment: { ...(await paymentOptions(env, event)), tab: !!event.self_order_tabs },
     catalog: {
       id: catalog.id,
       sections: catalog.sections.map((s) => ({ id: s.id, name: s.name, entries: s.entries.map((e) => ({ variantId: e.variantId, name: e.name, priceCents: e.priceCents })) })),
@@ -91,7 +95,8 @@ async function placeOrder(request: Request, env: Env, code: string): Promise<Res
   if (raw.length > MAX_LINES || raw.some((l) => Number((l as { quantity?: unknown })?.quantity) > MAX_QUANTITY)) return errorJson('self_order_too_large', 400);
 
   await cancelExpiredSelfOrders(env, event.org_id);
-  const unpaid = await env.DB.prepare(`SELECT COUNT(*) AS n FROM tabs WHERE event_id = ? AND source = 'self_order' AND status = 'open'`)
+  // Tabs paid when leaving are unpaid on purpose: not counted.
+  const unpaid = await env.DB.prepare(`SELECT COUNT(*) AS n FROM tabs WHERE event_id = ? AND source = 'self_order' AND pay_later = 0 AND status = 'open'`)
     .bind(event.id)
     .first<{ n: number }>();
   if ((unpaid?.n ?? 0) >= MAX_UNPAID) return errorJson('self_order_busy', 429);
@@ -109,6 +114,7 @@ async function placeOrder(request: Request, env: Env, code: string): Promise<Res
     source: 'self_order',
     lines: prepared.lines,
     catalogId: prepared.catalogId,
+    payLater: !!event.self_order_tabs,
   });
   const tab = await env.DB.prepare('SELECT order_token, event_number FROM tabs WHERE id = ?').bind(tabId).first<{ order_token: string; event_number: number }>();
   return json({ token: tab!.order_token, number: tab!.event_number }, 201);
@@ -127,6 +133,7 @@ interface FollowTab {
   self_order_enabled: number | null;
   self_order_pay_counter: number | null;
   self_order_pay_bancontact: number | null;
+  pay_later: number;
   org_name: string;
   org_locale: string | null;
 }
@@ -134,7 +141,7 @@ interface FollowTab {
 async function follow(env: Env, token: string): Promise<Response> {
   if (!/^[A-Za-z0-9_-]{20,64}$/.test(token)) return errorJson('order_not_found', 404);
   const tab = await env.DB.prepare(
-    `SELECT t.id, t.org_id, t.number, t.event_number, t.status, t.source, t.opened_at, e.name AS event_name, e.self_order_code, e.self_order_enabled,
+    `SELECT t.id, t.org_id, t.number, t.event_number, t.status, t.source, t.opened_at, t.pay_later, e.name AS event_name, e.self_order_code, e.self_order_enabled,
        e.self_order_pay_counter, e.self_order_pay_bancontact, o.name AS org_name, o.locale AS org_locale
      FROM tabs t JOIN organizations o ON o.id = t.org_id LEFT JOIN events e ON e.id = t.event_id WHERE t.order_token = ?`
   )
@@ -162,7 +169,9 @@ async function follow(env: Env, token: string): Promise<Response> {
     const known = perStation.get(t.station_name);
     if (!known || order.indexOf(t.status) < order.indexOf(known)) perStation.set(t.station_name, t.status);
   }
-  const { state, stations } = followState(status, [...perStation].map(([station_name, s]) => ({ station_name, status: s })));
+  const payLater = !!tab.pay_later;
+  const tabOpen = payLater && status === 'open';
+  const { state, stations } = followState(status, [...perStation].map(([station_name, s]) => ({ station_name, status: s })), payLater);
   const shown = ((lines.results || []) as { name: string; unit_price_cents: number; quantity: number }[]).filter((l) => l.quantity > 0);
 
   return json({
@@ -171,6 +180,10 @@ async function follow(env: Env, token: string): Promise<Response> {
     orgName: tab.org_name,
     locale: tab.org_locale || 'nl',
     selfOrder: tab.source === 'self_order',
+    // A tab paid when leaving, still open: more rounds can be added, and it
+    // can be settled (payment below).
+    payLater,
+    tabOpen,
     state,
     stations,
     lines: shown.map((l) => ({ name: l.name, quantity: l.quantity, unitPriceCents: l.unit_price_cents })),
@@ -178,14 +191,47 @@ async function follow(env: Env, token: string): Promise<Response> {
     // While it's waiting for payment: how it can be paid, a payment in
     // progress, the last one failed.
     payment:
-      state === 'awaiting_payment' && tab.source === 'self_order'
+      (state === 'awaiting_payment' || tabOpen) && tab.source === 'self_order'
         ? { ...(await paymentOptions(env, tab)), pending: lastCharge?.status === 'pending', failed: lastCharge?.status === 'failed' }
         : null,
     // Back to step 1 of this event's self-order page once it's all delivered.
     selfOrderCode: tab.self_order_enabled ? tab.self_order_code : null,
     // Live updates: devicehub's order hub, this tab only (null: no live updates).
-    hubTicket: state === 'delivered' || state === 'cancelled' || state === 'nothing_to_prepare' ? null : await orderHubTicket(env, tab.org_id, tab.id),
+    hubTicket: !tabOpen && (state === 'delivered' || state === 'cancelled' || state === 'nothing_to_prepare') ? null : await orderHubTicket(env, tab.org_id, tab.id),
   });
+}
+
+// One more round on a guest's tab (paid when leaving): priced from the
+// event's menu, its prep tickets made, like any order.
+async function addRound(request: Request, env: Env, token: string): Promise<Response> {
+  if (!/^[A-Za-z0-9_-]{20,64}$/.test(token)) return errorJson('order_not_found', 404);
+  const tab = await env.DB.prepare(
+    `SELECT t.id, t.org_id, t.status, t.source, t.pay_later, e.catalog_id, e.self_order_enabled
+     FROM tabs t LEFT JOIN events e ON e.id = t.event_id WHERE t.order_token = ?`
+  )
+    .bind(token)
+    .first<{ id: string; org_id: string; status: string; source: string; pay_later: number; catalog_id: string | null; self_order_enabled: number | null }>();
+  if (!tab) return errorJson('order_not_found', 404);
+  if (tab.source !== 'self_order' || !tab.pay_later || !tab.self_order_enabled || !tab.catalog_id) return errorJson('self_order_closed', 409);
+  if (tab.status !== 'open') return errorJson('tab_not_open', 409);
+
+  const body = (await request.json().catch(() => ({}))) as { lines?: unknown };
+  const raw = Array.isArray(body.lines) ? body.lines : [];
+  if (raw.length > MAX_LINES || raw.some((l) => Number((l as { quantity?: unknown })?.quantity) > MAX_QUANTITY)) return errorJson('self_order_too_large', 400);
+  const prepared = await prepareOrderLines(env, tab.org_id, { lines: raw, catalogId: tab.catalog_id });
+  if (typeof prepared === 'string' || 'code' in prepared) return json(errorBody(typeof prepared === 'string' ? codedError('self_order_too_large') : prepared), 400);
+
+  const added = await addOrderToTab(env, {
+    orgId: tab.org_id,
+    tabId: tab.id,
+    lines: prepared.lines,
+    catalogId: prepared.catalogId,
+    source: 'self_order',
+    who: { deviceId: null, deviceName: null, userName: null, userEmail: null },
+  });
+  // A payment in progress (or just finished) on it: no more rounds now.
+  if (!added) return errorJson('tab_payment_pending', 409);
+  return json({ ok: true }, 201);
 }
 
 // A guest pays their own self-order with Bancontact: exactly what's open on
@@ -244,6 +290,8 @@ export async function dispatchSelfOrderRoute(request: Request, env: Env, pathnam
   if (orderMatch && request.method === 'POST') return placeOrder(request, env, orderMatch[1]);
   const followMatch = pathname.match(/^\/public\/orders\/([^/]+)$/);
   if (followMatch && request.method === 'GET') return follow(env, followMatch[1]);
+  const roundMatch = pathname.match(/^\/public\/orders\/([^/]+)\/orders$/);
+  if (roundMatch && request.method === 'POST') return addRound(request, env, roundMatch[1]);
   const payMatch = pathname.match(/^\/public\/orders\/([^/]+)\/bancontact$/);
   if (payMatch && request.method === 'POST') return payBancontact(env, payMatch[1]);
   return null;
