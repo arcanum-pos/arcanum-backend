@@ -143,6 +143,7 @@ export const ERROR_TEXTS = {
   device_not_found: 'Dit toestel is niet (meer) gekoppeld aan deze organisatie',
   pairing_code_invalid: 'Deze koppelcode klopt niet, is al gebruikt of is verlopen — vraag een beheerder om een nieuwe',
   pairing_too_many_attempts: 'Te veel foute koppelcodes — probeer over 10 minuten opnieuw',
+  pairing_needs_login: 'Een kassa koppel je terwijl je aangemeld bent — meld je eerst aan',
   pairing_not_member: 'Je bent geen lid van de organisatie van deze koppelcode — meld je aan met het juiste account',
   devicehub_failed: 'Toestellen zijn even niet bereikbaar — probeer opnieuw'
 } as const satisfies Record<string, string>;

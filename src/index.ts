@@ -35,6 +35,7 @@ import { dispatchOrgTransferRoute } from './org-transfer';
 import { dispatchDemoOrgsRoute } from './demo-orgs';
 import { dispatchSelfOrderRoute } from './self-order';
 import { dispatchPrepTicketsRoute } from './prep-tickets';
+import { dispatchPublicDeviceRoute } from './devices';
 import { QueryBudgetExceeded, withQueryBudget } from './query-budget';
 
 // Durable Object classes must be a named export of the Worker's main entry
@@ -116,6 +117,9 @@ export default {
 
       // Self-ordering guests (not signed in) — arcanum-bff's /api/public/*.
       if (url.pathname.startsWith('/public/')) {
+        // A station screen or customer display paired with its code alone.
+        const pairResponse = await dispatchPublicDeviceRoute(request, env, url.pathname);
+        if (pairResponse) return pairResponse;
         const publicResponse = await dispatchSelfOrderRoute(request, env, url.pathname);
         if (publicResponse) return publicResponse;
       }

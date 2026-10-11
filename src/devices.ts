@@ -12,9 +12,13 @@
 //   GET    /organizations/:org/device-pairings          admin   the last day's codes and what became of them
 //   DELETE /organizations/:org/device-pairings/:id      admin   revoke an open code
 //   POST   /organizations/device-pairings/claim         member of the code's org   { code } → the device (+ org name, language)
+//   POST   /public/pair                                 nobody signed in   { code } → a station screen or customer display,
+//                                                               with its own key (device-keys.ts; arcanum-bff turns it into
+//                                                               a cookie); a kassa's code: pairing_needs_login (not used up)
+//   GET    /organizations/device-ws-token?terminal_id=  that device's key   its notification socket's token
 //
 //   GET    /organizations/:org/devices                  member  the registry (+ names, presence)
-//   GET    /organizations/:org/devices/:id              member  one device — a kassa checks itself on load
+//   GET    /organizations/:org/devices/:id              member, or the device's own key — a device checks itself on load
 //   PATCH  /organizations/:org/devices/:id              member  { name? }, admin { stationId? } (a station screen's station)
 //   DELETE /organizations/:org/devices/:id              admin   unpair / remove
 //   POST   /organizations/:org/devices/:pos/display     member  a customer display in a second window of this kassa
@@ -34,6 +38,7 @@ import { errorJson } from './errors';
 import { json } from './http';
 import { extractCaller, requireOrgRole } from './organizations/auth';
 import type { CallerIdentity } from './organizations/types';
+import { createDeviceKey, deviceCaller, revokeDeviceKeys } from './device-keys';
 
 const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // no 0/O, 1/I/L
 const CODE_LENGTH = 8;
@@ -228,17 +233,14 @@ async function revokePairing(request: Request, env: Env, orgId: string, id: stri
   return json({ ok: true });
 }
 
-async function claimPairing(request: Request, env: Env): Promise<Response> {
-  const caller = extractCaller(request);
-  if (!caller) return json({ error: 'Unauthorized' }, 401);
-  const body = (await request.json().catch(() => null)) as { code?: unknown } | null;
-  const code = normalizeCode(typeof body?.code === 'string' ? body.code : '');
-  const callerKey = `${caller.issuer} ${caller.sub}`;
+// The code as typed → its open pairing, or null (a failure is counted, for
+// `failureKey`: who's typing — a person, or a browser by its address).
+async function findPairing(env: Env, input: unknown, failureKey: string): Promise<PairingRow | Response> {
+  const code = normalizeCode(typeof input === 'string' ? input : '');
   const now = new Date();
   const windowStart = new Date(now.getTime() - FAILURE_WINDOW_MINUTES * 60_000).toISOString();
-
   const failures = await env.DB.prepare('SELECT COUNT(*) AS n FROM device_pairing_failures WHERE caller = ? AND at >= ?')
-    .bind(callerKey, windowStart)
+    .bind(failureKey, windowStart)
     .first<{ n: number }>();
   if ((failures?.n ?? 0) >= MAX_FAILURES) return errorJson('pairing_too_many_attempts', 429);
 
@@ -250,19 +252,48 @@ async function claimPairing(request: Request, env: Env): Promise<Response> {
       : null;
   if (!row) {
     await env.DB.batch([
-      env.DB.prepare('INSERT INTO device_pairing_failures (caller, at) VALUES (?, ?)').bind(callerKey, now.toISOString()),
+      env.DB.prepare('INSERT INTO device_pairing_failures (caller, at) VALUES (?, ?)').bind(failureKey, now.toISOString()),
       env.DB.prepare('DELETE FROM device_pairing_failures WHERE at < ?').bind(new Date(now.getTime() - 86_400_000).toISOString()),
     ]);
     return errorJson('pairing_code_invalid', 400);
   }
+  return row;
+}
 
+async function claimPairing(request: Request, env: Env): Promise<Response> {
+  const caller = extractCaller(request);
+  if (!caller) return json({ error: 'Unauthorized' }, 401);
+  const body = (await request.json().catch(() => null)) as { code?: unknown } | null;
+  const row = await findPairing(env, body?.code, `${caller.issuer} ${caller.sub}`);
+  if (row instanceof Response) return row;
   // A valid code still needs a member of its org on this device — and says
   // so, rather than "wrong code": they're signed in with the wrong account.
   if (!(await requireOrgRole(env, row.org_id, caller, MEMBER))) return errorJson('pairing_not_member', 403);
+  return completeClaim(env, row, who(caller));
+}
 
+// A station screen or customer display paired with its code alone — no
+// person signed in (DOMAIN_MODEL.md "Devices", 2026-10-12): the code is the
+// proof (an admin made it, 10 minutes, once, wrong guesses limited per
+// address). It gets its own key. A kassa's code isn't used up here: a kassa
+// needs a person signed in (then /organizations/device-pairings/claim).
+async function publicPair(request: Request, env: Env): Promise<Response> {
+  const body = (await request.json().catch(() => null)) as { code?: unknown } | null;
+  const address = request.headers.get('CF-Connecting-IP') || 'unknown';
+  const row = await findPairing(env, body?.code, `ip ${address}`);
+  if (row instanceof Response) return row;
+  if (row.role === 'pos') return errorJson('pairing_needs_login', 401, { role: row.role });
+  return completeClaim(env, row, 'koppelcode', true);
+}
+
+// Claims the pairing: registers the device (and, for a station screen, its
+// station; for a customer display, its kassa) — with its own key when
+// `withKey` (paired without a person).
+async function completeClaim(env: Env, row: PairingRow, claimedBy: string, withKey = false): Promise<Response> {
+  const now = new Date();
   const terminalId = crypto.randomUUID();
   const claimed = await env.DB.prepare('UPDATE device_pairings SET claimed_at = ?, claimed_by = ?, terminal_id = ? WHERE id = ? AND claimed_at IS NULL AND revoked_at IS NULL')
-    .bind(now.toISOString(), who(caller), terminalId, row.id)
+    .bind(now.toISOString(), claimedBy, terminalId, row.id)
     .run();
   if (!claimed.meta.changes) return errorJson('pairing_code_invalid', 400);
 
@@ -291,9 +322,39 @@ async function claimPairing(request: Request, env: Env): Promise<Response> {
     const linked = await devicehub(env, '/devices/link', { method: 'POST', body: JSON.stringify({ pos_terminal_id: row.link_to, terminal_id: terminalId }) });
     if (linked.status === 200) linkedTo = row.link_to;
   }
+  const deviceKey = withKey && (row.role === 'station' || row.role === 'cfd') ? await createDeviceKey(env, { terminalId, orgId: row.org_id, role: row.role }) : null;
   // The org's language too: a new device starts in it (unless one was picked on the device).
   const org = await env.DB.prepare('SELECT name, locale FROM organizations WHERE id = ?').bind(row.org_id).first<{ name: string; locale: string | null }>();
-  return json({ terminalId, role: row.role, orgId: row.org_id, orgName: org?.name ?? '', orgLocale: org?.locale ?? null, name: row.name, linkedTo, stationId: row.station_id }, 201);
+  return json(
+    {
+      terminalId,
+      role: row.role,
+      orgId: row.org_id,
+      orgName: org?.name ?? '',
+      orgLocale: org?.locale ?? null,
+      name: row.name,
+      linkedTo,
+      stationId: row.station_id,
+      // The device's own key — arcanum-bff keeps it as a cookie and takes it out of this answer.
+      ...(deviceKey ? { deviceKey } : {}),
+    },
+    201
+  );
+}
+
+// A device's notification socket token, for a device with its own key (a
+// person's device gets it from devicehub through the bff's session check).
+async function deviceWsToken(request: Request, env: Env): Promise<Response> {
+  const device = await deviceCaller(request, env);
+  if (!device) return json({ error: 'Unauthorized' }, 401);
+  const terminalId = new URL(request.url).searchParams.get('terminal_id');
+  if (terminalId !== device.terminalId) return json({ error: 'Forbidden' }, 403);
+  return devicehubProxy(env, `/devices/ws-token?terminal_id=${encodeURIComponent(terminalId)}`);
+}
+
+async function devicehubProxy(env: Env, path: string): Promise<Response> {
+  const { status, body } = await devicehub(env, path);
+  return json(body, status);
 }
 
 // --- Devices ---
@@ -322,8 +383,12 @@ async function orgStation(env: Env, orgId: string, stationId: string): Promise<b
 }
 
 async function getDevice(request: Request, env: Env, orgId: string, terminalId: string): Promise<Response> {
-  const caller = await memberOf(request, env, orgId, MEMBER);
-  if (caller instanceof Response) return caller;
+  // A device with its own key: itself only.
+  const self = extractCaller(request) ? null : await deviceCaller(request, env);
+  if (!self || self.orgId !== orgId || self.terminalId !== terminalId) {
+    const caller = await memberOf(request, env, orgId, MEMBER);
+    if (caller instanceof Response) return caller;
+  }
   const device = await orgDevice(env, orgId, terminalId);
   if (!device) return errorJson('device_not_found', 404);
   return json(device.role === 'station' ? { ...device, ...(await stationsOfDevices(env, orgId)).get(terminalId) } : device);
@@ -356,7 +421,8 @@ async function removeDevice(request: Request, env: Env, orgId: string, terminalI
   if (!(await orgDevice(env, orgId, terminalId))) return errorJson('device_not_found', 404);
   const { status } = await devicehub(env, '/devices/remove', { method: 'POST', body: JSON.stringify({ terminal_id: terminalId }) });
   if (status !== 200) return errorJson('devicehub_failed', 502);
-  await env.DB.prepare('DELETE FROM station_devices WHERE terminal_id = ? AND org_id = ?').bind(terminalId, orgId).run();
+  // Its own key stops working at once.
+  await env.DB.batch([env.DB.prepare('DELETE FROM station_devices WHERE terminal_id = ? AND org_id = ?').bind(terminalId, orgId), revokeDeviceKeys(env, terminalId)]);
   return json({ ok: true });
 }
 
@@ -433,9 +499,16 @@ async function resetKassa(request: Request, env: Env, orgId: string, posId: stri
 }
 
 // Every path above; null for anything else (the caller falls through).
+// /public/pair (a device paired with its code alone) — from index.ts's /public branch.
+export async function dispatchPublicDeviceRoute(request: Request, env: Env, pathname: string): Promise<Response | null> {
+  if (pathname === '/public/pair' && request.method === 'POST') return publicPair(request, env);
+  return null;
+}
+
 export async function dispatchDeviceRoute(request: Request, env: Env, pathname: string): Promise<Response | null> {
   const m = request.method;
   if (pathname === '/organizations/device-pairings/claim') return m === 'POST' ? claimPairing(request, env) : null;
+  if (pathname === '/organizations/device-ws-token') return m === 'GET' ? deviceWsToken(request, env) : null;
 
   let match = pathname.match(/^\/organizations\/([^/]+)\/device-pairings$/);
   if (match) {

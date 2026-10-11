@@ -591,6 +591,19 @@ CREATE TABLE IF NOT EXISTS sms_log (
 CREATE INDEX IF NOT EXISTS idx_sms_log_created ON sms_log(created_at);
 
 -- Which station a station screen (device role 'station') shows (migration 0025).
+-- A station screen's or customer display's own key (migration 0033): paired
+-- with its code alone, no person signed in; only its SHA-256 stored; valid
+-- until the device is removed.
+CREATE TABLE IF NOT EXISTS device_keys (
+  key_hash TEXT PRIMARY KEY,
+  terminal_id TEXT NOT NULL,
+  org_id TEXT NOT NULL REFERENCES organizations(id),
+  role TEXT NOT NULL CHECK (role IN ('station', 'cfd')),
+  created_at TEXT NOT NULL,
+  revoked_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_device_keys_terminal ON device_keys(terminal_id);
+
 CREATE TABLE IF NOT EXISTS station_devices (
   terminal_id TEXT PRIMARY KEY,
   org_id TEXT NOT NULL REFERENCES organizations(id),
@@ -642,3 +655,4 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0029_sms.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0030_self_order_link.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0031_tab_contact.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0032_kassa_modes.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0033_device_keys.sql');

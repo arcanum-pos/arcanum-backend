@@ -20,6 +20,8 @@ import { json } from '../http';
 import { errorJson, providerErrorJson } from '../errors';
 import { broadcastPaymentEvent, notifyTabChanged } from '../devicehub-client';
 import { getDecryptedPaymentCredential } from '../organizations/payment-credentials';
+import { deviceCaller } from '../device-keys';
+import { callDeviceHub } from '../devicehub-client';
 import { extractCaller, refuseUnlessOrgMember, requireOrgRole } from '../organizations/auth';
 import { createSumupReaderCheckout, SumupCloudApiError, listSumupReaders, pairSumupReader, removeSumupReader } from './sumup-cloud-api';
 import { createCharge, getCharge, parseTipCents, setChargeProviderRef, resolveCharge, type ChargeRecord } from './charges';
@@ -291,12 +293,26 @@ export async function confirmChargeFromPos(request: Request, env: Env): Promise<
 // The kassa and the customer display follow a charge here —
 // a member of the charge's own org only.
 export async function getSumupStatus(request: Request, chargeId: string, env: Env): Promise<Response> {
-  if (!extractCaller(request)) return json({ error: 'Unauthorized' }, 401);
+  if (extractCaller(request)) {
+    const charge = await getCharge(env, chargeId);
+    if (!charge) return json({ error: 'Unknown chargeId' }, 404);
+    const refused = await refuseUnlessOrgMember(request, env, charge.orgId);
+    if (refused) return refused;
+    return chargeStatusResponse(env, charge);
+  }
+  // A customer display with its own key (device-keys.ts): only a charge of
+  // the kassa it's linked to.
+  const device = await deviceCaller(request, env);
+  if (!device) return json({ error: 'Unauthorized' }, 401);
   const charge = await getCharge(env, chargeId);
-  if (!charge) return json({ error: 'Unknown chargeId' }, 404);
-  const refused = await refuseUnlessOrgMember(request, env, charge.orgId);
-  if (refused) return refused;
+  if (!charge || device.role !== 'cfd' || charge.orgId !== device.orgId || !charge.posTerminalId) return json({ error: 'Forbidden' }, 403);
+  const self = await callDeviceHub(env, `/devices/${encodeURIComponent(device.terminalId)}`, {});
+  const linkedTo = self.ok ? ((await self.json()) as { linked_to?: string | null }).linked_to : null;
+  if (linkedTo !== charge.posTerminalId) return json({ error: 'Forbidden' }, 403);
+  return chargeStatusResponse(env, charge);
+}
 
+async function chargeStatusResponse(env: Env, charge: NonNullable<Awaited<ReturnType<typeof getCharge>>>): Promise<Response> {
   return json({
     status: charge.status,
     providerStatus: charge.providerStatus,

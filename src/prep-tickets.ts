@@ -9,8 +9,8 @@
 // "Paid" isn't a ticket status: it's the tab's (closed = paid). A station
 // screen shows only paid orders by default; that's its own filter.
 //
-//   GET  /organizations/:org/stations/:station/tickets[?delivered=1]   member
-//   POST /organizations/:org/tickets/:id { status }                    member
+//   GET  /organizations/:org/stations/:station/tickets[?delivered=1]   member, or that station's screen (its own key)
+//   POST /organizations/:org/tickets/:id { status }                    member, or that ticket's station's screen
 //
 // Changes reach the station screens, the kassas and the "follow your order"
 // pages through one notification (devicehub-client.ts notifyTabChanged).
@@ -20,6 +20,7 @@ import { json } from './http';
 import { extractCaller, requireOrgRole } from './organizations/auth';
 import { notifyTabsChanged } from './devicehub-client';
 import { notifyTicketReady, sweepPhones } from './messaging';
+import { deviceCaller } from './device-keys';
 
 export const TICKET_STATUSES = ['ordered', 'in_progress', 'ready', 'delivered'] as const;
 export type TicketStatus = (typeof TICKET_STATUSES)[number];
@@ -66,9 +67,20 @@ export async function cancelExpiredSelfOrders(env: Env, orgId: string): Promise<
   if (ids.length) notifyTabsChanged(env, orgId, ids);
 }
 
-async function member(request: Request, env: Env, orgId: string): Promise<Response | { who: string }> {
+// A member — or a station screen with its own key (device-keys.ts), for its
+// own station only (`stationId`: the station asked about).
+async function member(request: Request, env: Env, orgId: string, stationId?: string | (() => Promise<string | null>)): Promise<Response | { who: string }> {
   const caller = extractCaller(request);
-  if (!caller) return json({ error: 'Unauthorized' }, 401);
+  if (!caller) {
+    const device = stationId !== undefined ? await deviceCaller(request, env) : null;
+    if (!device) return json({ error: 'Unauthorized' }, 401);
+    if (device.role !== 'station' || device.orgId !== orgId) return json({ error: 'Forbidden' }, 403);
+    const own = await env.DB.prepare('SELECT station_id FROM station_devices WHERE terminal_id = ? AND org_id = ?').bind(device.terminalId, orgId).first<{ station_id: string }>();
+    const asked = typeof stationId === 'function' ? await stationId() : stationId;
+    if (!own || !asked || own.station_id !== asked) return json({ error: 'Forbidden' }, 403);
+    const name = await env.DB.prepare('SELECT name FROM prep_stations WHERE id = ?').bind(own.station_id).first<{ name: string }>();
+    return { who: name?.name ? `Scherm ${name.name}` : 'Stationscherm' };
+  }
   if (!(await requireOrgRole(env, orgId, caller, ['admin', 'cashier']))) return json({ error: 'Forbidden' }, 403);
   return { who: caller.name || caller.email || caller.sub };
 }
@@ -101,7 +113,7 @@ interface TicketLineRow {
 // their lines (net of voids: a line voided at the kassa shows struck through),
 // the order's number and whether its tab is paid. Cancelled tabs left out.
 async function listStationTickets(request: Request, env: Env, orgId: string, stationId: string): Promise<Response> {
-  const caller = await member(request, env, orgId);
+  const caller = await member(request, env, orgId, stationId);
   if (caller instanceof Response) return caller;
   await cancelExpiredSelfOrders(env, orgId);
   await sweepPhones(env, orgId).run();
@@ -159,7 +171,9 @@ async function listStationTickets(request: Request, env: Env, orgId: string, sta
 }
 
 async function setTicketStatus(request: Request, env: Env, orgId: string, ticketId: string): Promise<Response> {
-  const caller = await member(request, env, orgId);
+  const caller = await member(request, env, orgId, async () =>
+    (await env.DB.prepare('SELECT station_id FROM prep_tickets WHERE id = ? AND org_id = ?').bind(ticketId, orgId).first<{ station_id: string }>())?.station_id ?? null
+  );
   if (caller instanceof Response) return caller;
   const body = (await request.json().catch(() => ({}))) as { status?: unknown };
   const status = String(body.status ?? '');
