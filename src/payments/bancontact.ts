@@ -97,6 +97,50 @@ export async function createPayment(request: Request, env: Env): Promise<Respons
     lines = prepared.context.lines;
   }
 
+  return startBancontactPayment(env, {
+    orgId,
+    amountCents,
+    tipCents,
+    description,
+    items,
+    tabId,
+    splitPart: body.splitPart === true ? splitPart : 0,
+    lines,
+    posTerminalId: body.posTerminalId ? String(body.posTerminalId) : null,
+    slotId: body.slotId ? String(body.slotId) : null,
+    deviceId: body.deviceId ? String(body.deviceId) : null,
+    deviceName: body.deviceName ? String(body.deviceName) : null,
+    userName: request.headers.get('X-User-Name') || null,
+    userEmail: request.headers.get('X-User-Email') || null,
+    returnUrl: null,
+  });
+}
+
+// A Bancontact payment, once the caller has checked who may make it — a
+// kassa (createPayment above) or a guest paying their own self-order
+// (self-order.ts). `returnUrl`: where the Bancontact app sends a phone back
+// after paying (the guest's "follow your order" page); none for a kassa.
+export async function startBancontactPayment(
+  env: Env,
+  p: {
+    orgId: string;
+    amountCents: number;
+    tipCents: number;
+    description: string;
+    items: Record<string, unknown>;
+    tabId: string | null;
+    splitPart: number;
+    lines: { lineId: string; quantity: number }[];
+    posTerminalId: string | null;
+    slotId: string | null;
+    deviceId: string | null;
+    deviceName: string | null;
+    userName: string | null;
+    userEmail: string | null;
+    returnUrl: string | null;
+  }
+): Promise<Response> {
+  const { orgId, amountCents, tipCents, description, items, tabId, splitPart, lines, posTerminalId } = p;
   const credential = await resolveCredential(env, orgId);
   if (!credential) {
     return errorJson('bancontact_not_configured', 400);
@@ -108,7 +152,6 @@ export async function createPayment(request: Request, env: Env): Promise<Respons
   // Hyphens stripped: Bancontact's `reference` field has a hard 35-char
   // limit, one short of a canonical UUID's 36.
   const chargeId = crypto.randomUUID().replace(/-/g, '');
-  const posTerminalId = body.posTerminalId ? String(body.posTerminalId) : null;
 
   const baseUrl = BASE_URLS[credential.environment];
   const payload = {
@@ -117,6 +160,7 @@ export async function createPayment(request: Request, env: Env): Promise<Respons
     description: description || undefined,
     reference: chargeId,
     callbackUrl: `${env.PUBLIC_BASE_URL}/api/callback/bancontact`,
+    ...(p.returnUrl ? { returnUrl: p.returnUrl } : {}),
   };
 
   const response = await fetch(`${baseUrl}/v3/payments`, {
@@ -141,20 +185,20 @@ export async function createPayment(request: Request, env: Env): Promise<Respons
       description,
       posTerminalId,
       items,
-      slotId: body.slotId ? String(body.slotId) : null,
-      deviceId: body.deviceId ? String(body.deviceId) : null,
-      deviceName: body.deviceName ? String(body.deviceName) : null,
-      userName: request.headers.get('X-User-Name') || null,
-      userEmail: request.headers.get('X-User-Email') || null,
+      slotId: p.slotId,
+      deviceId: p.deviceId,
+      deviceName: p.deviceName,
+      userName: p.userName,
+      userEmail: p.userEmail,
       tabId,
       tipCents,
-      splitPart: body.splitPart === true ? splitPart : 0,
+      splitPart,
       lines,
       providerRef: data.paymentId || null,
       // Stored so a linked CFD — same-device or a genuinely separate one —
       // can render the actual QR code from the payment_updated push, not
       // just the plain "please pay" text cash/sumup get. See getSumupStatus.
-      providerData: { qrCodeUrl: data._links?.qrcode?.href || null, deeplinkUrl: data._links?.deeplink?.href || null },
+      providerData: { qrCodeUrl: data._links?.qrcode?.href || null, deeplinkUrl: data._links?.deeplink?.href || null, checkoutUrl: data._links?.checkout?.href || null },
       expiresAt: data.expiresAt || null,
     });
   } catch (err) {
@@ -182,6 +226,7 @@ export async function createPayment(request: Request, env: Env): Promise<Respons
       currency: data.currency,
       qrCodeUrl: data._links?.qrcode?.href,
       deeplinkUrl: data._links?.deeplink?.href,
+      checkoutUrl: data._links?.checkout?.href,
     },
     201
   );

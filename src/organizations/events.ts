@@ -5,13 +5,15 @@
 //
 //   GET   /organizations/:org/events                          member
 //   POST  /organizations/:org/events { name, date }           admin
-//   PATCH /organizations/:org/events/:id                      admin  { name?, date?, catalogId?, selfOrderEnabled? }
+//   PATCH /organizations/:org/events/:id                      admin  { name?, date?, catalogId?, selfOrderEnabled?,
+//                                                                     payAtCounter?, payBancontact? } (how guests pay)
 //   POST  /organizations/:org/events/:id/self-order-code      admin  a new code (the old URL/QR stops working)
 //   POST  /organizations/:org/events/:id/reset-numbers        admin  the next order is #1 again
 import type { Env } from '../env';
 import { errorJson } from '../errors';
 import { json } from '../http';
 import { extractCaller, requireOrgRole } from './auth';
+import { getDecryptedPaymentCredential } from './payment-credentials';
 
 export interface EventRow {
   id: string;
@@ -23,6 +25,8 @@ export interface EventRow {
   self_order_enabled: number;
   self_order_code: string | null;
   order_counter: number;
+  self_order_pay_counter: number;
+  self_order_pay_bancontact: number;
 }
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -34,7 +38,13 @@ function rowToEvent(row: EventRow) {
     date: row.event_date,
     createdAt: row.created_at,
     catalogId: row.catalog_id,
-    selfOrder: { enabled: !!row.self_order_enabled, code: row.self_order_code },
+    selfOrder: {
+      enabled: !!row.self_order_enabled,
+      code: row.self_order_code,
+      // How guests may pay: at the counter, and/or with Bancontact on their phone.
+      payAtCounter: !!row.self_order_pay_counter,
+      payBancontact: !!row.self_order_pay_bancontact,
+    },
     // The last number given out (0: the next order is #1).
     lastOrderNumber: row.order_counter,
   };
@@ -62,9 +72,17 @@ export async function updateEvent(request: Request, env: Env, orgId: string, eve
   if (refused) return refused;
   const event = await loadEvent(env, orgId, eventId);
   if (!event) return errorJson('event_not_found', 404);
-  const body = (await request.json().catch(() => ({}))) as { name?: unknown; date?: unknown; catalogId?: unknown; selfOrderEnabled?: unknown };
+  const body = (await request.json().catch(() => ({}))) as {
+    name?: unknown;
+    date?: unknown;
+    catalogId?: unknown;
+    selfOrderEnabled?: unknown;
+    payAtCounter?: unknown;
+    payBancontact?: unknown;
+  };
 
   let { name, event_date: date, catalog_id: catalogId, self_order_enabled: enabled, self_order_code: code } = event;
+  let { self_order_pay_counter: payCounter, self_order_pay_bancontact: payBancontact } = event;
   if (body.name !== undefined) {
     name = typeof body.name === 'string' ? body.name.trim() : '';
     if (!name) return json({ error: 'name is required' }, 400);
@@ -82,11 +100,18 @@ export async function updateEvent(request: Request, env: Env, orgId: string, eve
     }
   }
   if (body.selfOrderEnabled !== undefined) enabled = body.selfOrderEnabled === true ? 1 : 0;
+  if (body.payAtCounter !== undefined) payCounter = body.payAtCounter === true ? 1 : 0;
+  if (body.payBancontact !== undefined) payBancontact = body.payBancontact === true ? 1 : 0;
   if (enabled && !catalogId) return errorJson('self_order_needs_menu', 400);
+  if (!payCounter && !payBancontact) return errorJson('self_order_needs_payment', 400);
+  // Bancontact only for an org that has it set up (Instellingen → Betalingen).
+  if (body.payBancontact === true && !(await getDecryptedPaymentCredential(env, orgId, 'bancontact'))?.apiKey) return errorJson('bancontact_not_configured', 400);
   if (enabled && !code) code = newSelfOrderCode();
 
-  await env.DB.prepare('UPDATE events SET name = ?, event_date = ?, catalog_id = ?, self_order_enabled = ?, self_order_code = ? WHERE id = ?')
-    .bind(name, date, catalogId, enabled, code, eventId)
+  await env.DB.prepare(
+    'UPDATE events SET name = ?, event_date = ?, catalog_id = ?, self_order_enabled = ?, self_order_code = ?, self_order_pay_counter = ?, self_order_pay_bancontact = ? WHERE id = ?'
+  )
+    .bind(name, date, catalogId, enabled, code, payCounter, payBancontact, eventId)
     .run();
   return json(rowToEvent((await loadEvent(env, orgId, eventId))!));
 }

@@ -835,7 +835,26 @@ export async function prepareTabCharge(
 ): Promise<{ ok: true; context: TabChargeContext } | { ok: false; response: Response }> {
   const refusal = await authorize(request, env, orgId);
   if (refusal) return { ok: false, response: refusal };
+  return prepareTabChargeFor(env, orgId, tabId, amountCents, tipCents, intent);
+}
 
+// What's still open on a tab (null: no such tab, or not open) — for a guest
+// paying their own self-order (self-order.ts), who pays exactly that.
+export async function openAmount(env: Env, orgId: string, tabId: string): Promise<number | null> {
+  const tab = await loadTabSummary(env, orgId, tabId);
+  return tab && tab.status === 'open' ? tab.outstandingCents : null;
+}
+
+// prepareTabCharge's checks without the membership check — for a guest's own
+// self-order (self-order.ts), whose order token was the authorization.
+export async function prepareTabChargeFor(
+  env: Env,
+  orgId: string,
+  tabId: string,
+  amountCents: number,
+  tipCents = 0,
+  intent: { splitPart?: boolean; partial?: boolean; lines?: unknown } = {}
+): Promise<{ ok: true; context: TabChargeContext } | { ok: false; response: Response }> {
   const tab = await loadTabSummary(env, orgId, tabId);
   if (!tab) return { ok: false, response: errorJson('tab_not_found', 404) };
   if (tab.status !== 'open') return { ok: false, response: errorJson('tab_not_open', 409, { tab }) };

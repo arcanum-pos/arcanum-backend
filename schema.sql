@@ -12,7 +12,10 @@ CREATE TABLE IF NOT EXISTS events (
   catalog_id TEXT REFERENCES catalogs(id),
   self_order_enabled INTEGER NOT NULL DEFAULT 0,
   self_order_code TEXT,
-  order_counter INTEGER NOT NULL DEFAULT 0
+  order_counter INTEGER NOT NULL DEFAULT 0,
+  -- How guests may pay (migration 0026): at the counter and/or with Bancontact.
+  self_order_pay_counter INTEGER NOT NULL DEFAULT 1,
+  self_order_pay_bancontact INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_org ON events(org_id);
@@ -570,3 +573,4 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0022_org_is_locked.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0023_device_pairings.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0024_device_pairing_link.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0025_self_order.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0026_self_order_payment.sql');

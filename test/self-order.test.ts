@@ -1,7 +1,7 @@
 // Self-ordering, prep tickets (bonnen) and station screens, and an event's
 // own order numbers — DOMAIN_MODEL.md "Self-ordering and station screens".
 import { env, SELF } from 'cloudflare:test';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { api, chargeCash, confirmCharge, DEVICE, payCash, recordedCalls, rows, seedOrg, tabsPath, type TestOrg } from './helpers';
 
 const BASE = 'https://backend';
@@ -263,5 +263,89 @@ describe('station screens as devices', () => {
     expect(claimed.status).toBe(201);
     expect(claimed.body).toMatchObject({ role: 'station', stationId: v.kitchen.id });
     expect(await rows('SELECT station_id FROM station_devices WHERE terminal_id = ?', claimed.body.terminalId)).toEqual([{ station_id: v.kitchen.id }]);
+  });
+});
+
+describe('self-ordering: how guests pay (per event)', () => {
+  // Bancontact's API, stubbed (nothing reaches the network).
+  let bancontactCalls: any[] = [];
+  const stubBancontact = () => {
+    bancontactCalls = []
+    const realFetch = globalThis.fetch
+    return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: any, init?: any) => {
+      const request = new Request(input, init)
+      if (new URL(request.url).hostname === 'merchant.api.preprod.bancontact.net') {
+        bancontactCalls.push(await request.clone().json())
+        return Response.json(
+          {
+            paymentId: `bc-${bancontactCalls.length}`,
+            status: 'PENDING',
+            amount: 650,
+            currency: 'EUR',
+            expiresAt: new Date(Date.now() + 20 * 60_000).toISOString(),
+            _links: { qrcode: { href: 'https://qr.test/1.png' }, deeplink: { href: 'https://payconiq.test/deeplink/1' }, checkout: { href: 'https://checkout.test/1' } },
+          },
+          { status: 201 }
+        )
+      }
+      return realFetch(input, init)
+    })
+  }
+  const withBancontact = async (org: TestOrg) =>
+    expect((await api('PUT', `/organizations/${org.orgId}/payment-credentials/bancontact`, { user: org.admin, body: { apiKey: 'k', environment: 'preprod' } })).status).toBe(200)
+
+  it('the counter by default; Bancontact only when set up; never neither', async () => {
+    const org = await seedOrg();
+    const v = await venue(org);
+    const code = await enableSelfOrder(org, v);
+    const patch = (body: unknown) => api('PATCH', `/organizations/${org.orgId}/events/${v.event.id}`, { user: org.admin, body });
+    expect((await call('GET', `/public/self-order/${code}`)).body.payment).toEqual({ counter: true, bancontact: false });
+    expect((await patch({ payBancontact: true })).body.code).toBe('bancontact_not_configured');
+    await withBancontact(org);
+    expect((await patch({ payBancontact: true, payAtCounter: false })).body.selfOrder).toMatchObject({ payAtCounter: false, payBancontact: true });
+    expect((await call('GET', `/public/self-order/${code}`)).body.payment).toEqual({ counter: false, bancontact: true });
+    expect((await patch({ payBancontact: false })).body.code).toBe('self_order_needs_payment');
+  });
+
+  it('a guest pays with Bancontact: exactly what is open, back to the follow page; a second tap reuses the payment', async () => {
+    const spy = stubBancontact();
+    const org = await seedOrg();
+    const v = await venue(org);
+    const code = await enableSelfOrder(org, v);
+    await withBancontact(org);
+    await api('PATCH', `/organizations/${org.orgId}/events/${v.event.id}`, { user: org.admin, body: { payBancontact: true } });
+    const placed = (await call('POST', `/public/self-order/${code}/orders`, { lines: [{ variantId: v.frieten, quantity: 1 }, { variantId: v.pils, quantity: 1 }] })).body;
+
+    const pay = await call('POST', `/public/orders/${placed.token}/bancontact`);
+    expect(pay.status).toBe(201);
+    expect(pay.body).toEqual({ deeplinkUrl: 'https://payconiq.test/deeplink/1', checkoutUrl: 'https://checkout.test/1', qrCodeUrl: 'https://qr.test/1.png' });
+    expect(bancontactCalls).toEqual([
+      expect.objectContaining({ amount: 650, currency: 'EUR', description: 'Test org #1', returnUrl: `https://arcanum.test/volg/${placed.token}` }),
+    ]);
+    // Waiting for it: the follow page says so; a payment in progress keeps the order from expiring.
+    expect((await call('GET', `/public/orders/${placed.token}`)).body).toMatchObject({ state: 'awaiting_payment', payment: { counter: true, bancontact: true, pending: true, failed: false } });
+    // Tapped again: the same payment, not a second one.
+    expect((await call('POST', `/public/orders/${placed.token}/bancontact`)).body.deeplinkUrl).toBe('https://payconiq.test/deeplink/1');
+    expect(bancontactCalls).toHaveLength(1);
+
+    // Bancontact confirms (here through the generic resolve path): paid, being prepared.
+    const chargeId = (await rows<{ id: string }>("SELECT id FROM charges WHERE method = 'bancontact' AND tab_id = (SELECT id FROM tabs WHERE order_token = ?)", placed.token))[0].id;
+    const { resolveCharge } = await import('../src/payments/charges');
+    await resolveCharge(env as any, chargeId, { success: true, providerStatus: 'SUCCEEDED' } as any);
+    expect((await call('GET', `/public/orders/${placed.token}`)).body).toMatchObject({ state: 'preparing', payment: null });
+    spy.mockRestore();
+  });
+
+  it('not when the event only takes the counter, and never for a kassa order', async () => {
+    const org = await seedOrg();
+    const v = await venue(org);
+    const code = await enableSelfOrder(org, v);
+    await withBancontact(org);
+    const placed = (await call('POST', `/public/self-order/${code}/orders`, { lines: [{ variantId: v.pils, quantity: 1 }] })).body;
+    expect((await call('POST', `/public/orders/${placed.token}/bancontact`)).body.code).toBe('self_order_payment_unavailable');
+    await api('PATCH', `/organizations/${org.orgId}/events/${v.event.id}`, { user: org.admin, body: { payBancontact: true } });
+    const kassa = (await kassaTab(org, v, [{ variantId: v.pils, quantity: 1 }])).body;
+    const token = (await rows<{ order_token: string }>('SELECT order_token FROM tabs WHERE id = ?', kassa.id))[0].order_token;
+    expect((await call('POST', `/public/orders/${token}/bancontact`)).body.code).toBe('self_order_payment_unavailable');
   });
 });

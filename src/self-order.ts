@@ -7,7 +7,11 @@
 //   POST /public/self-order/:code/orders   { lines: [{ variantId, quantity, note? }] }
 //                                          → 201 { token, number }: a new tab (source self_order)
 //   GET  /public/orders/:token             a "follow your order" page: number, lines, state
-//                                          per station, and a ticket for devicehub's order hub
+//                                          per station, how it can be paid, and a ticket for
+//                                          devicehub's order hub
+//   POST /public/orders/:token/bancontact  pay it with Bancontact (when the event allows it):
+//                                          → { deeplinkUrl, checkoutUrl, qrCodeUrl } — the app opens,
+//                                          and sends the phone back to /volg/<token>
 //
 // The code (in the event's URL/QR) and the token (in a follow page's URL)
 // are long random strings: nothing here can be listed or guessed. Abuse is
@@ -21,7 +25,9 @@ import { json } from './http';
 import { sellableCatalog } from './catalog';
 import { orderHubTicket } from './devicehub-client';
 import { cancelExpiredSelfOrders, followState, type TicketStatus } from './prep-tickets';
-import { openTab, prepareOrderLines } from './tabs';
+import { openAmount, openTab, prepareOrderLines, prepareTabChargeFor } from './tabs';
+import { getDecryptedPaymentCredential } from './organizations/payment-credentials';
+import { startBancontactPayment } from './payments/bancontact';
 
 const MAX_LINES = 30;
 const MAX_QUANTITY = 20;
@@ -34,14 +40,23 @@ interface SelfOrderEvent {
   name: string;
   catalog_id: string | null;
   self_order_enabled: number;
+  self_order_pay_counter: number;
+  self_order_pay_bancontact: number;
   org_name: string;
   org_locale: string | null;
+}
+
+// How guests of this event may pay: at the counter, and/or with Bancontact —
+// the latter only while the org has Bancontact set up.
+async function paymentOptions(env: Env, e: { org_id: string; self_order_pay_counter: number | null; self_order_pay_bancontact: number | null }) {
+  const bancontact = !!e.self_order_pay_bancontact && !!(await getDecryptedPaymentCredential(env, e.org_id, 'bancontact'))?.apiKey;
+  return { counter: !!e.self_order_pay_counter || !bancontact, bancontact };
 }
 
 async function eventByCode(env: Env, code: string): Promise<SelfOrderEvent | null> {
   if (!/^[A-Za-z0-9_-]{16,64}$/.test(code)) return null;
   return env.DB.prepare(
-    `SELECT e.id, e.org_id, e.name, e.catalog_id, e.self_order_enabled, o.name AS org_name, o.locale AS org_locale
+    `SELECT e.id, e.org_id, e.name, e.catalog_id, e.self_order_enabled, e.self_order_pay_counter, e.self_order_pay_bancontact, o.name AS org_name, o.locale AS org_locale
      FROM events e JOIN organizations o ON o.id = e.org_id WHERE e.self_order_code = ?`
   )
     .bind(code)
@@ -60,6 +75,7 @@ async function menu(env: Env, code: string): Promise<Response> {
   return json({
     ...base,
     open: true,
+    payment: await paymentOptions(env, event),
     catalog: {
       id: catalog.id,
       sections: catalog.sections.map((s) => ({ id: s.id, name: s.name, entries: s.entries.map((e) => ({ variantId: e.variantId, name: e.name, priceCents: e.priceCents })) })),
@@ -109,6 +125,8 @@ interface FollowTab {
   event_name: string | null;
   self_order_code: string | null;
   self_order_enabled: number | null;
+  self_order_pay_counter: number | null;
+  self_order_pay_bancontact: number | null;
   org_name: string;
   org_locale: string | null;
 }
@@ -117,7 +135,7 @@ async function follow(env: Env, token: string): Promise<Response> {
   if (!/^[A-Za-z0-9_-]{20,64}$/.test(token)) return errorJson('order_not_found', 404);
   const tab = await env.DB.prepare(
     `SELECT t.id, t.org_id, t.number, t.event_number, t.status, t.source, t.opened_at, e.name AS event_name, e.self_order_code, e.self_order_enabled,
-       o.name AS org_name, o.locale AS org_locale
+       e.self_order_pay_counter, e.self_order_pay_bancontact, o.name AS org_name, o.locale AS org_locale
      FROM tabs t JOIN organizations o ON o.id = t.org_id LEFT JOIN events e ON e.id = t.event_id WHERE t.order_token = ?`
   )
     .bind(token)
@@ -125,14 +143,16 @@ async function follow(env: Env, token: string): Promise<Response> {
   if (!tab) return errorJson('order_not_found', 404);
   if (tab.source === 'self_order' && tab.status === 'open') await cancelExpiredSelfOrders(env, tab.org_id);
 
-  const [current, tickets, lines] = await env.DB.batch([
+  const [current, tickets, lines, charges] = await env.DB.batch([
     env.DB.prepare('SELECT status FROM tabs WHERE id = ?').bind(tab.id),
     env.DB.prepare('SELECT station_name, status FROM prep_tickets WHERE tab_id = ? ORDER BY created_at, station_name').bind(tab.id),
     env.DB.prepare(
       `SELECT l.name, l.unit_price_cents, l.quantity + COALESCE((SELECT SUM(v.quantity) FROM order_lines v WHERE v.voids_line_id = l.id), 0) AS quantity
        FROM order_lines l WHERE l.tab_id = ? AND l.voids_line_id IS NULL ORDER BY l.created_at, l.rowid`
     ).bind(tab.id),
+    env.DB.prepare('SELECT method, status FROM charges WHERE tab_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1').bind(tab.id),
   ]);
+  const lastCharge = ((charges.results || [])[0] ?? null) as { method: string; status: string } | null;
   const status = ((current.results || [])[0] as { status: string } | undefined)?.status ?? tab.status;
   // Several orders on one tab can each have a ticket for the same station:
   // per station, the least advanced one is how far it is.
@@ -155,11 +175,65 @@ async function follow(env: Env, token: string): Promise<Response> {
     stations,
     lines: shown.map((l) => ({ name: l.name, quantity: l.quantity, unitPriceCents: l.unit_price_cents })),
     totalCents: shown.reduce((sum, l) => sum + l.quantity * l.unit_price_cents, 0),
+    // While it's waiting for payment: how it can be paid, a payment in
+    // progress, the last one failed.
+    payment:
+      state === 'awaiting_payment' && tab.source === 'self_order'
+        ? { ...(await paymentOptions(env, tab)), pending: lastCharge?.status === 'pending', failed: lastCharge?.status === 'failed' }
+        : null,
     // Back to step 1 of this event's self-order page once it's all delivered.
     selfOrderCode: tab.self_order_enabled ? tab.self_order_code : null,
     // Live updates: devicehub's order hub, this tab only (null: no live updates).
     hubTicket: state === 'delivered' || state === 'cancelled' || state === 'nothing_to_prepare' ? null : await orderHubTicket(env, tab.org_id, tab.id),
   });
+}
+
+// A guest pays their own self-order with Bancontact: exactly what's open on
+// it, no tip. A payment already in progress is handed out again (a second
+// tap, or back from the app before it's done) rather than starting another.
+async function payBancontact(env: Env, token: string): Promise<Response> {
+  if (!/^[A-Za-z0-9_-]{20,64}$/.test(token)) return errorJson('order_not_found', 404);
+  const tab = await env.DB.prepare(
+    `SELECT t.id, t.org_id, t.number, t.event_number, t.status, t.source, e.self_order_pay_counter, e.self_order_pay_bancontact, o.name AS org_name
+     FROM tabs t JOIN organizations o ON o.id = t.org_id LEFT JOIN events e ON e.id = t.event_id WHERE t.order_token = ?`
+  )
+    .bind(token)
+    .first<{ id: string; org_id: string; number: number; event_number: number | null; status: string; source: string; self_order_pay_counter: number | null; self_order_pay_bancontact: number | null; org_name: string }>();
+  if (!tab) return errorJson('order_not_found', 404);
+  if (tab.source !== 'self_order' || !(await paymentOptions(env, tab)).bancontact) return errorJson('self_order_payment_unavailable', 409);
+
+  const pending = await env.DB.prepare(`SELECT provider_data FROM charges WHERE tab_id = ? AND status = 'pending' AND method = 'bancontact'`)
+    .bind(tab.id)
+    .first<{ provider_data: string | null }>();
+  if (pending) {
+    const links = JSON.parse(pending.provider_data || '{}') as { deeplinkUrl?: string; checkoutUrl?: string; qrCodeUrl?: string };
+    return json({ deeplinkUrl: links.deeplinkUrl ?? null, checkoutUrl: links.checkoutUrl ?? null, qrCodeUrl: links.qrCodeUrl ?? null });
+  }
+
+  const amount = await openAmount(env, tab.org_id, tab.id);
+  if (amount === null) return errorJson('tab_not_open', 409);
+  const prepared = await prepareTabChargeFor(env, tab.org_id, tab.id, amount, 0);
+  if (!prepared.ok) return prepared.response;
+  const res = await startBancontactPayment(env, {
+    orgId: tab.org_id,
+    amountCents: amount,
+    tipCents: 0,
+    description: `${tab.org_name} #${tab.event_number ?? tab.number}`.slice(0, 140),
+    items: prepared.context.items,
+    tabId: tab.id,
+    splitPart: 0,
+    lines: [],
+    posTerminalId: null,
+    slotId: null,
+    deviceId: null,
+    deviceName: null,
+    userName: null,
+    userEmail: null,
+    returnUrl: `${env.PUBLIC_BASE_URL}/volg/${token}`,
+  });
+  if (!res.ok) return res;
+  const data = (await res.json()) as { deeplinkUrl?: string; checkoutUrl?: string; qrCodeUrl?: string };
+  return json({ deeplinkUrl: data.deeplinkUrl ?? null, checkoutUrl: data.checkoutUrl ?? null, qrCodeUrl: data.qrCodeUrl ?? null }, 201);
 }
 
 // Handles /public/*. Returns null for anything it doesn't recognize.
@@ -170,5 +244,7 @@ export async function dispatchSelfOrderRoute(request: Request, env: Env, pathnam
   if (orderMatch && request.method === 'POST') return placeOrder(request, env, orderMatch[1]);
   const followMatch = pathname.match(/^\/public\/orders\/([^/]+)$/);
   if (followMatch && request.method === 'GET') return follow(env, followMatch[1]);
+  const payMatch = pathname.match(/^\/public\/orders\/([^/]+)\/bancontact$/);
+  if (payMatch && request.method === 'POST') return payBancontact(env, payMatch[1]);
   return null;
 }
