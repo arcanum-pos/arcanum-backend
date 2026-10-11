@@ -8,7 +8,8 @@
 //
 //   GET    /organizations/:org/events                          member
 //   POST   /organizations/:org/events { name, date }           admin
-//   PATCH  /organizations/:org/events/:id                      admin  { name?, date?, selfOrderEnabled? }
+//   PATCH  /organizations/:org/events/:id                      admin  { name?, date?, selfOrderEnabled?,
+//                                                                       linkName? (the name in its readable link) }
 //   POST   /organizations/:org/events/:id/modes                admin  { name, catalogId?, selfOrder?, kassa?,
 //                                                                       payAtCounter?, payBancontact?, tabs?, notifySms? }
 //   PATCH  /organizations/:org/events/:id/modes/:mode          admin  { the same, all optional, move?: 'up' | 'down' }
@@ -34,6 +35,7 @@ export interface EventRow {
   self_order_enabled: number;
   self_order_code: string | null;
   order_counter: number;
+  self_order_slug: string | null;
 }
 
 export interface OrderModeRow {
@@ -79,7 +81,9 @@ function rowToEvent(env: Env, row: EventRow, modes: OrderModeRow[]) {
     name: row.name,
     date: row.event_date,
     createdAt: row.created_at,
-    selfOrder: { enabled: !!row.self_order_enabled, code: row.self_order_code },
+    // code: what goes in the link and QR — the readable one (<name>-<4
+    // characters>); linkName: its name part. The long code of before keeps working.
+    selfOrder: { enabled: !!row.self_order_enabled, code: row.self_order_slug ?? row.self_order_code, linkName: row.self_order_slug ? row.self_order_slug.replace(/-[a-z0-9]{4}$/, '') : null },
     modes: modes.filter((m) => m.event_id === row.id).map(rowToMode),
     // Whether this installation sends SMS (the installer's Geavanceerd → Sms).
     sms: !!smsConfig(env),
@@ -92,6 +96,52 @@ function rowToEvent(env: Env, row: EventRow, modes: OrderModeRow[]) {
 function newSelfOrderCode(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(24));
   return btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_');
+}
+
+// The readable link: the event's name (or what the admin chose) as plain
+// lowercase letters, digits and hyphens, then 4 random characters — easy to
+// type over, not guessable in passing (32^4 ≈ 1 million per name). No
+// look-alikes (0/o, 1/l/i) in the random part.
+const SUFFIX_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
+
+export function linkNameOf(text: string): string {
+  const name = text
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 30)
+    .replace(/-+$/, '');
+  return name || 'bestel';
+}
+
+function newSlug(linkName: string): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(4));
+  return `${linkName}-${[...bytes].map((b) => SUFFIX_ALPHABET[b % SUFFIX_ALPHABET.length]).join('')}`;
+}
+
+// Sets an event's readable link (a fresh suffix) — retried on the rare clash
+// with another event's.
+async function setSlug(env: Env, eventId: string, linkName: string): Promise<void> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      await env.DB.prepare('UPDATE events SET self_order_slug = ? WHERE id = ?').bind(newSlug(linkName), eventId).run();
+      return;
+    } catch (err) {
+      if (!String(err).includes('UNIQUE')) throw err;
+    }
+  }
+  throw new Error('no free self-order link');
+}
+
+// Events with a self-order code from before readable links: one each, from
+// their name (a few per request — Free plan: 50 queries).
+async function ensureSlugs(env: Env, rows: EventRow[]): Promise<void> {
+  for (const row of rows.filter((r) => r.self_order_code && !r.self_order_slug).slice(0, 10)) {
+    await setSlug(env, row.id, linkNameOf(row.name));
+    row.self_order_slug = (await env.DB.prepare('SELECT self_order_slug FROM events WHERE id = ?').bind(row.id).first<{ self_order_slug: string }>())!.self_order_slug;
+  }
 }
 
 async function admin(request: Request, env: Env, orgId: string): Promise<Response | null> {
@@ -113,6 +163,7 @@ async function loadModes(env: Env, eventId: string): Promise<OrderModeRow[]> {
 async function eventResponse(env: Env, orgId: string, eventId: string, status = 200): Promise<Response> {
   const event = await loadEvent(env, orgId, eventId);
   if (!event) return errorJson('event_not_found', 404);
+  await ensureSlugs(env, [event]);
   return json(rowToEvent(env, event, await loadModes(env, eventId)), status);
 }
 
@@ -124,7 +175,7 @@ export async function updateEvent(request: Request, env: Env, orgId: string, eve
   if (refused) return refused;
   const event = await loadEvent(env, orgId, eventId);
   if (!event) return errorJson('event_not_found', 404);
-  const body = (await request.json().catch(() => ({}))) as { name?: unknown; date?: unknown; selfOrderEnabled?: unknown };
+  const body = (await request.json().catch(() => ({}))) as { name?: unknown; date?: unknown; selfOrderEnabled?: unknown; linkName?: unknown };
 
   let { name, event_date: date, self_order_enabled: enabled, self_order_code: code } = event;
   if (body.name !== undefined) {
@@ -140,9 +191,13 @@ export async function updateEvent(request: Request, env: Env, orgId: string, eve
   if (body.selfOrderEnabled === true && !(await loadModes(env, eventId)).some(usable)) return errorJson('self_order_needs_menu', 400);
   if (enabled && !code) code = newSelfOrderCode();
 
+  if (body.linkName !== undefined && (typeof body.linkName !== 'string' || !body.linkName.trim())) return errorJson('self_order_link_name', 400);
+
   await env.DB.prepare('UPDATE events SET name = ?, event_date = ?, self_order_enabled = ?, self_order_code = ? WHERE id = ?')
     .bind(name, date, enabled, code, eventId)
     .run();
+  // Another name in the readable link (a fresh suffix: the old readable link stops working).
+  if (typeof body.linkName === 'string') await setSlug(env, eventId, linkNameOf(body.linkName));
   return eventResponse(env, orgId, eventId);
 }
 
@@ -271,8 +326,11 @@ export async function deleteOrderMode(request: Request, env: Env, orgId: string,
 export async function newEventSelfOrderCode(request: Request, env: Env, orgId: string, eventId: string): Promise<Response> {
   const refused = await admin(request, env, orgId);
   if (refused) return refused;
-  const res = await env.DB.prepare('UPDATE events SET self_order_code = ? WHERE id = ? AND org_id = ?').bind(newSelfOrderCode(), eventId, orgId).run();
-  if (!res.meta.changes) return errorJson('event_not_found', 404);
+  const event = await loadEvent(env, orgId, eventId);
+  if (!event) return errorJson('event_not_found', 404);
+  // Both links replaced: the long one, and the readable one's random part.
+  await env.DB.prepare('UPDATE events SET self_order_code = ? WHERE id = ?').bind(newSelfOrderCode(), eventId).run();
+  await setSlug(env, eventId, event.self_order_slug ? event.self_order_slug.replace(/-[a-z0-9]{4}$/, '') : linkNameOf(event.name));
   return eventResponse(env, orgId, eventId);
 }
 
@@ -300,7 +358,9 @@ export async function listEvents(request: Request, env: Env, orgId: string): Pro
     env.DB.prepare('SELECT * FROM event_order_modes WHERE org_id = ? ORDER BY position, created_at').bind(orgId),
   ]);
   const modeRows = (modes.results || []) as OrderModeRow[];
-  return json(((events.results || []) as EventRow[]).map((e) => rowToEvent(env, e, modeRows)));
+  const eventRows = (events.results || []) as EventRow[];
+  await ensureSlugs(env, eventRows);
+  return json(eventRows.map((e) => rowToEvent(env, e, modeRows)));
 }
 
 export async function createEvent(request: Request, env: Env, orgId: string): Promise<Response> {

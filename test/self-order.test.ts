@@ -69,7 +69,8 @@ describe('an event: its menu, self-ordering, its own numbers', () => {
     expect((await patch({ selfOrderEnabled: true }, org.cashier)).status).toBe(403);
     const on = (await patch({ selfOrderEnabled: true })).body;
     expect(on).toMatchObject({ selfOrder: { enabled: true } });
-    expect(on.selfOrder.code).toMatch(/^[A-Za-z0-9_-]{32}$/);
+    // The readable link: the event's name and 4 random characters.
+    expect(on.selfOrder).toMatchObject({ code: expect.stringMatching(/^fuif-[a-z2-9]{4}$/), linkName: 'fuif' });
     // Off and on again: the same code (the printed QR keeps working).
     await patch({ selfOrderEnabled: false });
     expect((await patch({ selfOrderEnabled: true })).body.selfOrder.code).toBe(on.selfOrder.code);
@@ -497,5 +498,47 @@ describe('ordering modes (bestelwijzen)', () => {
     // Two kassa modes, none chosen: no mode.
     expect((await open(null)).body.orderModeId).toBeNull();
     expect((await open(terPlaatse.id)).body).toMatchObject({ orderModeId: terPlaatse.id, orderMode: 'Ter plaatse' });
+  });
+});
+
+describe('the readable self-order link', () => {
+  it('<name>-<4 characters>, its name changeable; the long code of before keeps working; a new link replaces both', async () => {
+    const org = await seedOrg();
+    const v = await venue(org);
+    const code = await enableSelfOrder(org, v);
+    expect(code).toMatch(/^fuif-[a-z2-9]{4}$/);
+    expect((await call('GET', `/public/self-order/${code}`)).body.open).toBe(true);
+    // Typed over with capitals: still found.
+    expect((await call('GET', `/public/self-order/${code.toUpperCase()}`)).body.open).toBe(true);
+    const long = (await rows<{ self_order_code: string }>('SELECT self_order_code FROM events WHERE id = ?', v.event.id))[0].self_order_code;
+    expect((await call('GET', `/public/self-order/${long}`)).body.open).toBe(true);
+
+    // Another name: accents and spaces made plain; the old readable link stops working.
+    const patch = (body: unknown) => api('PATCH', `/organizations/${org.orgId}/events/${v.event.id}`, { user: org.admin, body });
+    expect((await patch({ linkName: '  ' })).body.code).toBe('self_order_link_name');
+    const renamed = (await patch({ linkName: 'Spaghetti Fouriërs 2026!' })).body.selfOrder;
+    expect(renamed).toMatchObject({ code: expect.stringMatching(/^spaghetti-fouriers-2026-[a-z2-9]{4}$/), linkName: 'spaghetti-fouriers-2026' });
+    expect((await call('GET', `/public/self-order/${code}`)).status).toBe(404);
+    expect((await call('GET', `/public/self-order/${renamed.code}`)).body.open).toBe(true);
+
+    // A guest's follow page points back at the readable link.
+    const placed = (await call('POST', `/public/self-order/${renamed.code}/orders`, { lines: [{ variantId: v.pils, quantity: 1 }] })).body;
+    expect((await call('GET', `/public/orders/${placed.token}`)).body.selfOrderCode).toBe(renamed.code);
+
+    // A new link: both replaced, the name kept.
+    const fresh = (await api('POST', `/organizations/${org.orgId}/events/${v.event.id}/self-order-code`, { user: org.admin })).body.selfOrder;
+    expect(fresh.linkName).toBe('spaghetti-fouriers-2026');
+    expect(fresh.code).not.toBe(renamed.code);
+    expect((await call('GET', `/public/self-order/${renamed.code}`)).status).toBe(404);
+    expect((await call('GET', `/public/self-order/${long}`)).status).toBe(404);
+  });
+
+  it('an event with only the long code of before gets a readable link when listed', async () => {
+    const org = await seedOrg();
+    const v = await venue(org);
+    await enableSelfOrder(org, v);
+    await env.DB.prepare('UPDATE events SET self_order_slug = NULL WHERE id = ?').bind(v.event.id).run();
+    const listed = (await api('GET', `/organizations/${org.orgId}/events`, { user: org.cashier })).body.find((e: any) => e.id === v.event.id);
+    expect(listed.selfOrder.code).toMatch(/^fuif-[a-z2-9]{4}$/);
   });
 });

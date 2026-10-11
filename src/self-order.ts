@@ -69,12 +69,13 @@ async function paymentOptions(env: Env, orgId: string, m: { pay_counter: number 
 }
 
 async function eventByCode(env: Env, code: string): Promise<SelfOrderEvent | null> {
-  if (!/^[A-Za-z0-9_-]{16,64}$/.test(code)) return null;
+  // The long code, or the readable link (<name>-<4 characters>).
+  if (!/^[A-Za-z0-9_-]{6,64}$/.test(code)) return null;
   return env.DB.prepare(
     `SELECT e.id, e.org_id, e.name, e.self_order_enabled, o.name AS org_name, o.locale AS org_locale
-     FROM events e JOIN organizations o ON o.id = e.org_id WHERE e.self_order_code = ?`
+     FROM events e JOIN organizations o ON o.id = e.org_id WHERE e.self_order_code = ? OR e.self_order_slug = ?`
   )
-    .bind(code)
+    .bind(code, code.toLowerCase())
     .first<SelfOrderEvent>();
 }
 
@@ -169,6 +170,7 @@ interface FollowTab {
   opened_at: string;
   event_name: string | null;
   self_order_code: string | null;
+  self_order_slug: string | null;
   self_order_enabled: number | null;
   order_mode_id: string | null;
   mode_label: string | null;
@@ -185,7 +187,7 @@ async function follow(env: Env, token: string): Promise<Response> {
   if (!/^[A-Za-z0-9_-]{20,64}$/.test(token)) return errorJson('order_not_found', 404);
   const tab = await env.DB.prepare(
     `SELECT t.id, t.org_id, t.number, t.event_number, t.status, t.source, t.opened_at, t.pay_later, t.order_mode_id, ${MODE_LABEL_SQL('t')} AS mode_label,
-       e.name AS event_name, e.self_order_code, e.self_order_enabled, m.pay_counter, m.pay_bancontact, m.notify_sms, t.notify_phone,
+       e.name AS event_name, e.self_order_code, e.self_order_slug, e.self_order_enabled, m.pay_counter, m.pay_bancontact, m.notify_sms, t.notify_phone,
        o.name AS org_name, o.locale AS org_locale
      FROM tabs t JOIN organizations o ON o.id = t.org_id LEFT JOIN events e ON e.id = t.event_id
        LEFT JOIN event_order_modes m ON m.id = t.order_mode_id WHERE t.order_token = ?`
@@ -260,7 +262,7 @@ async function follow(env: Env, token: string): Promise<Response> {
         }
       : null,
     // Back to step 1 of this event's self-order page once it's all delivered.
-    selfOrderCode: tab.self_order_enabled ? tab.self_order_code : null,
+    selfOrderCode: tab.self_order_enabled ? (tab.self_order_slug ?? tab.self_order_code) : null,
     // Live updates: devicehub's order hub, this tab only (null: no live updates).
     hubTicket: !tabOpen && (state === 'delivered' || state === 'cancelled' || state === 'nothing_to_prepare') ? null : await orderHubTicket(env, tab.org_id, tab.id),
   });

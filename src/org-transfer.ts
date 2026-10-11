@@ -98,6 +98,7 @@ export const EXPORT_TABLES: TableSpec[] = [
       ...ORG,
       self_order_enabled: 'switched on again on the new installation (new public URL)',
       self_order_code: "this installation's public self-order URL",
+      self_order_slug: "this installation's readable self-order URL",
     },
     remap: ['id', 'catalog_id'],
     orderBy: 'created_at, rowid',

@@ -113,6 +113,7 @@ export const ERROR_TEXTS = {
   too_many_order_modes: 'Maximaal {max} bestelwijzen per evenement',
   unknown_order_mode: 'Onbekende bestelwijze — kies ze opnieuw',
   order_mode_required: 'Kies eerst hoe je bestelt',
+  self_order_link_name: 'Geef een naam voor de link',
   sms_not_configured: 'Sms is niet ingesteld voor deze installatie (installer → Geavanceerd → Sms)',
   sms_unavailable: 'Een sms kan voor deze bestelling niet',
   invalid_phone: 'Dat is geen gsm-nummer dat we kunnen gebruiken (begint met {countries}, of met 0)',

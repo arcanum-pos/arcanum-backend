@@ -17,14 +17,17 @@ CREATE TABLE IF NOT EXISTS events (
   self_order_pay_counter INTEGER NOT NULL DEFAULT 1,
   self_order_pay_bancontact INTEGER NOT NULL DEFAULT 0,
   -- Guests may keep ordering on their tab and pay when they leave (migration 0027).
-  self_order_tabs INTEGER NOT NULL DEFAULT 0
+  self_order_tabs INTEGER NOT NULL DEFAULT 0,
   -- Since migration 0028, catalog_id, self_order_pay_counter,
   -- self_order_pay_bancontact and self_order_tabs are read no more: they're
   -- per ordering mode (event_order_modes).
+  -- The readable self-order link, <name>-<4 characters> (migration 0030).
+  self_order_slug TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_org ON events(org_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_events_self_order_code ON events(self_order_code);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_events_self_order_slug ON events(self_order_slug);
 
 -- An event's ordering modes (bestelwijzen, migration 0028): "Ter plaatse",
 -- "Take away", "Alleen aan de kassa", … — each its own menu, where it's used
@@ -628,3 +631,4 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0026_self_order_payment.sql'
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0027_self_order_tabs.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0028_order_modes.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0029_sms.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0030_self_order_link.sql');
