@@ -3,7 +3,7 @@ import { createOrganization, listMyOrganizations, listMyMemberships, getOrganiza
 import { listMembers, inviteMember, updateMemberRole, removeMember } from './members';
 import { listPaymentCredentials, setPaymentCredential } from './payment-credentials';
 import { testInstallationMail } from './mail';
-import { listEvents, createEvent } from './events';
+import { listEvents, createEvent, newEventSelfOrderCode, resetEventNumbers, updateEvent } from './events';
 import { getOrgLocale, setOrgLocale } from './locale';
 import { getCapabilities } from './org-creation';
 import { dispatchDeviceRoute } from '../devices';
@@ -81,6 +81,13 @@ export async function dispatchOrganizationsRoute(request: Request, env: Env, pat
     return setPaymentCredential(request, env, credMatch[1], credMatch[2]);
   }
 
+  const eventMatch = pathname.match(/^\/organizations\/([^/]+)\/events\/([^/]+)(?:\/(self-order-code|reset-numbers))?$/);
+  if (eventMatch) {
+    const [, orgId, eventId, action] = eventMatch;
+    if (!action && request.method === 'PATCH') return updateEvent(request, env, orgId, eventId);
+    if (action === 'self-order-code' && request.method === 'POST') return newEventSelfOrderCode(request, env, orgId, eventId);
+    if (action === 'reset-numbers' && request.method === 'POST') return resetEventNumbers(request, env, orgId, eventId);
+  }
   const eventsMatch = pathname.match(/^\/organizations\/([^/]+)\/events$/);
   if (eventsMatch) {
     if (request.method === 'GET') return listEvents(request, env, eventsMatch[1]);

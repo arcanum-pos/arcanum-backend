@@ -4,6 +4,8 @@
 //   payments/poller.ts                           — ChargePoller DO, fallback for missed callbacks
 //   transactions.ts                              — the shared D1 sales ledger
 //   tabs.ts                                      — tabs (rekeningen), orders, order lines
+//   prep-tickets.ts                              — prep tickets (bonnen) for station screens
+//   self-order.ts                                — self-ordering guests (public, no sign-in)
 //   catalog.ts                                   — categories, products, catalogs (menukaarten)
 //   catalog-import.ts                            — menukaart import/export (spreadsheet rows)
 //   reports.ts                                   — sales report
@@ -31,6 +33,8 @@ import { dispatchCatalogImportRoute } from './catalog-import';
 import { dispatchReportsRoute } from './reports';
 import { dispatchOrgTransferRoute } from './org-transfer';
 import { dispatchDemoOrgsRoute } from './demo-orgs';
+import { dispatchSelfOrderRoute } from './self-order';
+import { dispatchPrepTicketsRoute } from './prep-tickets';
 import { QueryBudgetExceeded, withQueryBudget } from './query-budget';
 
 // Durable Object classes must be a named export of the Worker's main entry
@@ -110,6 +114,12 @@ export default {
         if (demoResponse) return demoResponse;
       }
 
+      // Self-ordering guests (not signed in) — arcanum-bff's /api/public/*.
+      if (url.pathname.startsWith('/public/')) {
+        const publicResponse = await dispatchSelfOrderRoute(request, env, url.pathname);
+        if (publicResponse) return publicResponse;
+      }
+
       if (url.pathname.startsWith('/organizations')) {
         // First: /organizations/import/start would otherwise be read as an org id.
         const transferResponse = await dispatchOrgTransferRoute(request, env, url.pathname);
@@ -118,6 +128,8 @@ export default {
         // membership check) but aren't admin-portal code — own module.
         const tabsResponse = await dispatchTabsRoute(request, env, url.pathname);
         if (tabsResponse) return tabsResponse;
+        const ticketsResponse = await dispatchPrepTicketsRoute(request, env, url.pathname);
+        if (ticketsResponse) return ticketsResponse;
         // Before the generic catalog routes, which would read 'import' as a catalog id.
         const importResponse = await dispatchCatalogImportRoute(request, env, url.pathname);
         if (importResponse) return importResponse;

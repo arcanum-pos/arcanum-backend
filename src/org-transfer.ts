@@ -63,7 +63,6 @@ export const EXPORT_TABLES: TableSpec[] = [
     remap: ['id'],
     orderBy: 'invited_at, rowid',
   },
-  { table: 'events', columns: ['id', 'name', 'event_date', 'created_at'], excluded: ORG, remap: ['id'], orderBy: 'created_at, rowid' },
   { table: 'categories', columns: ['id', 'name', 'position', 'created_at'], excluded: ORG, remap: ['id'], orderBy: 'position, rowid' },
   { table: 'prep_stations', columns: ['id', 'name', 'position', 'created_at'], excluded: ORG, remap: ['id'], orderBy: 'position, rowid' },
   {
@@ -89,14 +88,28 @@ export const EXPORT_TABLES: TableSpec[] = [
     remap: ['id', 'catalog_id', 'section_id', 'variant_id'],
     orderBy: 'rowid',
   },
+  // After the catalogs: an event names its menu. Self-ordering's switch and
+  // code stay behind — a new installation gets new public URLs; switch it
+  // on again there.
+  {
+    table: 'events',
+    columns: ['id', 'name', 'event_date', 'created_at', 'catalog_id', 'order_counter'],
+    excluded: {
+      ...ORG,
+      self_order_enabled: 'switched on again on the new installation (new public URL)',
+      self_order_code: "this installation's public self-order URL",
+    },
+    remap: ['id', 'catalog_id'],
+    orderBy: 'created_at, rowid',
+  },
   { table: 'org_counters', columns: ['name', 'value'], excluded: ORG, remap: [], orderBy: 'name' },
   {
     table: 'tabs',
     columns: [
       'id', 'number', 'label', 'status', 'slot_id', 'event_id', 'opened_device_id', 'opened_device_name', 'opened_by_name', 'opened_by_email',
-      'opened_at', 'closed_at', 'receipt_number', 'cancel_reason', 'split_parts', 'split_paid',
+      'opened_at', 'closed_at', 'receipt_number', 'cancel_reason', 'split_parts', 'split_paid', 'event_number', 'source',
     ],
-    excluded: ORG,
+    excluded: { ...ORG, order_token: "a follow-your-order page of this installation" },
     remap: ['id', 'event_id'],
     orderBy: 'number',
   },
@@ -116,6 +129,13 @@ export const EXPORT_TABLES: TableSpec[] = [
     excluded: ORG,
     remap: ['id', 'tab_id', 'order_id', 'variant_id', 'prep_station_id', 'voids_line_id'],
     // A void line always comes after the line it voids.
+    orderBy: 'created_at, rowid',
+  },
+  {
+    table: 'prep_tickets',
+    columns: ['id', 'tab_id', 'order_id', 'station_id', 'station_name', 'status', 'created_at', 'updated_at', 'updated_by'],
+    excluded: ORG,
+    remap: ['id', 'tab_id', 'order_id', 'station_id'],
     orderBy: 'created_at, rowid',
   },
   {

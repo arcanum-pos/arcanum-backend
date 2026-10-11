@@ -6,10 +6,17 @@ CREATE TABLE IF NOT EXISTS events (
   org_id TEXT NOT NULL REFERENCES organizations(id),
   name TEXT NOT NULL,
   event_date TEXT NOT NULL, -- ISO date, YYYY-MM-DD
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  -- Self-ordering (migration 0025): the event's menu, on/off, the code in
+  -- its public URL/QR, and its own short order numbers (resettable to 1).
+  catalog_id TEXT REFERENCES catalogs(id),
+  self_order_enabled INTEGER NOT NULL DEFAULT 0,
+  self_order_code TEXT,
+  order_counter INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_org ON events(org_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_events_self_order_code ON events(self_order_code);
 
 CREATE TABLE IF NOT EXISTS transactions (
   id TEXT PRIMARY KEY,
@@ -300,10 +307,17 @@ CREATE TABLE IF NOT EXISTS tabs (
   cancel_reason TEXT,
   -- "Gelijk verdelen": what was open divided over split_parts; split_paid of them paid (0018).
   split_parts INTEGER,
-  split_paid INTEGER NOT NULL DEFAULT 0
+  split_paid INTEGER NOT NULL DEFAULT 0,
+  -- Migration 0025: the short number within its event, where it came from
+  -- ('kassa' | 'self_order'), the token of its "follow your order" page.
+  event_number INTEGER,
+  source TEXT NOT NULL DEFAULT 'kassa',
+  order_token TEXT
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tabs_org_number ON tabs(org_id, number);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tabs_order_token ON tabs(order_token);
+CREATE INDEX IF NOT EXISTS idx_tabs_event_status ON tabs(event_id, status);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tabs_org_receipt ON tabs(org_id, receipt_number);
 CREATE INDEX IF NOT EXISTS idx_tabs_org_status ON tabs(org_id, status);
 
@@ -469,7 +483,7 @@ CREATE TABLE IF NOT EXISTS device_pairings (
   id TEXT PRIMARY KEY,
   org_id TEXT NOT NULL REFERENCES organizations(id),
   code_hash TEXT NOT NULL,
-  role TEXT NOT NULL CHECK (role IN ('pos', 'cfd')),
+  role TEXT NOT NULL CHECK (role IN ('pos', 'cfd', 'station')),
   name TEXT NOT NULL,
   created_by TEXT NOT NULL,
   created_at TEXT NOT NULL,
@@ -479,7 +493,9 @@ CREATE TABLE IF NOT EXISTS device_pairings (
   terminal_id TEXT,
   revoked_at TEXT,
   -- A customer display's kassa, linked on claim (migration 0024).
-  link_to TEXT
+  link_to TEXT,
+  -- A station screen's station (migration 0025).
+  station_id TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_device_pairings_code ON device_pairings(code_hash);
 CREATE INDEX IF NOT EXISTS idx_device_pairings_org ON device_pairings(org_id, created_at);
@@ -491,6 +507,31 @@ CREATE TABLE IF NOT EXISTS device_pairing_failures (
   at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_device_pairing_failures ON device_pairing_failures(caller, at);
+
+-- Prep tickets (migration 0025): the part of one order that goes to one
+-- station, with its status: ordered → in_progress → ready → delivered.
+CREATE TABLE IF NOT EXISTS prep_tickets (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES organizations(id),
+  tab_id TEXT NOT NULL REFERENCES tabs(id),
+  order_id TEXT NOT NULL REFERENCES orders(id),
+  station_id TEXT NOT NULL,
+  station_name TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('ordered', 'in_progress', 'ready', 'delivered')),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  updated_by TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_prep_tickets_station ON prep_tickets(org_id, station_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_prep_tickets_tab ON prep_tickets(tab_id);
+
+-- Which station a station screen (device role 'station') shows (migration 0025).
+CREATE TABLE IF NOT EXISTS station_devices (
+  terminal_id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES organizations(id),
+  station_id TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 
 -- --- Migration tracking ---
 -- wrangler's own table (`wrangler d1 migrations apply`), with the exact DDL
@@ -528,3 +569,4 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0021_charges_tab_index.sql')
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0022_org_is_locked.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0023_device_pairings.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0024_device_pairing_link.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0025_self_order.sql');

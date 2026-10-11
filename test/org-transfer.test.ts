@@ -178,6 +178,7 @@ describe('import', () => {
     const REFERS_TO: Record<string, string> = {
       category_id: 'categories',
       prep_station_id: 'prep_stations',
+      station_id: 'prep_stations',
       product_id: 'products',
       catalog_id: 'catalogs',
       section_id: 'catalog_sections',

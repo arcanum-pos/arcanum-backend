@@ -28,6 +28,7 @@ import { extractCaller, requireOrgRole } from './organizations/auth';
 import { displayName } from './catalog';
 import { jsonRowsStatement } from './sql-json';
 import { notifyTabChanged } from './devicehub-client';
+import { cancelExpiredSelfOrders, ticketInsertStatement } from './prep-tickets';
 
 type TabStatus = 'open' | 'closed' | 'cancelled';
 
@@ -50,6 +51,11 @@ interface TabRow {
   closed_at: string | null;
   receipt_number: number | null;
   cancel_reason: string | null;
+  // Migration 0025: the short number within its event, 'kassa' | 'self_order',
+  // and the token of its "follow your order" page.
+  event_number: number | null;
+  source: string;
+  order_token: string | null;
 }
 
 interface TabSummaryRow extends TabRow {
@@ -142,6 +148,9 @@ function rowToTabSummary(row: TabSummaryRow) {
   return {
     id: row.id,
     number: row.number,
+    // The event's short number (1, 2, 3…) — what's called out; null without an event.
+    eventNumber: row.event_number ?? null,
+    source: row.source,
     label: row.label,
     status: row.status,
     slotId: row.slot_id,
@@ -205,7 +214,7 @@ function attribution(request: Request, body: { deviceId?: unknown; deviceName?: 
   };
 }
 
-interface LineInput {
+export interface LineInput {
   itemCode: string | null;
   name: string;
   unitPriceCents: number;
@@ -305,7 +314,7 @@ async function priceCatalogLines(env: Env, orgId: string, catalogId: string | nu
 }
 
 // parseLines + priceCatalogLines for an order body ({ lines, catalogId? }).
-async function prepareOrderLines(env: Env, orgId: string, body: Record<string, unknown>): Promise<{ lines: LineInput[]; catalogId: string | null } | string | CodedError> {
+export async function prepareOrderLines(env: Env, orgId: string, body: Record<string, unknown>): Promise<{ lines: LineInput[]; catalogId: string | null } | string | CodedError> {
   const lines = parseLines(body.lines);
   if (typeof lines === 'string') return lines;
   const catalogId = typeof body.catalogId === 'string' && body.catalogId ? body.catalogId : null;
@@ -430,9 +439,16 @@ export async function customerOrder(env: Env, orgId: string, tabId: string, char
   const rows = results || [];
   const voided = new Map<string, number>();
   for (const l of rows) if (l.voids_line_id) voided.set(l.voids_line_id, (voided.get(l.voids_line_id) || 0) - l.quantity);
+  // Something to prepare: the customer can follow it on their phone (the
+  // customer display shows the QR once it's paid).
+  const follow = await env.DB.prepare('SELECT order_token, EXISTS (SELECT 1 FROM prep_tickets WHERE tab_id = tabs.id) AS has_tickets FROM tabs WHERE id = ?')
+    .bind(tabId)
+    .first<{ order_token: string | null; has_tickets: number }>();
   return {
     label: tab.label,
     number: tab.number,
+    eventNumber: tab.eventNumber,
+    followUrl: follow?.order_token && follow.has_tickets ? `${env.PUBLIC_BASE_URL}/volg/${follow.order_token}` : null,
     eventName: tab.eventName,
     split: tab.split ? { parts: tab.split.parts, paid: tab.split.paid } : null,
     // Paid on the tab so far (while a part is pending: before it).
@@ -459,6 +475,7 @@ async function refusalResponse(env: Env, orgId: string, tabId: string): Promise<
 // bills": tabs opened or closed at/after it, plus any still open whenever
 // they were opened — newest opened first.
 async function listTabs(request: Request, env: Env, orgId: string): Promise<Response> {
+  await cancelExpiredSelfOrders(env, orgId);
   const params = new URL(request.url).searchParams;
   const status = params.get('status') || 'open';
   if (!['open', 'closed', 'cancelled', 'all'].includes(status)) return json({ error: 'status must be open, closed, cancelled or all' }, 400);
@@ -513,44 +530,81 @@ async function createTab(request: Request, env: Env, orgId: string): Promise<Res
   }
 
   const who = attribution(request, body);
+  const tabId = await openTab(env, { orgId, label, slotId: body.slotId ? String(body.slotId).slice(0, 100) : null, eventId, who, source: 'kassa', lines, catalogId });
+  return json(await loadTabDetail(env, orgId, tabId), 201);
+}
+
+// A random token for a tab's "follow your order" page (/volg/<token>): 144
+// bits, base64url — unguessable, so a page only ever shows its own order.
+export function newOrderToken(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(18));
+  return btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_');
+}
+
+// Opens a tab — from a kassa (createTab) or a self-order page (self-order.ts)
+// — with its first order if there are lines, in one batch: the tab number
+// (the org's counter), the event's short number (the first one after the
+// event's counter that no open tab of the event uses — so a reset to 1 never
+// gives two open orders the same number), the follow token, the order, its
+// lines and its prep tickets. Returns the new tab's id.
+export async function openTab(
+  env: Env,
+  o: {
+    orgId: string;
+    label: string;
+    slotId: string | null;
+    eventId: string | null;
+    who: { deviceId: string | null; deviceName: string | null; userName: string | null; userEmail: string | null };
+    source: 'kassa' | 'self_order';
+    lines: LineInput[];
+    catalogId: string | null;
+  }
+): Promise<string> {
+  const { orgId, eventId, who } = o;
   const tabId = crypto.randomUUID();
   const now = new Date().toISOString();
 
   const statements = [
     env.DB.prepare(`INSERT OR IGNORE INTO org_counters (org_id, name, value) VALUES (?, 'tab', 0)`).bind(orgId),
     env.DB.prepare(`UPDATE org_counters SET value = value + 1 WHERE org_id = ? AND name = 'tab'`).bind(orgId),
-    env.DB.prepare(
-      `INSERT INTO tabs (id, org_id, number, label, status, slot_id, event_id, opened_device_id, opened_device_name, opened_by_name, opened_by_email, opened_at)
-       SELECT ?, ?, value, ?, 'open', ?, ?, ?, ?, ?, ?, ? FROM org_counters WHERE org_id = ? AND name = 'tab'`
-    ).bind(
-      tabId,
-      orgId,
-      label,
-      body.slotId ? String(body.slotId).slice(0, 100) : null,
-      eventId,
-      who.deviceId,
-      who.deviceName,
-      who.userName,
-      who.userEmail,
-      now,
-      orgId
-    ),
   ];
+  if (eventId) {
+    statements.push(
+      env.DB.prepare(
+        `UPDATE events SET order_counter = (
+           WITH RECURSIVE n(v) AS (
+             SELECT order_counter + 1 FROM events WHERE id = ?
+             UNION ALL
+             SELECT v + 1 FROM n WHERE EXISTS (SELECT 1 FROM tabs WHERE event_id = ? AND status = 'open' AND event_number = n.v)
+           )
+           SELECT MAX(v) FROM n
+         ) WHERE id = ?`
+      ).bind(eventId, eventId, eventId)
+    );
+  }
+  statements.push(
+    env.DB.prepare(
+      `INSERT INTO tabs (id, org_id, number, label, status, slot_id, event_id, opened_device_id, opened_device_name, opened_by_name, opened_by_email, opened_at,
+         event_number, source, order_token)
+       SELECT ?, ?, value, ?, 'open', ?, ?, ?, ?, ?, ?, ?, (SELECT order_counter FROM events WHERE id = ?), ?, ? FROM org_counters WHERE org_id = ? AND name = 'tab'`
+    ).bind(tabId, orgId, o.label, o.slotId, eventId, who.deviceId, who.deviceName, who.userName, who.userEmail, now, eventId, o.source, newOrderToken(), orgId)
+  );
 
-  if (lines.length > 0) {
+  if (o.lines.length > 0) {
     const orderId = crypto.randomUUID();
     statements.push(
       env.DB.prepare(
         `INSERT INTO orders (id, org_id, tab_id, source, catalog_id, device_id, device_name, user_name, user_email, submitted_at)
-         VALUES (?, ?, ?, 'kassa', ?, ?, ?, ?, ?, ?)`
-      ).bind(orderId, orgId, tabId, catalogId, who.deviceId, who.deviceName, who.userName, who.userEmail, now),
-      ...lineInsertStatements(env, orgId, tabId, orderId, lines, now)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(orderId, orgId, tabId, o.source, o.catalogId, who.deviceId, who.deviceName, who.userName, who.userEmail, now),
+      ...lineInsertStatements(env, orgId, tabId, orderId, o.lines, now),
+      ticketInsertStatement(env, orgId, tabId, orderId, now)
     );
   }
 
   await env.DB.batch(statements);
   notifyTabChanged(env, orgId, tabId);
-  return json(await loadTabDetail(env, orgId, tabId), 201);
+  return tabId;
 }
 
 // GET /organizations/:orgId/tabs/:tabId
@@ -589,6 +643,7 @@ async function addOrder(request: Request, env: Env, orgId: string, tabId: string
          AND NOT EXISTS (SELECT 1 FROM charges WHERE tab_id = ? AND status = 'pending')`
     ).bind(orderId, orgId, tabId, catalogId, who.deviceId, who.deviceName, who.userName, who.userEmail, now, tabId, orgId, tabId),
     ...lineInsertStatements(env, orgId, tabId, orderId, lines, now),
+    ticketInsertStatement(env, orgId, tabId, orderId, now),
   ]);
 
   if ((orderResult.meta.changes || 0) === 0) return refusalResponse(env, orgId, tabId);

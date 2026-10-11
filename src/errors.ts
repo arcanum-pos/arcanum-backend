@@ -98,6 +98,15 @@ export const ERROR_TEXTS = {
   import_too_many_chunk_rows: 'Maximaal {max} rijen per stuk',
   import_not_abortable: 'Alleen een onafgewerkte import kan geannuleerd worden',
 
+  // --- Self-ordering and station screens (DOMAIN_MODEL.md) ---
+  ticket_not_found: 'Bon niet gevonden',
+  event_not_found: 'Evenement niet gevonden',
+  self_order_needs_menu: 'Kies eerst een menukaart voor dit evenement',
+  self_order_closed: 'Bestellen kan hier nu niet',
+  self_order_busy: 'Er staan te veel onbetaalde bestellingen open — probeer het zo meteen opnieuw, of bestel aan de toog',
+  self_order_too_large: 'Te veel in één bestelling — bestel de rest apart',
+  order_not_found: 'Bestelling niet gevonden',
+
   // --- Mail ---
   mail_not_configured: 'Geen e-mailconfiguratie gevonden (en ook geen platform-standaard)',
   mail_send_failed: 'Verzenden mislukt',

@@ -883,15 +883,21 @@ async function deleteEntry(env: Env, orgId: string, catalogId: string, entryId: 
 
 // What a kassa renders: only visible entries of sellable (non-archived)
 // products, empty sections left out. Deliberately compact — the kassa
-// never needs admin-only fields.
+// never needs admin-only fields. Also what a self-order page shows
+// (self-order.ts): exactly what a kassa could sell, nothing more.
 async function kassaView(env: Env, orgId: string, catalogIdOrDefault: string) {
+  const view = await sellableCatalog(env, orgId, catalogIdOrDefault);
+  return view ? json(view) : errorJson('no_catalog', 404);
+}
+
+export async function sellableCatalog(env: Env, orgId: string, catalogIdOrDefault: string) {
   const row =
     catalogIdOrDefault === 'default'
       ? await env.DB.prepare('SELECT id, name, is_default, archived_at, created_at, updated_at FROM catalogs WHERE org_id = ? AND is_default = 1 AND archived_at IS NULL')
           .bind(orgId)
           .first<CatalogRow>()
       : await loadCatalogRow(env, orgId, catalogIdOrDefault);
-  if (!row || row.archived_at) return errorJson('no_catalog', 404);
+  if (!row || row.archived_at) return null;
 
   const [sections, entries] = await env.DB.batch([
     env.DB.prepare('SELECT id, name, position FROM catalog_sections WHERE catalog_id = ? ORDER BY position, rowid').bind(row.id),
@@ -901,7 +907,7 @@ async function kassaView(env: Env, orgId: string, catalogIdOrDefault: string) {
   ]);
   const entryRows = (entries.results || []) as EntryRow[];
 
-  return json({
+  return {
     id: row.id,
     name: row.name,
     updatedAt: row.updated_at,
@@ -922,7 +928,7 @@ async function kassaView(env: Env, orgId: string, catalogIdOrDefault: string) {
           })),
       }))
       .filter((s) => s.entries.length > 0),
-  });
+  };
 }
 
 // --- Routing ---

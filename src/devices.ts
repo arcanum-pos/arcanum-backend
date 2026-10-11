@@ -6,15 +6,16 @@
 // checked against the caller's membership, and only then goes to devicehub
 // over the service binding (INTERNAL_API_KEY).
 //
-//   POST   /organizations/:org/device-pairings          admin   { role, name, linkTo? } → { id, code, role, name, expiresAt }
-//                                                               (linkTo: a kassa, for a customer display — linked on claim)
+//   POST   /organizations/:org/device-pairings          admin   { role, name, linkTo?, stationId? } → { id, code, role, name, expiresAt }
+//                                                               (linkTo: a kassa, for a customer display — linked on claim;
+//                                                               stationId: the prep station a station screen shows)
 //   GET    /organizations/:org/device-pairings          admin   the last day's codes and what became of them
 //   DELETE /organizations/:org/device-pairings/:id      admin   revoke an open code
 //   POST   /organizations/device-pairings/claim         member of the code's org   { code } → the device (+ org name, language)
 //
 //   GET    /organizations/:org/devices                  member  the registry (+ names, presence)
 //   GET    /organizations/:org/devices/:id              member  one device — a kassa checks itself on load
-//   PATCH  /organizations/:org/devices/:id              member  { name }
+//   PATCH  /organizations/:org/devices/:id              member  { name? }, admin { stationId? } (a station screen's station)
 //   DELETE /organizations/:org/devices/:id              admin   unpair / remove
 //   POST   /organizations/:org/devices/:pos/display     member  a customer display in a second window of this kassa
 //   GET    /organizations/:org/devices/:pos/linked      member  its linked customer display
@@ -41,9 +42,9 @@ const MAX_FAILURES = 10;
 const FAILURE_WINDOW_MINUTES = 10;
 const KEEP_DAYS = 30;
 const MAX_NAME = 60;
-const ROLES = new Set(['pos', 'cfd']);
+const ROLES = new Set(['pos', 'cfd', 'station']);
 
-type Role = 'pos' | 'cfd';
+type Role = 'pos' | 'cfd' | 'station';
 
 interface PairingRow {
   id: string;
@@ -59,6 +60,8 @@ interface PairingRow {
   revoked_at: string | null;
   // A customer display's kassa: linked to it as soon as it's paired.
   link_to: string | null;
+  // A station screen's prep station (migration 0025).
+  station_id: string | null;
 }
 
 interface DeviceRow {
@@ -110,6 +113,7 @@ function pairingJson(row: PairingRow) {
     claimedBy: row.claimed_by,
     terminalId: row.terminal_id,
     linkTo: row.link_to,
+    stationId: row.station_id,
   };
 }
 
@@ -144,9 +148,9 @@ const COMPANION_KASSA: Record<string, string> = { nl: 'Kassa', fr: 'Caisse', en:
 async function createPairing(request: Request, env: Env, orgId: string): Promise<Response> {
   const caller = await memberOf(request, env, orgId, ADMIN);
   if (caller instanceof Response) return caller;
-  const body = (await request.json().catch(() => null)) as { role?: unknown; name?: unknown; linkTo?: unknown } | null;
+  const body = (await request.json().catch(() => null)) as { role?: unknown; name?: unknown; linkTo?: unknown; stationId?: unknown } | null;
   const role = String(body?.role ?? '');
-  if (!ROLES.has(role)) return json({ error: "role must be 'pos' or 'cfd'" }, 400);
+  if (!ROLES.has(role)) return json({ error: "role must be 'pos', 'cfd' or 'station'" }, 400);
   const name = (typeof body?.name === 'string' ? body.name.trim() : '').slice(0, MAX_NAME);
   if (!name) return errorJson('device_name_required', 400);
   // A customer display can be meant for one kassa of this org right away.
@@ -156,14 +160,28 @@ async function createPairing(request: Request, env: Env, orgId: string): Promise
     if (!pos || pos.role !== 'pos') return errorJson('device_not_found', 404);
   }
 
-  const { row, code } = await issuePairingCode(env, orgId, role as Role, name, who(caller), linkTo);
+  // A station screen shows one prep station of this org.
+  let stationId: string | null = null;
+  if (role === 'station') {
+    stationId = typeof body?.stationId === 'string' && (await orgStation(env, orgId, body.stationId)) ? body.stationId : null;
+    if (!stationId) return errorJson('station_not_found', 400);
+  }
+  const { row, code } = await issuePairingCode(env, orgId, role as Role, name, who(caller), linkTo, stationId);
   return json({ ...pairingJson(row), code }, 201);
 }
 
 // A new pairing code (shown form, XXXX-XXXX) — by an admin above, or by the
 // system for a demo's own kassa (demo-orgs.ts), which then pairs the
 // browser the demo starts in.
-export async function issuePairingCode(env: Env, orgId: string, role: Role, name: string, createdBy: string, linkTo: string | null = null): Promise<{ row: PairingRow; code: string }> {
+export async function issuePairingCode(
+  env: Env,
+  orgId: string,
+  role: Role,
+  name: string,
+  createdBy: string,
+  linkTo: string | null = null,
+  stationId: string | null = null
+): Promise<{ row: PairingRow; code: string }> {
   const code = newCode();
   const now = new Date();
   const row: PairingRow = {
@@ -179,11 +197,12 @@ export async function issuePairingCode(env: Env, orgId: string, role: Role, name
     terminal_id: null,
     revoked_at: null,
     link_to: linkTo,
+    station_id: stationId,
   };
   await env.DB.batch([
     env.DB.prepare(
-      'INSERT INTO device_pairings (id, org_id, code_hash, role, name, created_by, created_at, expires_at, link_to) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
-    ).bind(row.id, orgId, await sha256(code), row.role, name, row.created_by, row.created_at, row.expires_at, linkTo),
+      'INSERT INTO device_pairings (id, org_id, code_hash, role, name, created_by, created_at, expires_at, link_to, station_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    ).bind(row.id, orgId, await sha256(code), row.role, name, row.created_by, row.created_at, row.expires_at, linkTo, stationId),
     env.DB.prepare('DELETE FROM device_pairings WHERE created_at < ?').bind(new Date(now.getTime() - KEEP_DAYS * 86_400_000).toISOString()),
   ]);
   return { row, code: shownCode(code) };
@@ -256,6 +275,12 @@ async function claimPairing(request: Request, env: Env): Promise<Response> {
     await env.DB.prepare('UPDATE device_pairings SET claimed_at = NULL, claimed_by = NULL, terminal_id = NULL WHERE id = ?').bind(row.id).run();
     return errorJson('devicehub_failed', 502);
   }
+  // A station screen: which station it shows.
+  if (row.role === 'station' && row.station_id) {
+    await env.DB.prepare('INSERT OR REPLACE INTO station_devices (terminal_id, org_id, station_id, updated_at) VALUES (?, ?, ?, ?)')
+      .bind(terminalId, row.org_id, row.station_id, now.toISOString())
+      .run();
+  }
   // A customer display meant for a kassa: linked now — if that kassa is still there.
   let linkedTo: string | null = null;
   if (row.role === 'cfd' && row.link_to && (await orgDevice(env, row.org_id, row.link_to))) {
@@ -268,7 +293,7 @@ async function claimPairing(request: Request, env: Env): Promise<Response> {
   }
   // The org's language too: a new device starts in it (unless one was picked on the device).
   const org = await env.DB.prepare('SELECT name, locale FROM organizations WHERE id = ?').bind(row.org_id).first<{ name: string; locale: string | null }>();
-  return json({ terminalId, role: row.role, orgId: row.org_id, orgName: org?.name ?? '', orgLocale: org?.locale ?? null, name: row.name, linkedTo }, 201);
+  return json({ terminalId, role: row.role, orgId: row.org_id, orgName: org?.name ?? '', orgLocale: org?.locale ?? null, name: row.name, linkedTo, stationId: row.station_id }, 201);
 }
 
 // --- Devices ---
@@ -278,23 +303,49 @@ async function listDevices(request: Request, env: Env, orgId: string): Promise<R
   if (caller instanceof Response) return caller;
   const { status, body } = await devicehub(env, `/devices/by-org/${encodeURIComponent(orgId)}`);
   if (status !== 200) return errorJson('devicehub_failed', 502);
-  return json(body);
+  const stations = await stationsOfDevices(env, orgId);
+  return json(Array.isArray(body) ? body.map((d: { terminal_id: string }) => ({ ...d, ...stations.get(d.terminal_id) })) : body);
+}
+
+// Station screens' stations: terminal id → { station_id, station_name }.
+async function stationsOfDevices(env: Env, orgId: string): Promise<Map<string, { station_id: string; station_name: string | null }>> {
+  const { results } = await env.DB.prepare(
+    'SELECT sd.terminal_id, sd.station_id, ps.name AS station_name FROM station_devices sd LEFT JOIN prep_stations ps ON ps.id = sd.station_id WHERE sd.org_id = ?'
+  )
+    .bind(orgId)
+    .all<{ terminal_id: string; station_id: string; station_name: string | null }>();
+  return new Map((results || []).map((r) => [r.terminal_id, { station_id: r.station_id, station_name: r.station_name }]));
+}
+
+async function orgStation(env: Env, orgId: string, stationId: string): Promise<boolean> {
+  return !!(await env.DB.prepare('SELECT 1 FROM prep_stations WHERE id = ? AND org_id = ?').bind(stationId, orgId).first());
 }
 
 async function getDevice(request: Request, env: Env, orgId: string, terminalId: string): Promise<Response> {
   const caller = await memberOf(request, env, orgId, MEMBER);
   if (caller instanceof Response) return caller;
   const device = await orgDevice(env, orgId, terminalId);
-  return device ? json(device) : errorJson('device_not_found', 404);
+  if (!device) return errorJson('device_not_found', 404);
+  return json(device.role === 'station' ? { ...device, ...(await stationsOfDevices(env, orgId)).get(terminalId) } : device);
 }
 
 async function renameDevice(request: Request, env: Env, orgId: string, terminalId: string): Promise<Response> {
   const caller = await memberOf(request, env, orgId, MEMBER);
   if (caller instanceof Response) return caller;
-  const body = (await request.json().catch(() => null)) as { name?: unknown } | null;
+  const body = (await request.json().catch(() => null)) as { name?: unknown; stationId?: unknown } | null;
+  const device = await orgDevice(env, orgId, terminalId);
+  if (!device) return errorJson('device_not_found', 404);
+  // Another station for a station screen: admins only.
+  if (body?.stationId !== undefined) {
+    if (!(await requireOrgRole(env, orgId, caller, ADMIN))) return json({ error: 'Forbidden' }, 403);
+    if (device.role !== 'station' || typeof body.stationId !== 'string' || !(await orgStation(env, orgId, body.stationId))) return errorJson('station_not_found', 400);
+    await env.DB.prepare('INSERT OR REPLACE INTO station_devices (terminal_id, org_id, station_id, updated_at) VALUES (?, ?, ?, ?)')
+      .bind(terminalId, orgId, body.stationId, new Date().toISOString())
+      .run();
+    if (body.name === undefined) return json({ ...device, ...(await stationsOfDevices(env, orgId)).get(terminalId) });
+  }
   const name = (typeof body?.name === 'string' ? body.name.trim() : '').slice(0, MAX_NAME);
   if (!name) return errorJson('device_name_required', 400);
-  if (!(await orgDevice(env, orgId, terminalId))) return errorJson('device_not_found', 404);
   const { status, body: renamed } = await devicehub(env, '/devices/rename', { method: 'POST', body: JSON.stringify({ terminal_id: terminalId, name }) });
   return status === 200 ? json(renamed) : errorJson('devicehub_failed', 502);
 }
@@ -304,7 +355,9 @@ async function removeDevice(request: Request, env: Env, orgId: string, terminalI
   if (caller instanceof Response) return caller;
   if (!(await orgDevice(env, orgId, terminalId))) return errorJson('device_not_found', 404);
   const { status } = await devicehub(env, '/devices/remove', { method: 'POST', body: JSON.stringify({ terminal_id: terminalId }) });
-  return status === 200 ? json({ ok: true }) : errorJson('devicehub_failed', 502);
+  if (status !== 200) return errorJson('devicehub_failed', 502);
+  await env.DB.prepare('DELETE FROM station_devices WHERE terminal_id = ? AND org_id = ?').bind(terminalId, orgId).run();
+  return json({ ok: true });
 }
 
 // The kassa's "Klantscherm openen": a customer display in a second window of

@@ -29,6 +29,8 @@ function recordingService(name: string) {
       body = JSON.parse(text);
     } catch {}
     calls.push({ path, body });
+    // devicehub's order hub tickets (self-order.ts): a recognisable stand-in.
+    if (path === '/orders/ticket') return Response.json({ ticket: `ticket-for-${(body as { tab_id?: string })?.tab_id}` });
     return Response.json({ ok: true, stub: name });
   };
 }

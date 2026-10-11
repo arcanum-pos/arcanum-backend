@@ -69,11 +69,11 @@ describe('bancontact tab payments', () => {
     let pushes: { body: any }[] = [];
     // Handed to waitUntil: may land just after the response.
     for (let i = 0; i < 50 && pushes.length < 2; i++) {
-      pushes = (await recordedCalls('devicehub')).filter((c) => c.path === '/devices/broadcast-org' && c.body?.org_id === org.orgId);
+      pushes = (await recordedCalls('devicehub')).filter((c) => c.path === '/devices/tabs-changed' && c.body?.org_id === org.orgId);
       if (pushes.length < 2) await new Promise((r) => setTimeout(r, 10));
     }
     // One for opening the tab, one for the payment.
-    expect(pushes.map((p) => p.body.payload)).toEqual([{ tab_id: tab.id }, { tab_id: tab.id }]);
+    expect(pushes.map((p) => p.body.tab_ids)).toEqual([[tab.id], [tab.id]]);
   });
 
   it('charges outstanding + tip at Bancontact and stores the tip on the charge', async () => {

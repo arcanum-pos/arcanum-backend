@@ -63,16 +63,43 @@ export async function broadcastOrgEvent(
   }
 }
 
-// `tabs_changed { tab_id }` to every kassa of the org, after any change to a
-// tab (its lines, name, split, or a payment on it) — so another kassa
-// reloads it instead of waiting for focus/switch. Not awaited: handed to
-// waitUntil, so the push adds no latency to the request that caused it and
-// still completes after the response is sent.
+// After any change to a tab (its lines, name, split, a payment, a prep
+// ticket's status, a cancellation): one call to devicehub, which tells
+// every kassa and station screen of the org (`tabs_changed { tab_id }`) and
+// every "follow your order" page following one of these tabs
+// (`order_updated`, the order hub) — so they reload it instead of waiting.
+// Not awaited: handed to waitUntil, so the push adds no latency to the
+// request that caused it and still completes after the response is sent.
 export function notifyTabChanged(env: Env, orgId: string, tabId: string): void {
-  const push = broadcastOrgEvent(env, orgId, 'tabs_changed', { tab_id: tabId });
+  notifyTabsChanged(env, orgId, [tabId]);
+}
+
+export function notifyTabsChanged(env: Env, orgId: string, tabIds: string[]): void {
+  const push = (async () => {
+    try {
+      const res = await callDeviceHub(env, '/devices/tabs-changed', { method: 'POST', body: JSON.stringify({ org_id: orgId, tab_ids: tabIds }) });
+      if (!res.ok) console.error(`devicehub weigerde tabs-changed: ${res.status}`);
+    } catch (err) {
+      console.error('Kon devicehub niet bereiken voor melding', err);
+    }
+  })();
   try {
     waitUntil(push);
   } catch {
     // Outside a request context: the push still runs, just unguarded.
+  }
+}
+
+// A signed, short-lived ticket that admits one "follow your order" page
+// into devicehub's order hub, for this one tab (self-order.ts). Null when
+// devicehub can't be reached — the page then still shows the status, just
+// without live updates until it's reloaded.
+export async function orderHubTicket(env: Env, orgId: string, tabId: string): Promise<string | null> {
+  try {
+    const res = await callDeviceHub(env, '/orders/ticket', { method: 'POST', body: JSON.stringify({ org_id: orgId, tab_id: tabId }) });
+    if (!res.ok) return null;
+    return ((await res.json()) as { ticket?: string }).ticket ?? null;
+  } catch {
+    return null;
   }
 }

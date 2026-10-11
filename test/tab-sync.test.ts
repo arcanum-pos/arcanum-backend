@@ -1,6 +1,6 @@
 // Live tab sync between the kassas of one org: every change to a tab — or to
-// a payment on it — pushes `tabs_changed { tab_id }` to all of the org's POS
-// sockets via devicehub's /devices/broadcast-org. Plus the list endpoint's
+// a payment on it — asks devicehub's /devices/tabs-changed to tell the org's
+// kassas and station screens (`tabs_changed { tab_id }`) and the order hub. Plus the list endpoint's
 // "today's bills" view (status=all + since) and the summary's methods/itemCount.
 import { env } from 'cloudflare:test';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -12,7 +12,7 @@ import { api, chargeCash, confirmCharge, createTab, DEVICE, getTab, identityHead
 async function tabPushes(org: TestOrg, atLeast = 1) {
   let pushes: { path: string; body: any }[] = [];
   for (let i = 0; i < 50; i++) {
-    pushes = (await recordedCalls('devicehub')).filter((c) => c.path === '/devices/broadcast-org' && c.body?.org_id === org.orgId);
+    pushes = (await recordedCalls('devicehub')).filter((c) => c.path === '/devices/tabs-changed' && c.body?.org_id === org.orgId);
     if (pushes.length >= atLeast) break;
     await new Promise((r) => setTimeout(r, 10));
   }
@@ -25,7 +25,7 @@ async function expectNewPushes(org: TestOrg, before: number, tabId: string, coun
   await new Promise((r) => setTimeout(r, 30));
   const all = await tabPushes(org, 0);
   expect(all.length - before, JSON.stringify(all.slice(before))).toBe(count);
-  for (const p of pushes.slice(before)) expect(p.body).toEqual({ org_id: org.orgId, role: 'pos', event: 'tabs_changed', payload: { tab_id: tabId } });
+  for (const p of pushes.slice(before)) expect(p.body).toEqual({ org_id: org.orgId, tab_ids: [tabId] });
 }
 
 async function countPushes(org: TestOrg) {
