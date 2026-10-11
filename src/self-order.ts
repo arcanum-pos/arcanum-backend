@@ -3,15 +3,17 @@
 // guest who scanned an event's QR code. arcanum-bff forwards /api/public/*
 // here without a session (and clears any identity headers a client sent).
 //
-//   GET  /public/self-order/:code          the event's menu (what a kassa could sell from it), or closed
-//   POST /public/self-order/:code/orders   { lines: [{ variantId, quantity, note? }] }
-//                                          → 201 { token, number }: a new tab (source self_order)
+//   GET  /public/self-order/:code          the event's ordering modes guests can use (each its menu —
+//                                          what a kassa could sell from it — and how to pay), or closed
+//   POST /public/self-order/:code/orders   { modeId?, lines: [{ variantId, quantity, note? }] }
+//                                          → 201 { token, number }: a new tab (source self_order);
+//                                          modeId may be left out when there's only one mode
 //   GET  /public/orders/:token             a "follow your order" page: number, lines, state
 //                                          per station, how it can be paid, and a ticket for
 //                                          devicehub's order hub
 //   POST /public/orders/:token/orders      { lines } — one more round on a tab paid when leaving
-//                                          (when the event lets guests order on a tab)
-//   POST /public/orders/:token/bancontact  pay it with Bancontact (when the event allows it):
+//                                          (when its ordering mode lets guests order on a tab)
+//   POST /public/orders/:token/bancontact  pay it with Bancontact (when its ordering mode allows it):
 //                                          → { deeplinkUrl, checkoutUrl, qrCodeUrl } — the app opens,
 //                                          and sends the phone back to /volg/<token>
 //
@@ -26,7 +28,7 @@ import { codedError, errorBody, errorJson } from './errors';
 import { json } from './http';
 import { sellableCatalog } from './catalog';
 import { orderHubTicket } from './devicehub-client';
-import { cancelExpiredSelfOrders, followState, type TicketStatus } from './prep-tickets';
+import { cancelExpiredSelfOrders, followState, MODE_LABEL_SQL, type TicketStatus } from './prep-tickets';
 import { addOrderToTab, openAmount, openTab, prepareOrderLines, prepareTabChargeFor } from './tabs';
 import { getDecryptedPaymentCredential } from './organizations/payment-credentials';
 import { startBancontactPayment } from './payments/bancontact';
@@ -40,57 +42,90 @@ interface SelfOrderEvent {
   id: string;
   org_id: string;
   name: string;
-  catalog_id: string | null;
   self_order_enabled: number;
-  self_order_pay_counter: number;
-  self_order_pay_bancontact: number;
-  self_order_tabs: number;
   org_name: string;
   org_locale: string | null;
 }
 
-// How guests of this event may pay: at the counter, and/or with Bancontact —
-// the latter only while the org has Bancontact set up.
-async function paymentOptions(env: Env, e: { org_id: string; self_order_pay_counter: number | null; self_order_pay_bancontact: number | null }) {
-  const bancontact = !!e.self_order_pay_bancontact && !!(await getDecryptedPaymentCredential(env, e.org_id, 'bancontact'))?.apiKey;
-  return { counter: !!e.self_order_pay_counter || !bancontact, bancontact };
+// An ordering mode guests use with the event's QR (event_order_modes).
+interface SelfOrderMode {
+  id: string;
+  name: string;
+  catalog_id: string;
+  pay_counter: number;
+  pay_bancontact: number;
+  tabs: number;
+}
+
+// How guests may pay in an ordering mode: at the counter, and/or with
+// Bancontact — the latter only while the org has Bancontact set up. No mode
+// (removed meanwhile): the counter.
+async function paymentOptions(env: Env, orgId: string, m: { pay_counter: number | null; pay_bancontact: number | null }) {
+  const bancontact = !!m.pay_bancontact && !!(await getDecryptedPaymentCredential(env, orgId, 'bancontact'))?.apiKey;
+  return { counter: !!m.pay_counter || !bancontact, bancontact };
 }
 
 async function eventByCode(env: Env, code: string): Promise<SelfOrderEvent | null> {
   if (!/^[A-Za-z0-9_-]{16,64}$/.test(code)) return null;
   return env.DB.prepare(
-    `SELECT e.id, e.org_id, e.name, e.catalog_id, e.self_order_enabled, e.self_order_pay_counter, e.self_order_pay_bancontact, e.self_order_tabs, o.name AS org_name, o.locale AS org_locale
+    `SELECT e.id, e.org_id, e.name, e.self_order_enabled, o.name AS org_name, o.locale AS org_locale
      FROM events e JOIN organizations o ON o.id = e.org_id WHERE e.self_order_code = ?`
   )
     .bind(code)
     .first<SelfOrderEvent>();
 }
 
-const isOpen = (e: SelfOrderEvent | null): e is SelfOrderEvent & { catalog_id: string } => !!e && !!e.self_order_enabled && !!e.catalog_id;
+// The event's modes guests can order with, in the order they choose from.
+async function selfOrderModes(env: Env, eventId: string): Promise<SelfOrderMode[]> {
+  const { results } = await env.DB.prepare(
+    `SELECT id, name, catalog_id, pay_counter, pay_bancontact, tabs FROM event_order_modes
+     WHERE event_id = ? AND self_order = 1 AND catalog_id IS NOT NULL ORDER BY position, created_at`
+  )
+    .bind(eventId)
+    .all<SelfOrderMode>();
+  return results || [];
+}
 
 async function menu(env: Env, code: string): Promise<Response> {
   const event = await eventByCode(env, code);
   if (!event) return errorJson('self_order_closed', 404);
   const base = { eventName: event.name, orgName: event.org_name, locale: event.org_locale || 'nl' };
-  if (!isOpen(event)) return json({ ...base, open: false, catalog: null });
-  const catalog = await sellableCatalog(env, event.org_id, event.catalog_id);
-  if (!catalog) return json({ ...base, open: false, catalog: null });
-  return json({
-    ...base,
-    open: true,
-    // tab: guests keep ordering on their tab and pay when they leave.
-    payment: { ...(await paymentOptions(env, event)), tab: !!event.self_order_tabs },
-    catalog: {
-      id: catalog.id,
-      sections: catalog.sections.map((s) => ({ id: s.id, name: s.name, entries: s.entries.map((e) => ({ variantId: e.variantId, name: e.name, priceCents: e.priceCents })) })),
-    },
-  });
+  const closed = json({ ...base, open: false, modes: [] });
+  if (!event.self_order_enabled) return closed;
+  const modes = [];
+  // Bancontact's settings read once, a menu shared by modes fetched once
+  // (Free plan: at most 50 queries per request).
+  const bancontact = !!(await getDecryptedPaymentCredential(env, event.org_id, 'bancontact'))?.apiKey;
+  const catalogs = new Map<string, Awaited<ReturnType<typeof sellableCatalog>>>();
+  for (const mode of await selfOrderModes(env, event.id)) {
+    if (!catalogs.has(mode.catalog_id)) catalogs.set(mode.catalog_id, await sellableCatalog(env, event.org_id, mode.catalog_id));
+    const catalog = catalogs.get(mode.catalog_id);
+    if (!catalog) continue;
+    const payBancontact = !!mode.pay_bancontact && bancontact;
+    modes.push({
+      id: mode.id,
+      name: mode.name,
+      // tab: guests keep ordering on their tab and pay when they leave.
+      payment: { counter: !!mode.pay_counter || !payBancontact, bancontact: payBancontact, tab: !!mode.tabs },
+      catalog: {
+        id: catalog.id,
+        sections: catalog.sections.map((s) => ({ id: s.id, name: s.name, entries: s.entries.map((e) => ({ variantId: e.variantId, name: e.name, priceCents: e.priceCents })) })),
+      },
+    });
+  }
+  if (!modes.length) return closed;
+  return json({ ...base, open: true, modes });
 }
 
 async function placeOrder(request: Request, env: Env, code: string): Promise<Response> {
   const event = await eventByCode(env, code);
-  if (!isOpen(event)) return errorJson('self_order_closed', 409);
-  const body = (await request.json().catch(() => ({}))) as { lines?: unknown };
+  if (!event || !event.self_order_enabled) return errorJson('self_order_closed', 409);
+  const modes = await selfOrderModes(env, event.id);
+  if (!modes.length) return errorJson('self_order_closed', 409);
+  const body = (await request.json().catch(() => ({}))) as { modeId?: unknown; lines?: unknown };
+  // Which mode: the one asked for; left out, the only one there is.
+  const mode = body.modeId === undefined || body.modeId === null ? (modes.length === 1 ? modes[0] : null) : modes.find((m) => m.id === body.modeId);
+  if (!mode) return errorJson(body.modeId === undefined || body.modeId === null ? 'order_mode_required' : 'unknown_order_mode', 400);
   const raw = Array.isArray(body.lines) ? body.lines : [];
   if (raw.length > MAX_LINES || raw.some((l) => Number((l as { quantity?: unknown })?.quantity) > MAX_QUANTITY)) return errorJson('self_order_too_large', 400);
 
@@ -101,8 +136,8 @@ async function placeOrder(request: Request, env: Env, code: string): Promise<Res
     .first<{ n: number }>();
   if ((unpaid?.n ?? 0) >= MAX_UNPAID) return errorJson('self_order_busy', 429);
 
-  // Priced from the event's menu, like any kassa order: a guest never sets a price.
-  const prepared = await prepareOrderLines(env, event.org_id, { lines: raw, catalogId: event.catalog_id });
+  // Priced from the mode's menu, like any kassa order: a guest never sets a price.
+  const prepared = await prepareOrderLines(env, event.org_id, { lines: raw, catalogId: mode.catalog_id });
   if (typeof prepared === 'string' || 'code' in prepared) return json(errorBody(typeof prepared === 'string' ? codedError('self_order_too_large') : prepared), 400);
 
   const tabId = await openTab(env, {
@@ -114,7 +149,8 @@ async function placeOrder(request: Request, env: Env, code: string): Promise<Res
     source: 'self_order',
     lines: prepared.lines,
     catalogId: prepared.catalogId,
-    payLater: !!event.self_order_tabs,
+    payLater: !!mode.tabs,
+    orderMode: { id: mode.id, name: mode.name },
   });
   const tab = await env.DB.prepare('SELECT order_token, event_number FROM tabs WHERE id = ?').bind(tabId).first<{ order_token: string; event_number: number }>();
   return json({ token: tab!.order_token, number: tab!.event_number }, 201);
@@ -131,8 +167,10 @@ interface FollowTab {
   event_name: string | null;
   self_order_code: string | null;
   self_order_enabled: number | null;
-  self_order_pay_counter: number | null;
-  self_order_pay_bancontact: number | null;
+  order_mode_id: string | null;
+  mode_label: string | null;
+  pay_counter: number | null;
+  pay_bancontact: number | null;
   pay_later: number;
   org_name: string;
   org_locale: string | null;
@@ -141,9 +179,10 @@ interface FollowTab {
 async function follow(env: Env, token: string): Promise<Response> {
   if (!/^[A-Za-z0-9_-]{20,64}$/.test(token)) return errorJson('order_not_found', 404);
   const tab = await env.DB.prepare(
-    `SELECT t.id, t.org_id, t.number, t.event_number, t.status, t.source, t.opened_at, t.pay_later, e.name AS event_name, e.self_order_code, e.self_order_enabled,
-       e.self_order_pay_counter, e.self_order_pay_bancontact, o.name AS org_name, o.locale AS org_locale
-     FROM tabs t JOIN organizations o ON o.id = t.org_id LEFT JOIN events e ON e.id = t.event_id WHERE t.order_token = ?`
+    `SELECT t.id, t.org_id, t.number, t.event_number, t.status, t.source, t.opened_at, t.pay_later, t.order_mode_id, ${MODE_LABEL_SQL('t')} AS mode_label,
+       e.name AS event_name, e.self_order_code, e.self_order_enabled, m.pay_counter, m.pay_bancontact, o.name AS org_name, o.locale AS org_locale
+     FROM tabs t JOIN organizations o ON o.id = t.org_id LEFT JOIN events e ON e.id = t.event_id
+       LEFT JOIN event_order_modes m ON m.id = t.order_mode_id WHERE t.order_token = ?`
   )
     .bind(token)
     .first<FollowTab>();
@@ -180,6 +219,10 @@ async function follow(env: Env, token: string): Promise<Response> {
     orgName: tab.org_name,
     locale: tab.org_locale || 'nl',
     selfOrder: tab.source === 'self_order',
+    // The ordering mode it came in by (its menu for another round), and its
+    // name when the event has more than one ("Take away").
+    modeId: tab.order_mode_id,
+    mode: tab.mode_label,
     // A tab paid when leaving, still open: more rounds can be added, and it
     // can be settled (payment below).
     payLater,
@@ -192,7 +235,7 @@ async function follow(env: Env, token: string): Promise<Response> {
     // progress, the last one failed.
     payment:
       (state === 'awaiting_payment' || tabOpen) && tab.source === 'self_order'
-        ? { ...(await paymentOptions(env, tab)), pending: lastCharge?.status === 'pending', failed: lastCharge?.status === 'failed' }
+        ? { ...(await paymentOptions(env, tab.org_id, tab)), pending: lastCharge?.status === 'pending', failed: lastCharge?.status === 'failed' }
         : null,
     // Back to step 1 of this event's self-order page once it's all delivered.
     selfOrderCode: tab.self_order_enabled ? tab.self_order_code : null,
@@ -201,13 +244,13 @@ async function follow(env: Env, token: string): Promise<Response> {
   });
 }
 
-// One more round on a guest's tab (paid when leaving): priced from the
-// event's menu, its prep tickets made, like any order.
+// One more round on a guest's tab (paid when leaving): priced from its
+// ordering mode's menu, its prep tickets made, like any order.
 async function addRound(request: Request, env: Env, token: string): Promise<Response> {
   if (!/^[A-Za-z0-9_-]{20,64}$/.test(token)) return errorJson('order_not_found', 404);
   const tab = await env.DB.prepare(
-    `SELECT t.id, t.org_id, t.status, t.source, t.pay_later, e.catalog_id, e.self_order_enabled
-     FROM tabs t LEFT JOIN events e ON e.id = t.event_id WHERE t.order_token = ?`
+    `SELECT t.id, t.org_id, t.status, t.source, t.pay_later, CASE WHEN m.self_order = 1 THEN m.catalog_id END AS catalog_id, e.self_order_enabled
+     FROM tabs t LEFT JOIN events e ON e.id = t.event_id LEFT JOIN event_order_modes m ON m.id = t.order_mode_id WHERE t.order_token = ?`
   )
     .bind(token)
     .first<{ id: string; org_id: string; status: string; source: string; pay_later: number; catalog_id: string | null; self_order_enabled: number | null }>();
@@ -240,13 +283,13 @@ async function addRound(request: Request, env: Env, token: string): Promise<Resp
 async function payBancontact(env: Env, token: string): Promise<Response> {
   if (!/^[A-Za-z0-9_-]{20,64}$/.test(token)) return errorJson('order_not_found', 404);
   const tab = await env.DB.prepare(
-    `SELECT t.id, t.org_id, t.number, t.event_number, t.status, t.source, e.self_order_pay_counter, e.self_order_pay_bancontact, o.name AS org_name
-     FROM tabs t JOIN organizations o ON o.id = t.org_id LEFT JOIN events e ON e.id = t.event_id WHERE t.order_token = ?`
+    `SELECT t.id, t.org_id, t.number, t.event_number, t.status, t.source, m.pay_counter, m.pay_bancontact, o.name AS org_name
+     FROM tabs t JOIN organizations o ON o.id = t.org_id LEFT JOIN event_order_modes m ON m.id = t.order_mode_id WHERE t.order_token = ?`
   )
     .bind(token)
-    .first<{ id: string; org_id: string; number: number; event_number: number | null; status: string; source: string; self_order_pay_counter: number | null; self_order_pay_bancontact: number | null; org_name: string }>();
+    .first<{ id: string; org_id: string; number: number; event_number: number | null; status: string; source: string; pay_counter: number | null; pay_bancontact: number | null; org_name: string }>();
   if (!tab) return errorJson('order_not_found', 404);
-  if (tab.source !== 'self_order' || !(await paymentOptions(env, tab)).bancontact) return errorJson('self_order_payment_unavailable', 409);
+  if (tab.source !== 'self_order' || !(await paymentOptions(env, tab.org_id, tab)).bancontact) return errorJson('self_order_payment_unavailable', 409);
 
   const pending = await env.DB.prepare(`SELECT provider_data FROM charges WHERE tab_id = ? AND status = 'pending' AND method = 'bancontact'`)
     .bind(tab.id)

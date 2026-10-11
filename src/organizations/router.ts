@@ -3,7 +3,7 @@ import { createOrganization, listMyOrganizations, listMyMemberships, getOrganiza
 import { listMembers, inviteMember, updateMemberRole, removeMember } from './members';
 import { listPaymentCredentials, setPaymentCredential } from './payment-credentials';
 import { testInstallationMail } from './mail';
-import { listEvents, createEvent, newEventSelfOrderCode, resetEventNumbers, updateEvent } from './events';
+import { listEvents, createEvent, createOrderMode, deleteOrderMode, newEventSelfOrderCode, resetEventNumbers, updateEvent, updateOrderMode } from './events';
 import { getOrgLocale, setOrgLocale } from './locale';
 import { getCapabilities } from './org-creation';
 import { dispatchDeviceRoute } from '../devices';
@@ -81,6 +81,13 @@ export async function dispatchOrganizationsRoute(request: Request, env: Env, pat
     return setPaymentCredential(request, env, credMatch[1], credMatch[2]);
   }
 
+  const modesMatch = pathname.match(/^\/organizations\/([^/]+)\/events\/([^/]+)\/modes(?:\/([^/]+))?$/);
+  if (modesMatch) {
+    const [, orgId, eventId, modeId] = modesMatch;
+    if (!modeId && request.method === 'POST') return createOrderMode(request, env, orgId, eventId);
+    if (modeId && request.method === 'PATCH') return updateOrderMode(request, env, orgId, eventId, modeId);
+    if (modeId && request.method === 'DELETE') return deleteOrderMode(request, env, orgId, eventId, modeId);
+  }
   const eventMatch = pathname.match(/^\/organizations\/([^/]+)\/events\/([^/]+)(?:\/(self-order-code|reset-numbers))?$/);
   if (eventMatch) {
     const [, orgId, eventId, action] = eventMatch;

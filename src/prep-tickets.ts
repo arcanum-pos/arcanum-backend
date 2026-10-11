@@ -28,6 +28,12 @@ const STATION_WINDOW_HOURS = 18;
 // An unpaid self-order is cancelled after this (DOMAIN_MODEL.md: 10 minutes).
 export const SELF_ORDER_PAY_MINUTES = 10;
 
+// The ordering mode's name to show ("Take away") — only when its event has
+// more than one mode: with one, it says nothing. Information only, never
+// routing (a product's prep station decides where it's made).
+export const MODE_LABEL_SQL = (ref: string) =>
+  `CASE WHEN (SELECT COUNT(*) FROM event_order_modes em WHERE em.event_id = ${ref}.event_id) > 1 THEN ${ref}.order_mode_name END`;
+
 // One statement for an order's tickets — one per station that has a line in
 // it (voids never make one) — run in the same batch as the order's lines,
 // after them: an order that wasn't inserted has no lines, so no tickets.
@@ -79,6 +85,7 @@ interface TicketRow {
   tab_status: string;
   source: string;
   pay_later: number;
+  mode_label: string | null;
 }
 
 interface TicketLineRow {
@@ -101,7 +108,8 @@ async function listStationTickets(request: Request, env: Env, orgId: string, sta
 
   const { results } = await env.DB.prepare(
     `SELECT t.id, t.tab_id, t.order_id, t.status, t.created_at, t.updated_at,
-       tabs.number, tabs.event_number, tabs.label, tabs.status AS tab_status, tabs.source, tabs.pay_later
+       tabs.number, tabs.event_number, tabs.label, tabs.status AS tab_status, tabs.source, tabs.pay_later,
+       ${MODE_LABEL_SQL('tabs')} AS mode_label
      FROM prep_tickets t JOIN tabs ON tabs.id = t.tab_id
      WHERE t.org_id = ? AND t.station_id = ? AND t.created_at >= ? AND tabs.status <> 'cancelled'
        ${withDelivered ? '' : "AND t.status <> 'delivered'"}
@@ -139,6 +147,10 @@ async function listStationTickets(request: Request, env: Env, orgId: string, sta
       // On a tab paid when the guest leaves: prepared unpaid (shown even with
       // the screen's "only paid" filter on).
       payLater: !!t.pay_later,
+      // Its ordering mode ("Take away") when the event has more than one —
+      // information for whoever prepares it; the station got it from the
+      // products' prep station, never from the mode.
+      mode: t.mode_label,
       lines: (byOrder.get(t.order_id) || []).map((l) => ({ name: l.name, quantity: l.quantity, voided: l.voided, note: l.note })),
     }))
   );

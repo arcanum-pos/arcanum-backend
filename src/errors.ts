@@ -108,6 +108,11 @@ export const ERROR_TEXTS = {
   self_order_busy: 'Er staan te veel onbetaalde bestellingen open — probeer het zo meteen opnieuw, of bestel aan de toog',
   self_order_too_large: 'Te veel in één bestelling — bestel de rest apart',
   order_not_found: 'Bestelling niet gevonden',
+  order_mode_not_found: 'Bestelwijze niet gevonden',
+  order_mode_needs_name: 'Geef de bestelwijze een naam',
+  too_many_order_modes: 'Maximaal {max} bestelwijzen per evenement',
+  unknown_order_mode: 'Onbekende bestelwijze — kies ze opnieuw',
+  order_mode_required: 'Kies eerst hoe je bestelt',
 
   // --- Mail ---
   mail_not_configured: 'Geen e-mailconfiguratie gevonden (en ook geen platform-standaard)',

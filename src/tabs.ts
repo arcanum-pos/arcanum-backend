@@ -28,7 +28,7 @@ import { extractCaller, requireOrgRole } from './organizations/auth';
 import { displayName } from './catalog';
 import { jsonRowsStatement } from './sql-json';
 import { notifyTabChanged } from './devicehub-client';
-import { cancelExpiredSelfOrders, ticketInsertStatement } from './prep-tickets';
+import { cancelExpiredSelfOrders, MODE_LABEL_SQL, ticketInsertStatement } from './prep-tickets';
 
 type TabStatus = 'open' | 'closed' | 'cancelled';
 
@@ -57,6 +57,10 @@ interface TabRow {
   source: string;
   order_token: string | null;
   pay_later: number;
+  // Migration 0028: the ordering mode it came in by, its name a snapshot.
+  order_mode_id: string | null;
+  order_mode_name: string | null;
+  mode_label?: string | null;
 }
 
 interface TabSummaryRow extends TabRow {
@@ -129,7 +133,8 @@ const METHODS_SQL = `(SELECT json_group_array(method) FROM (
 const ITEM_COUNT_SQL = `(SELECT COALESCE(SUM(quantity), 0) FROM order_lines WHERE tab_id = tabs.id AND (item_code IS NULL OR item_code <> 'fooi'))`;
 
 const SUMMARY_SELECT = `SELECT tabs.*, ${TOTAL_SQL} AS total_cents, ${PAID_SQL} AS paid_cents, ${PENDING_SQL} AS payment_pending,
-  ${METHODS_SQL} AS methods, ${ITEM_COUNT_SQL} AS item_count, (SELECT name FROM events WHERE events.id = tabs.event_id) AS event_name FROM tabs`;
+  ${METHODS_SQL} AS methods, ${ITEM_COUNT_SQL} AS item_count, (SELECT name FROM events WHERE events.id = tabs.event_id) AS event_name,
+  ${MODE_LABEL_SQL('tabs')} AS mode_label FROM tabs`;
 
 // "Gelijk verdelen": the next part is what's open ÷ parts left, rounded
 // down — the last part is whatever remains, so rounding never leaves a cent
@@ -154,6 +159,9 @@ function rowToTabSummary(row: TabSummaryRow) {
     source: row.source,
     // A self-order tab paid when the guest leaves.
     payLater: !!row.pay_later,
+    // The ordering mode it came in by; its name when the event has more than one.
+    orderModeId: row.order_mode_id ?? null,
+    orderMode: row.mode_label ?? null,
     label: row.label,
     status: row.status,
     slotId: row.slot_id,
@@ -510,12 +518,13 @@ async function listTabs(request: Request, env: Env, orgId: string): Promise<Resp
   return json((results || []).map(rowToTabSummary));
 }
 
-// POST /organizations/:orgId/tabs { label?, slotId?, eventId?, deviceId?, deviceName?, lines?, catalogId? }
+// POST /organizations/:orgId/tabs { label?, slotId?, eventId?, orderModeId?, deviceId?, deviceName?, lines?, catalogId? }
 // Optional `lines` submits a first order in the same batch — the Toog
 // quick sale (open + order + pay) is then two round trips, not three.
 // Optional `eventId` tags the tab (and so every sale paid on it) with one
 // of this org's events — a reporting tag only (DOMAIN_MODEL.md decision 1),
-// set once when the tab opens.
+// set once when the tab opens. `orderModeId`: one of that event's ordering
+// modes used at the kassa — left out, the only one there is (if so).
 async function createTab(request: Request, env: Env, orgId: string): Promise<Response> {
   const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
   const label = typeof body.label === 'string' ? body.label.trim().slice(0, 60) : '';
@@ -528,6 +537,15 @@ async function createTab(request: Request, env: Env, orgId: string): Promise<Res
     eventId = event.id;
   }
 
+  let orderMode: { id: string; name: string } | null = null;
+  if (eventId) {
+    const { results: modes } = await env.DB.prepare('SELECT id, name FROM event_order_modes WHERE event_id = ? AND kassa = 1').bind(eventId).all<{ id: string; name: string }>();
+    if (body.orderModeId !== undefined && body.orderModeId !== null) {
+      orderMode = (modes || []).find((m) => m.id === body.orderModeId) ?? null;
+      if (!orderMode) return errorJson('unknown_order_mode', 400);
+    } else if (modes?.length === 1) orderMode = modes[0];
+  } else if (body.orderModeId) return errorJson('unknown_order_mode', 400);
+
   let lines: LineInput[] = [];
   let catalogId: string | null = null;
   if (body.lines !== undefined) {
@@ -537,7 +555,7 @@ async function createTab(request: Request, env: Env, orgId: string): Promise<Res
   }
 
   const who = attribution(request, body);
-  const tabId = await openTab(env, { orgId, label, slotId: body.slotId ? String(body.slotId).slice(0, 100) : null, eventId, who, source: 'kassa', lines, catalogId });
+  const tabId = await openTab(env, { orgId, label, slotId: body.slotId ? String(body.slotId).slice(0, 100) : null, eventId, who, source: 'kassa', lines, catalogId, orderMode });
   return json(await loadTabDetail(env, orgId, tabId), 201);
 }
 
@@ -567,6 +585,8 @@ export async function openTab(
     catalogId: string | null;
     // A self-order tab paid when the guest leaves (self-order.ts).
     payLater?: boolean;
+    // The event's ordering mode it comes in by.
+    orderMode?: { id: string; name: string } | null;
   }
 ): Promise<string> {
   const { orgId, eventId, who } = o;
@@ -594,9 +614,12 @@ export async function openTab(
   statements.push(
     env.DB.prepare(
       `INSERT INTO tabs (id, org_id, number, label, status, slot_id, event_id, opened_device_id, opened_device_name, opened_by_name, opened_by_email, opened_at,
-         event_number, source, order_token, pay_later)
-       SELECT ?, ?, value, ?, 'open', ?, ?, ?, ?, ?, ?, ?, (SELECT order_counter FROM events WHERE id = ?), ?, ?, ? FROM org_counters WHERE org_id = ? AND name = 'tab'`
-    ).bind(tabId, orgId, o.label, o.slotId, eventId, who.deviceId, who.deviceName, who.userName, who.userEmail, now, eventId, o.source, newOrderToken(), o.payLater ? 1 : 0, orgId)
+         event_number, source, order_token, pay_later, order_mode_id, order_mode_name)
+       SELECT ?, ?, value, ?, 'open', ?, ?, ?, ?, ?, ?, ?, (SELECT order_counter FROM events WHERE id = ?), ?, ?, ?, ?, ? FROM org_counters WHERE org_id = ? AND name = 'tab'`
+    ).bind(
+      tabId, orgId, o.label, o.slotId, eventId, who.deviceId, who.deviceName, who.userName, who.userEmail, now, eventId, o.source, newOrderToken(), o.payLater ? 1 : 0,
+      o.orderMode?.id ?? null, o.orderMode?.name ?? null, orgId
+    )
   );
 
   if (o.lines.length > 0) {

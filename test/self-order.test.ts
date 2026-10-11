@@ -40,21 +40,35 @@ const kassaTab = (org: TestOrg, v: Awaited<ReturnType<typeof venue>>, lines: { v
 const stationTickets = async (org: TestOrg, stationId: string, query = '') => (await api('GET', `/organizations/${org.orgId}/stations/${stationId}/tickets${query}`, { user: org.cashier })).body;
 const setStatus = (org: TestOrg, ticketId: string, status: string) => api('POST', `/organizations/${org.orgId}/tickets/${ticketId}`, { user: org.cashier, body: { status } });
 
+const modesPath = (org: TestOrg, v: Awaited<ReturnType<typeof venue>>, modeId = '') => `/organizations/${org.orgId}/events/${v.event.id}/modes${modeId ? `/${modeId}` : ''}`;
+
+// One ordering mode with the venue's menu, on the QR; self-ordering on.
 async function enableSelfOrder(org: TestOrg, v: Awaited<ReturnType<typeof venue>>) {
-  const res = await api('PATCH', `/organizations/${org.orgId}/events/${v.event.id}`, { user: org.admin, body: { catalogId: v.catalog.id, selfOrderEnabled: true } });
+  const mode = await api('POST', modesPath(org, v), { user: org.admin, body: { name: 'Ter plaatse', catalogId: v.catalog.id } });
+  expect(mode.status).toBe(201);
+  const res = await api('PATCH', `/organizations/${org.orgId}/events/${v.event.id}`, { user: org.admin, body: { selfOrderEnabled: true } });
   expect(res.status).toBe(200);
+  (v as any).modeId = res.body.modes[0].id;
   return res.body.selfOrder.code as string;
 }
 
+// The (first) mode's settings.
+const patchMode = (org: TestOrg, v: Awaited<ReturnType<typeof venue>>, body: unknown) => api('PATCH', modesPath(org, v, (v as any).modeId), { user: org.admin, body });
+
 describe('an event: its menu, self-ordering, its own numbers', () => {
-  it('self-ordering needs a menu; switching it on makes a code; a new code replaces it; admins only', async () => {
+  it('self-ordering needs a mode with a menu; switching it on makes a code; a new code replaces it; admins only', async () => {
     const org = await seedOrg();
     const v = await venue(org);
     const patch = (body: unknown, user = org.admin) => api('PATCH', `/organizations/${org.orgId}/events/${v.event.id}`, { user, body });
     expect((await patch({ selfOrderEnabled: true })).body.code).toBe('self_order_needs_menu');
-    expect((await patch({ catalogId: v.catalog.id, selfOrderEnabled: true }, org.cashier)).status).toBe(403);
-    const on = (await patch({ catalogId: v.catalog.id, selfOrderEnabled: true })).body;
-    expect(on).toMatchObject({ catalogId: v.catalog.id, selfOrder: { enabled: true } });
+    // A kassa-only mode isn't enough.
+    await api('POST', modesPath(org, v), { user: org.admin, body: { name: 'Alleen aan de kassa' } });
+    expect((await patch({ selfOrderEnabled: true })).body.code).toBe('self_order_needs_menu');
+    expect((await api('POST', modesPath(org, v), { user: org.cashier, body: { name: 'Ter plaatse', catalogId: v.catalog.id } })).status).toBe(403);
+    expect((await api('POST', modesPath(org, v), { user: org.admin, body: { name: 'Ter plaatse', catalogId: v.catalog.id } })).status).toBe(201);
+    expect((await patch({ selfOrderEnabled: true }, org.cashier)).status).toBe(403);
+    const on = (await patch({ selfOrderEnabled: true })).body;
+    expect(on).toMatchObject({ selfOrder: { enabled: true } });
     expect(on.selfOrder.code).toMatch(/^[A-Za-z0-9_-]{32}$/);
     // Off and on again: the same code (the printed QR keeps working).
     await patch({ selfOrderEnabled: false });
@@ -145,10 +159,10 @@ describe('self-ordering (public, no sign-in)', () => {
     const v = await venue(org);
     const code = await enableSelfOrder(org, v);
     const menu = (await call('GET', `/public/self-order/${code}`)).body;
-    expect(menu).toMatchObject({ eventName: 'Fuif', orgName: 'Test org', locale: 'nl', open: true });
-    expect(menu.catalog.sections[0].entries.map((e: any) => [e.name, e.priceCents])).toEqual([['Frieten', 400], ['Pils', 250], ['Bon', 100]]);
+    expect(menu).toMatchObject({ eventName: 'Fuif', orgName: 'Test org', locale: 'nl', open: true, modes: [{ id: (v as any).modeId, name: 'Ter plaatse' }] });
+    expect(menu.modes[0].catalog.sections[0].entries.map((e: any) => [e.name, e.priceCents])).toEqual([['Frieten', 400], ['Pils', 250], ['Bon', 100]]);
     await api('PATCH', `/organizations/${org.orgId}/events/${v.event.id}`, { user: org.admin, body: { selfOrderEnabled: false } });
-    expect((await call('GET', `/public/self-order/${code}`)).body).toMatchObject({ open: false, catalog: null });
+    expect((await call('GET', `/public/self-order/${code}`)).body).toMatchObject({ open: false, modes: [] });
     expect((await call('POST', `/public/self-order/${code}/orders`, { lines: [{ variantId: v.pils, quantity: 1 }] })).body.code).toBe('self_order_closed');
     expect((await call('GET', '/public/self-order/nope')).status).toBe(404);
   });
@@ -298,12 +312,13 @@ describe('self-ordering: how guests pay (per event)', () => {
     const org = await seedOrg();
     const v = await venue(org);
     const code = await enableSelfOrder(org, v);
-    const patch = (body: unknown) => api('PATCH', `/organizations/${org.orgId}/events/${v.event.id}`, { user: org.admin, body });
-    expect((await call('GET', `/public/self-order/${code}`)).body.payment).toEqual({ counter: true, bancontact: false, tab: false });
+    const patch = (body: unknown) => patchMode(org, v, body);
+    const payment = async () => (await call('GET', `/public/self-order/${code}`)).body.modes[0].payment;
+    expect(await payment()).toEqual({ counter: true, bancontact: false, tab: false });
     expect((await patch({ payBancontact: true })).body.code).toBe('bancontact_not_configured');
     await withBancontact(org);
-    expect((await patch({ payBancontact: true, payAtCounter: false })).body.selfOrder).toMatchObject({ payAtCounter: false, payBancontact: true });
-    expect((await call('GET', `/public/self-order/${code}`)).body.payment).toEqual({ counter: false, bancontact: true, tab: false });
+    expect((await patch({ payBancontact: true, payAtCounter: false })).body.modes[0]).toMatchObject({ payAtCounter: false, payBancontact: true });
+    expect(await payment()).toEqual({ counter: false, bancontact: true, tab: false });
     expect((await patch({ payBancontact: false })).body.code).toBe('self_order_needs_payment');
   });
 
@@ -313,7 +328,7 @@ describe('self-ordering: how guests pay (per event)', () => {
     const v = await venue(org);
     const code = await enableSelfOrder(org, v);
     await withBancontact(org);
-    await api('PATCH', `/organizations/${org.orgId}/events/${v.event.id}`, { user: org.admin, body: { payBancontact: true } });
+    await patchMode(org, v, { payBancontact: true });
     const placed = (await call('POST', `/public/self-order/${code}/orders`, { lines: [{ variantId: v.frieten, quantity: 1 }, { variantId: v.pils, quantity: 1 }] })).body;
 
     const pay = await call('POST', `/public/orders/${placed.token}/bancontact`);
@@ -343,7 +358,7 @@ describe('self-ordering: how guests pay (per event)', () => {
     await withBancontact(org);
     const placed = (await call('POST', `/public/self-order/${code}/orders`, { lines: [{ variantId: v.pils, quantity: 1 }] })).body;
     expect((await call('POST', `/public/orders/${placed.token}/bancontact`)).body.code).toBe('self_order_payment_unavailable');
-    await api('PATCH', `/organizations/${org.orgId}/events/${v.event.id}`, { user: org.admin, body: { payBancontact: true } });
+    await patchMode(org, v, { payBancontact: true });
     const kassa = (await kassaTab(org, v, [{ variantId: v.pils, quantity: 1 }])).body;
     const token = (await rows<{ order_token: string }>('SELECT order_token FROM tabs WHERE id = ?', kassa.id))[0].order_token;
     expect((await call('POST', `/public/orders/${token}/bancontact`)).body.code).toBe('self_order_payment_unavailable');
@@ -355,9 +370,9 @@ describe('self-ordering on a tab (pay when leaving)', () => {
     const org = await seedOrg();
     const v = await venue(org);
     const code = await enableSelfOrder(org, v);
-    const patch = await api('PATCH', `/organizations/${org.orgId}/events/${v.event.id}`, { user: org.admin, body: { tabs: true } });
-    expect(patch.body.selfOrder.tabs).toBe(true);
-    expect((await call('GET', `/public/self-order/${code}`)).body.payment).toEqual({ counter: true, bancontact: false, tab: true });
+    const patch = await patchMode(org, v, { tabs: true });
+    expect(patch.body.modes[0].tabs).toBe(true);
+    expect((await call('GET', `/public/self-order/${code}`)).body.modes[0].payment).toEqual({ counter: true, bancontact: false, tab: true });
 
     const placed = (await call('POST', `/public/self-order/${code}/orders`, { lines: [{ variantId: v.pils, quantity: 2 }] })).body;
     const follow = async () => (await call('GET', `/public/orders/${placed.token}`)).body;
@@ -391,5 +406,96 @@ describe('self-ordering on a tab (pay when leaving)', () => {
     const placed = (await call('POST', `/public/self-order/${code}/orders`, { lines: [{ variantId: v.pils, quantity: 1 }] })).body;
     expect((await call('POST', `/public/orders/${placed.token}/orders`, { lines: [{ variantId: v.pils, quantity: 1 }] })).body.code).toBe('self_order_closed');
     expect((await call('GET', `/public/orders/${placed.token}`)).body).toMatchObject({ payLater: false, tabOpen: false, state: 'awaiting_payment' });
+  });
+});
+
+describe('ordering modes (bestelwijzen)', () => {
+  it('1..n per event, free text, in order; with the QR only with a menu; removing the last QR mode switches self-ordering off', async () => {
+    const org = await seedOrg();
+    const v = await venue(org);
+    const code = await enableSelfOrder(org, v);
+    const add = (body: unknown) => api('POST', modesPath(org, v), { user: org.admin, body });
+    expect((await add({ name: '  ' })).body.code).toBe('order_mode_needs_name');
+    expect((await add({ name: 'Take away', selfOrder: true })).body.code).toBe('self_order_needs_menu');
+    const takeAway = (await add({ name: 'Take away', catalogId: v.catalog.id, tabs: false })).body.modes[1];
+    expect(takeAway).toMatchObject({ name: 'Take away', catalogId: v.catalog.id, selfOrder: true, kassa: true, payAtCounter: true, payBancontact: false, tabs: false });
+    const kassaOnly = (await add({ name: 'Alleen aan de kassa' })).body.modes[2];
+    expect(kassaOnly).toMatchObject({ selfOrder: false, kassa: true, catalogId: null });
+
+    // Guests choose from the QR modes, in their order.
+    expect((await call('GET', `/public/self-order/${code}`)).body.modes.map((m: any) => m.name)).toEqual(['Ter plaatse', 'Take away']);
+    const moved = (await api('PATCH', modesPath(org, v, takeAway.id), { user: org.admin, body: { move: 'up' } })).body;
+    expect(moved.modes.map((m: any) => m.name)).toEqual(['Take away', 'Ter plaatse', 'Alleen aan de kassa']);
+    expect((await call('GET', `/public/self-order/${code}`)).body.modes.map((m: any) => m.name)).toEqual(['Take away', 'Ter plaatse']);
+    // Listed with the events (the kassa reads them there).
+    const listed = (await api('GET', `/organizations/${org.orgId}/events`, { user: org.cashier })).body.find((e: any) => e.id === v.event.id);
+    expect(listed.modes.map((m: any) => m.name)).toEqual(['Take away', 'Ter plaatse', 'Alleen aan de kassa']);
+
+    // Another org can't touch them.
+    const other = await seedOrg();
+    expect((await api('PATCH', `/organizations/${other.orgId}/events/${v.event.id}/modes/${takeAway.id}`, { user: other.admin, body: { name: 'x' } })).body.code).toBe('order_mode_not_found');
+
+    await api('DELETE', modesPath(org, v, takeAway.id), { user: org.admin });
+    expect((await api('PATCH', modesPath(org, v, (v as any).modeId), { user: org.admin, body: { selfOrder: false } })).body).toMatchObject({ selfOrder: { enabled: false } });
+    expect((await call('GET', `/public/self-order/${code}`)).body.open).toBe(false);
+  });
+
+  it('a guest chooses a mode: its menu prices the order; the station shows it as information only', async () => {
+    const org = await seedOrg();
+    const v = await venue(org);
+    const code = await enableSelfOrder(org, v);
+    // Take away: its own menu with only Frieten, at another price.
+    const takeAwayMenu = await v.admin('POST', '/catalogs', { name: 'Take away' });
+    const section = await v.admin('POST', `/catalogs/${takeAwayMenu.id}/sections`, { name: 'Mee' });
+    await v.admin('POST', `/catalogs/${takeAwayMenu.id}/entries`, { sectionId: section.id, variantId: v.frieten, priceCents: 450 });
+    const takeAway = (await api('POST', modesPath(org, v), { user: org.admin, body: { name: 'Take away', catalogId: takeAwayMenu.id } })).body.modes[1];
+
+    const order = (body: unknown) => call('POST', `/public/self-order/${code}/orders`, body);
+    // Two modes: say which.
+    expect((await order({ lines: [{ variantId: v.frieten, quantity: 1 }] })).body.code).toBe('order_mode_required');
+    expect((await order({ modeId: 'nope', lines: [{ variantId: v.frieten, quantity: 1 }] })).body.code).toBe('unknown_order_mode');
+    // Not on the take-away menu.
+    expect((await order({ modeId: takeAway.id, lines: [{ variantId: v.pils, quantity: 1 }] })).body.code).toBe('product_not_on_catalog');
+    const placed = (await order({ modeId: takeAway.id, lines: [{ variantId: v.frieten, quantity: 2 }] })).body;
+    expect((await call('GET', `/public/orders/${placed.token}`)).body).toMatchObject({ totalCents: 900, modeId: takeAway.id, mode: 'Take away' });
+
+    // The kitchen makes it (the product's station), marked Take away.
+    const [ticket] = await stationTickets(org, v.kitchen.id);
+    expect(ticket).toMatchObject({ number: placed.number, mode: 'Take away' });
+    const tab = (await api('GET', tabsPath(org.orgId), { user: org.cashier })).body.find((t: any) => t.eventNumber === placed.number);
+    expect(tab).toMatchObject({ orderModeId: takeAway.id, orderMode: 'Take away' });
+
+    // With one mode: nothing to show.
+    await api('DELETE', modesPath(org, v, takeAway.id), { user: org.admin });
+    expect((await stationTickets(org, v.kitchen.id))[0].mode).toBeNull();
+  });
+
+  it('a round on a tab uses its own mode\'s menu', async () => {
+    const org = await seedOrg();
+    const v = await venue(org);
+    const code = await enableSelfOrder(org, v);
+    await patchMode(org, v, { tabs: true });
+    const placed = (await call('POST', `/public/self-order/${code}/orders`, { lines: [{ variantId: v.pils, quantity: 1 }] })).body;
+    expect((await call('POST', `/public/orders/${placed.token}/orders`, { lines: [{ variantId: v.pils, quantity: 1 }] })).status).toBe(201);
+    // Its mode no longer with the QR: no more rounds.
+    await patchMode(org, v, { selfOrder: false });
+    expect((await call('POST', `/public/orders/${placed.token}/orders`, { lines: [{ variantId: v.pils, quantity: 1 }] })).body.code).toBe('self_order_closed');
+  });
+
+  it('at the kassa: the only kassa mode by itself, else the one chosen; never a mode of another event or a QR-only one', async () => {
+    const org = await seedOrg();
+    const v = await venue(org);
+    const kassaOnly = (await api('POST', modesPath(org, v), { user: org.admin, body: { name: 'Alleen aan de kassa' } })).body.modes[0];
+    const qrOnly = (await api('POST', modesPath(org, v), { user: org.admin, body: { name: 'Take away', catalogId: v.catalog.id, kassa: false } })).body.modes[1];
+    // One kassa mode: by itself (and with two modes on the event, its name shows).
+    expect((await kassaTab(org, v, [{ variantId: v.pils, quantity: 1 }])).body).toMatchObject({ orderModeId: kassaOnly.id, orderMode: 'Alleen aan de kassa' });
+    const open = (orderModeId: string | null, eventId: string | null = v.event.id) =>
+      api('POST', tabsPath(org.orgId), { user: org.cashier, body: { ...DEVICE, eventId, orderModeId, catalogId: v.catalog.id, lines: [{ variantId: v.pils, quantity: 1 }] } });
+    expect((await open(qrOnly.id)).body.code).toBe('unknown_order_mode');
+    expect((await open(kassaOnly.id, null)).body.code).toBe('unknown_order_mode');
+    const terPlaatse = (await api('POST', modesPath(org, v), { user: org.admin, body: { name: 'Ter plaatse' } })).body.modes[2];
+    // Two kassa modes, none chosen: no mode.
+    expect((await open(null)).body.orderModeId).toBeNull();
+    expect((await open(terPlaatse.id)).body).toMatchObject({ orderModeId: terPlaatse.id, orderMode: 'Ter plaatse' });
   });
 });

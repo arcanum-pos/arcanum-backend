@@ -18,10 +18,33 @@ CREATE TABLE IF NOT EXISTS events (
   self_order_pay_bancontact INTEGER NOT NULL DEFAULT 0,
   -- Guests may keep ordering on their tab and pay when they leave (migration 0027).
   self_order_tabs INTEGER NOT NULL DEFAULT 0
+  -- Since migration 0028, catalog_id, self_order_pay_counter,
+  -- self_order_pay_bancontact and self_order_tabs are read no more: they're
+  -- per ordering mode (event_order_modes).
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_org ON events(org_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_events_self_order_code ON events(self_order_code);
+
+-- An event's ordering modes (bestelwijzen, migration 0028): "Ter plaatse",
+-- "Take away", "Alleen aan de kassa", … — each its own menu, where it's used
+-- (the event's QR and/or the kassa), how guests pay, ordering on a tab.
+-- Information on an order (a badge), never routing.
+CREATE TABLE IF NOT EXISTS event_order_modes (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES organizations(id),
+  event_id TEXT NOT NULL REFERENCES events(id),
+  name TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  catalog_id TEXT REFERENCES catalogs(id),
+  self_order INTEGER NOT NULL DEFAULT 0,
+  kassa INTEGER NOT NULL DEFAULT 1,
+  pay_counter INTEGER NOT NULL DEFAULT 1,
+  pay_bancontact INTEGER NOT NULL DEFAULT 0,
+  tabs INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_event_order_modes_event ON event_order_modes(event_id, position);
 
 CREATE TABLE IF NOT EXISTS transactions (
   id TEXT PRIMARY KEY,
@@ -320,7 +343,10 @@ CREATE TABLE IF NOT EXISTS tabs (
   order_token TEXT,
   -- A self-order tab paid when the guest leaves (migration 0027): never
   -- cancelled for being unpaid; its orders go to the stations unpaid.
-  pay_later INTEGER NOT NULL DEFAULT 0
+  pay_later INTEGER NOT NULL DEFAULT 0,
+  -- The ordering mode it came in by (migration 0028), its name a snapshot.
+  order_mode_id TEXT,
+  order_mode_name TEXT
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tabs_org_number ON tabs(org_id, number);
@@ -580,3 +606,4 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0024_device_pairing_link.sql
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0025_self_order.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0026_self_order_payment.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0027_self_order_tabs.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0028_order_modes.sql');

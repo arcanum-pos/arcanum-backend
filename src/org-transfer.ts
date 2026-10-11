@@ -102,15 +102,24 @@ export const EXPORT_TABLES: TableSpec[] = [
     remap: ['id', 'catalog_id'],
     orderBy: 'created_at, rowid',
   },
+  // After the events: an event's ordering modes, each naming its menu.
+  {
+    table: 'event_order_modes',
+    columns: ['id', 'event_id', 'name', 'position', 'catalog_id', 'self_order', 'kassa', 'pay_counter', 'pay_bancontact', 'tabs', 'created_at'],
+    excluded: ORG,
+    remap: ['id', 'event_id', 'catalog_id'],
+    orderBy: 'event_id, position, rowid',
+  },
   { table: 'org_counters', columns: ['name', 'value'], excluded: ORG, remap: [], orderBy: 'name' },
   {
     table: 'tabs',
     columns: [
       'id', 'number', 'label', 'status', 'slot_id', 'event_id', 'opened_device_id', 'opened_device_name', 'opened_by_name', 'opened_by_email',
       'opened_at', 'closed_at', 'receipt_number', 'cancel_reason', 'split_parts', 'split_paid', 'event_number', 'source', 'pay_later',
+      'order_mode_id', 'order_mode_name',
     ],
     excluded: { ...ORG, order_token: "a follow-your-order page of this installation" },
-    remap: ['id', 'event_id'],
+    remap: ['id', 'event_id', 'order_mode_id'],
     orderBy: 'number',
   },
   {

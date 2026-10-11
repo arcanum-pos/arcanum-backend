@@ -186,6 +186,7 @@ describe('import', () => {
       tab_id: 'tabs',
       order_id: 'orders',
       event_id: 'events',
+      order_mode_id: 'event_order_modes',
       voids_line_id: 'order_lines',
       charge_id: 'charges',
       line_id: 'order_lines',
