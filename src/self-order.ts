@@ -13,6 +13,8 @@
 //                                          devicehub's order hub
 //   POST /public/orders/:token/orders      { lines } — one more round on a tab paid when leaving
 //                                          (when its ordering mode lets guests order on a tab)
+//   POST /public/orders/:token/notify      { phone } — an SMS when a station's part is ready
+//   DELETE /public/orders/:token/notify      (when its ordering mode has SMS on — MESSAGING.md); no SMS after all
 //   POST /public/orders/:token/bancontact  pay it with Bancontact (when its ordering mode allows it):
 //                                          → { deeplinkUrl, checkoutUrl, qrCodeUrl } — the app opens,
 //                                          and sends the phone back to /volg/<token>
@@ -32,6 +34,7 @@ import { cancelExpiredSelfOrders, followState, MODE_LABEL_SQL, type TicketStatus
 import { addOrderToTab, openAmount, openTab, prepareOrderLines, prepareTabChargeFor } from './tabs';
 import { getDecryptedPaymentCredential } from './organizations/payment-credentials';
 import { startBancontactPayment } from './payments/bancontact';
+import { maskPhone, normalizePhone, smsConfig } from './messaging';
 
 const MAX_LINES = 30;
 const MAX_QUANTITY = 20;
@@ -171,6 +174,8 @@ interface FollowTab {
   mode_label: string | null;
   pay_counter: number | null;
   pay_bancontact: number | null;
+  notify_sms: number | null;
+  notify_phone: string | null;
   pay_later: number;
   org_name: string;
   org_locale: string | null;
@@ -180,7 +185,8 @@ async function follow(env: Env, token: string): Promise<Response> {
   if (!/^[A-Za-z0-9_-]{20,64}$/.test(token)) return errorJson('order_not_found', 404);
   const tab = await env.DB.prepare(
     `SELECT t.id, t.org_id, t.number, t.event_number, t.status, t.source, t.opened_at, t.pay_later, t.order_mode_id, ${MODE_LABEL_SQL('t')} AS mode_label,
-       e.name AS event_name, e.self_order_code, e.self_order_enabled, m.pay_counter, m.pay_bancontact, o.name AS org_name, o.locale AS org_locale
+       e.name AS event_name, e.self_order_code, e.self_order_enabled, m.pay_counter, m.pay_bancontact, m.notify_sms, t.notify_phone,
+       o.name AS org_name, o.locale AS org_locale
      FROM tabs t JOIN organizations o ON o.id = t.org_id LEFT JOIN events e ON e.id = t.event_id
        LEFT JOIN event_order_modes m ON m.id = t.order_mode_id WHERE t.order_token = ?`
   )
@@ -191,7 +197,7 @@ async function follow(env: Env, token: string): Promise<Response> {
 
   const [current, tickets, lines, charges] = await env.DB.batch([
     env.DB.prepare('SELECT status FROM tabs WHERE id = ?').bind(tab.id),
-    env.DB.prepare('SELECT station_name, status FROM prep_tickets WHERE tab_id = ? ORDER BY created_at, station_name').bind(tab.id),
+    env.DB.prepare('SELECT station_name, status, sms_status FROM prep_tickets WHERE tab_id = ? ORDER BY created_at, station_name').bind(tab.id),
     env.DB.prepare(
       `SELECT l.name, l.unit_price_cents, l.quantity + COALESCE((SELECT SUM(v.quantity) FROM order_lines v WHERE v.voids_line_id = l.id), 0) AS quantity
        FROM order_lines l WHERE l.tab_id = ? AND l.voids_line_id IS NULL ORDER BY l.created_at, l.rowid`
@@ -212,6 +218,13 @@ async function follow(env: Env, token: string): Promise<Response> {
   const tabOpen = payLater && status === 'open';
   const { state, stations } = followState(status, [...perStation].map(([station_name, s]) => ({ station_name, status: s })), payLater);
   const shown = ((lines.results || []) as { name: string; unit_price_cents: number; quantity: number }[]).filter((l) => l.quantity > 0);
+  // Per station, how its SMS went (any one sent counts; else a failure shows).
+  const smsByStation = new Map<string, string>();
+  for (const t of (tickets.results || []) as { station_name: string; sms_status: string | null }[]) {
+    if (!t.sms_status || smsByStation.get(t.station_name) === 'sent') continue;
+    smsByStation.set(t.station_name, t.sms_status === 'capped' ? 'failed' : t.sms_status);
+  }
+  const smsOn = !!tab.notify_sms && !!smsConfig(env);
 
   return json({
     number: tab.event_number ?? tab.number,
@@ -237,6 +250,15 @@ async function follow(env: Env, token: string): Promise<Response> {
       (state === 'awaiting_payment' || tabOpen) && tab.source === 'self_order'
         ? { ...(await paymentOptions(env, tab.org_id, tab)), pending: lastCharge?.status === 'pending', failed: lastCharge?.status === 'failed' }
         : null,
+    // An SMS when a station's part is ready: offered while there's
+    // something left to make ready; the number only ever shown masked.
+    sms: smsOn || smsByStation.size
+      ? {
+          available: smsOn && state !== 'cancelled' && (tabOpen || !(state === 'delivered' || state === 'nothing_to_prepare')),
+          phone: tab.notify_phone ? maskPhone(tab.notify_phone) : null,
+          stations: [...smsByStation].map(([name, status]) => ({ name, status })),
+        }
+      : null,
     // Back to step 1 of this event's self-order page once it's all delivered.
     selfOrderCode: tab.self_order_enabled ? tab.self_order_code : null,
     // Live updates: devicehub's order hub, this tab only (null: no live updates).
@@ -325,6 +347,30 @@ async function payBancontact(env: Env, token: string): Promise<Response> {
   return json({ deeplinkUrl: data.deeplinkUrl ?? null, checkoutUrl: data.checkoutUrl ?? null, qrCodeUrl: data.qrCodeUrl ?? null }, 201);
 }
 
+// A guest's number for "ready" SMS (or none after all): only when the
+// order's ordering mode has SMS on, the installation can send, and the
+// order isn't cancelled. Kept on the tab until no longer needed (messaging.ts).
+async function setNotifyPhone(request: Request, env: Env, token: string, remove: boolean): Promise<Response> {
+  if (!/^[A-Za-z0-9_-]{20,64}$/.test(token)) return errorJson('order_not_found', 404);
+  const tab = await env.DB.prepare(
+    `SELECT t.id, t.org_id, t.status, m.notify_sms FROM tabs t LEFT JOIN event_order_modes m ON m.id = t.order_mode_id WHERE t.order_token = ?`
+  )
+    .bind(token)
+    .first<{ id: string; org_id: string; status: string; notify_sms: number | null }>();
+  if (!tab) return errorJson('order_not_found', 404);
+  if (remove) {
+    await env.DB.prepare('UPDATE tabs SET notify_phone = NULL WHERE id = ?').bind(tab.id).run();
+    return json({ ok: true });
+  }
+  const config = smsConfig(env);
+  if (!config || !tab.notify_sms || tab.status === 'cancelled') return errorJson('sms_unavailable', 409);
+  const body = (await request.json().catch(() => ({}))) as { phone?: unknown };
+  const phone = normalizePhone(body.phone, config.countries);
+  if (!phone) return errorJson(codedError('invalid_phone', { countries: config.countries.join(', ') }), 400);
+  await env.DB.prepare('UPDATE tabs SET notify_phone = ? WHERE id = ?').bind(phone, tab.id).run();
+  return json({ ok: true, phone: maskPhone(phone) });
+}
+
 // Handles /public/*. Returns null for anything it doesn't recognize.
 export async function dispatchSelfOrderRoute(request: Request, env: Env, pathname: string): Promise<Response | null> {
   const menuMatch = pathname.match(/^\/public\/self-order\/([^/]+)$/);
@@ -335,6 +381,8 @@ export async function dispatchSelfOrderRoute(request: Request, env: Env, pathnam
   if (followMatch && request.method === 'GET') return follow(env, followMatch[1]);
   const roundMatch = pathname.match(/^\/public\/orders\/([^/]+)\/orders$/);
   if (roundMatch && request.method === 'POST') return addRound(request, env, roundMatch[1]);
+  const notifyMatch = pathname.match(/^\/public\/orders\/([^/]+)\/notify$/);
+  if (notifyMatch && (request.method === 'POST' || request.method === 'DELETE')) return setNotifyPhone(request, env, notifyMatch[1], request.method === 'DELETE');
   const payMatch = pathname.match(/^\/public\/orders\/([^/]+)\/bancontact$/);
   if (payMatch && request.method === 'POST') return payBancontact(env, payMatch[1]);
   return null;

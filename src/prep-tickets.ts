@@ -19,6 +19,7 @@ import { errorJson } from './errors';
 import { json } from './http';
 import { extractCaller, requireOrgRole } from './organizations/auth';
 import { notifyTabsChanged } from './devicehub-client';
+import { notifyTicketReady, sweepPhones } from './messaging';
 
 export const TICKET_STATUSES = ['ordered', 'in_progress', 'ready', 'delivered'] as const;
 export type TicketStatus = (typeof TICKET_STATUSES)[number];
@@ -54,7 +55,7 @@ export async function cancelExpiredSelfOrders(env: Env, orgId: string): Promise<
   const now = new Date();
   const cutoff = new Date(now.getTime() - SELF_ORDER_PAY_MINUTES * 60_000).toISOString();
   const { results } = await env.DB.prepare(
-    `UPDATE tabs SET status = 'cancelled', closed_at = ?, cancel_reason = 'Niet betaald binnen ${SELF_ORDER_PAY_MINUTES} minuten'
+    `UPDATE tabs SET status = 'cancelled', closed_at = ?, cancel_reason = 'Niet betaald binnen ${SELF_ORDER_PAY_MINUTES} minuten', notify_phone = NULL
      WHERE org_id = ? AND source = 'self_order' AND pay_later = 0 AND status = 'open' AND opened_at < ?
        AND NOT EXISTS (SELECT 1 FROM charges WHERE charges.tab_id = tabs.id AND charges.status IN ('pending', 'succeeded'))
      RETURNING id`
@@ -103,6 +104,7 @@ async function listStationTickets(request: Request, env: Env, orgId: string, sta
   const caller = await member(request, env, orgId);
   if (caller instanceof Response) return caller;
   await cancelExpiredSelfOrders(env, orgId);
+  await sweepPhones(env, orgId).run();
   const withDelivered = new URL(request.url).searchParams.get('delivered') === '1';
   const since = new Date(Date.now() - STATION_WINDOW_HOURS * 3600_000).toISOString();
 
@@ -170,6 +172,8 @@ async function setTicketStatus(request: Request, env: Env, orgId: string, ticket
     .first<{ id: string; tab_id: string; status: TicketStatus; updated_at: string }>();
   if (!row) return errorJson('ticket_not_found', 404);
   notifyTabsChanged(env, orgId, [row.tab_id]);
+  // Ready: the guest's SMS, if they left a number (messaging.ts).
+  if (row.status === 'ready') notifyTicketReady(env, orgId, row.id);
   return json({ id: row.id, status: row.status, updatedAt: row.updated_at });
 }
 

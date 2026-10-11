@@ -42,7 +42,9 @@ CREATE TABLE IF NOT EXISTS event_order_modes (
   pay_counter INTEGER NOT NULL DEFAULT 1,
   pay_bancontact INTEGER NOT NULL DEFAULT 0,
   tabs INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  -- An SMS when a station's part is ready (migration 0029, MESSAGING.md).
+  notify_sms INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_event_order_modes_event ON event_order_modes(event_id, position);
 
@@ -346,7 +348,9 @@ CREATE TABLE IF NOT EXISTS tabs (
   pay_later INTEGER NOT NULL DEFAULT 0,
   -- The ordering mode it came in by (migration 0028), its name a snapshot.
   order_mode_id TEXT,
-  order_mode_name TEXT
+  order_mode_name TEXT,
+  -- The guest's number for "ready" SMS (migration 0029), kept only while needed.
+  notify_phone TEXT
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tabs_org_number ON tabs(org_id, number);
@@ -554,10 +558,26 @@ CREATE TABLE IF NOT EXISTS prep_tickets (
   status TEXT NOT NULL CHECK (status IN ('ordered', 'in_progress', 'ready', 'delivered')),
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  updated_by TEXT
+  updated_by TEXT,
+  -- Its "ready" SMS (migration 0029): sending | sent | failed | capped.
+  sms_status TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_prep_tickets_station ON prep_tickets(org_id, station_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_prep_tickets_tab ON prep_tickets(tab_id);
+
+-- Every "ready" SMS attempt (migration 0029, MESSAGING.md): for the
+-- installation's daily maximum (rolling 24 hours) and to see what failed.
+-- No phone numbers.
+CREATE TABLE IF NOT EXISTS sms_log (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES organizations(id),
+  ticket_id TEXT,
+  status TEXT NOT NULL,
+  error TEXT,
+  provider_ref TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sms_log_created ON sms_log(created_at);
 
 -- Which station a station screen (device role 'station') shows (migration 0025).
 CREATE TABLE IF NOT EXISTS station_devices (
@@ -607,3 +627,4 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0025_self_order.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0026_self_order_payment.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0027_self_order_tabs.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0028_order_modes.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0029_sms.sql');

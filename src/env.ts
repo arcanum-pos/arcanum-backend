@@ -56,4 +56,9 @@ export interface Env {
   // set, every organisation's mail goes through it; without it, invites
   // aren't mailed (the console offers the invitation to copy).
   MAIL_CONFIG?: string;
+  // The installation's SMS account (MESSAGING.md), set by its installer
+  // (Geavanceerd → Sms): {"provider":"twilio","accountSid","apiKeySid"?,
+  // "authToken","sender","countries":["+32"],"dailyCap":300}. Without it,
+  // nobody is offered an SMS.
+  MESSAGING_CONFIG?: string;
 }
