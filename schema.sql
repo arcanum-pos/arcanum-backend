@@ -47,7 +47,9 @@ CREATE TABLE IF NOT EXISTS event_order_modes (
   tabs INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   -- An SMS when a station's part is ready (migration 0029, MESSAGING.md).
-  notify_sms INTEGER NOT NULL DEFAULT 0
+  notify_sms INTEGER NOT NULL DEFAULT 0,
+  -- Opening a tab asks a name and a mobile number or e-mail (migration 0031).
+  tab_contact INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_event_order_modes_event ON event_order_modes(event_id, position);
 
@@ -353,7 +355,10 @@ CREATE TABLE IF NOT EXISTS tabs (
   order_mode_id TEXT,
   order_mode_name TEXT,
   -- The guest's number for "ready" SMS (migration 0029), kept only while needed.
-  notify_phone TEXT
+  notify_phone TEXT,
+  -- Who's behind a guest's tab (migration 0031), kept only while it's open.
+  contact_phone TEXT,
+  contact_email TEXT
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tabs_org_number ON tabs(org_id, number);
@@ -632,3 +637,4 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0027_self_order_tabs.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0028_order_modes.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0029_sms.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0030_self_order_link.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0031_tab_contact.sql');

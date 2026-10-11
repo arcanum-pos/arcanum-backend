@@ -542,3 +542,42 @@ describe('the readable self-order link', () => {
     expect(listed.selfOrder.code).toMatch(/^fuif-[a-z2-9]{4}$/);
   });
 });
+
+describe('who is behind a guest\'s tab (per ordering mode)', () => {
+  it('asked when a tab opens: a name and a mobile number or e-mail; the name is the tab\'s; the kassa sees how to reach them, until it\'s paid', async () => {
+    const org = await seedOrg();
+    const v = await venue(org);
+    const code = await enableSelfOrder(org, v);
+    expect((await patchMode(org, v, { tabs: true, tabContact: true })).body.modes[0]).toMatchObject({ tabs: true, tabContact: true });
+    expect((await call('GET', `/public/self-order/${code}`)).body.modes[0].contact).toBe(true);
+
+    const order = (contact: unknown) => call('POST', `/public/self-order/${code}/orders`, { lines: [{ variantId: v.pils, quantity: 1 }], contact });
+    expect((await order(undefined)).body.code).toBe('tab_contact_name');
+    expect((await order({ name: 'Jan' })).body.code).toBe('tab_contact_reach');
+    expect((await order({ name: 'Jan', phone: '12' })).body.code).toBe('invalid_phone');
+    expect((await order({ name: 'Jan', email: 'jan@' })).body.code).toBe('invalid_email');
+    const placed = await order({ name: ' Jan Peeters ', phone: '0470 12 34 56', email: 'Jan@Example.be' });
+    expect(placed.status).toBe(201);
+
+    const tabs = (await api('GET', tabsPath(org.orgId), { user: org.cashier })).body;
+    const tab = tabs.find((t: any) => t.eventNumber === placed.body.number);
+    expect(tab).toMatchObject({ label: 'Jan Peeters', payLater: true });
+    const detail = (await api('GET', tabsPath(org.orgId, `/${tab.id}`), { user: org.cashier })).body;
+    expect(detail.contact).toEqual({ phone: '+32470123456', email: 'jan@example.be' });
+
+    // Paid when leaving: the contact goes.
+    await payCash(org, tab.id, 250);
+    await api('GET', tabsPath(org.orgId), { user: org.cashier });
+    expect(await rows('SELECT contact_phone, contact_email FROM tabs WHERE id = ?', tab.id)).toEqual([{ contact_phone: null, contact_email: null }]);
+    expect((await api('GET', tabsPath(org.orgId, `/${tab.id}`), { user: org.cashier })).body.contact).toBeNull();
+  });
+
+  it('not asked without the switch, nor for paying right away', async () => {
+    const org = await seedOrg();
+    const v = await venue(org);
+    const code = await enableSelfOrder(org, v);
+    await patchMode(org, v, { tabContact: true });
+    expect((await call('GET', `/public/self-order/${code}`)).body.modes[0].contact).toBe(false);
+    expect((await call('POST', `/public/self-order/${code}/orders`, { lines: [{ variantId: v.pils, quantity: 1 }] })).status).toBe(201);
+  });
+});

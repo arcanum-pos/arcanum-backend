@@ -106,7 +106,7 @@ export const EXPORT_TABLES: TableSpec[] = [
   // After the events: an event's ordering modes, each naming its menu.
   {
     table: 'event_order_modes',
-    columns: ['id', 'event_id', 'name', 'position', 'catalog_id', 'self_order', 'kassa', 'pay_counter', 'pay_bancontact', 'tabs', 'created_at', 'notify_sms'],
+    columns: ['id', 'event_id', 'name', 'position', 'catalog_id', 'self_order', 'kassa', 'pay_counter', 'pay_bancontact', 'tabs', 'created_at', 'notify_sms', 'tab_contact'],
     excluded: ORG,
     remap: ['id', 'event_id', 'catalog_id'],
     orderBy: 'event_id, position, rowid',
@@ -119,7 +119,10 @@ export const EXPORT_TABLES: TableSpec[] = [
       'opened_at', 'closed_at', 'receipt_number', 'cancel_reason', 'split_parts', 'split_paid', 'event_number', 'source', 'pay_later',
       'order_mode_id', 'order_mode_name',
     ],
-    excluded: { ...ORG, order_token: "a follow-your-order page of this installation", notify_phone: "a guest's number, kept only until their order is ready" },
+    excluded: { ...ORG, order_token: "a follow-your-order page of this installation", notify_phone: "a guest's number, kept only until their order is ready",
+      contact_phone: "a guest's contact, kept only while the tab is open",
+      contact_email: "a guest's contact, kept only while the tab is open",
+    },
     remap: ['id', 'event_id', 'order_mode_id'],
     orderBy: 'number',
   },

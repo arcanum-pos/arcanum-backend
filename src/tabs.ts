@@ -390,9 +390,11 @@ async function loadTabDetail(env: Env, orgId: string, tabId: string) {
       `SELECT cl.line_id, SUM(cl.quantity) AS quantity FROM charge_lines cl JOIN charges c ON c.id = cl.charge_id
        WHERE cl.tab_id = ? AND c.status = 'succeeded' GROUP BY cl.line_id`
     ).bind(tabId),
-    env.DB.prepare('SELECT order_token, EXISTS (SELECT 1 FROM prep_tickets WHERE tab_id = tabs.id) AS has_tickets FROM tabs WHERE id = ?').bind(tabId),
+    env.DB.prepare(
+      'SELECT order_token, contact_phone, contact_email, EXISTS (SELECT 1 FROM prep_tickets WHERE tab_id = tabs.id) AS has_tickets FROM tabs WHERE id = ?'
+    ).bind(tabId),
   ]);
-  const followRow = ((follow.results || [])[0] ?? null) as { order_token: string | null; has_tickets: number } | null;
+  const followRow = ((follow.results || [])[0] ?? null) as { order_token: string | null; contact_phone: string | null; contact_email: string | null; has_tickets: number } | null;
 
   const paid = new Map(((paidUnits.results || []) as { line_id: string; quantity: number }[]).map((r) => [r.line_id, r.quantity]));
   const lineRows = (lines.results || []) as LineRow[];
@@ -407,6 +409,8 @@ async function loadTabDetail(env: Env, orgId: string, tabId: string) {
     ...tab,
     // Something to prepare: where the customer follows it (the customer display's QR once paid).
     followUrl: followRow?.order_token && followRow.has_tickets ? `${env.PUBLIC_BASE_URL}/volg/${followRow.order_token}` : null,
+    // A guest's tab: how to reach them (its name is the label) — while it's open.
+    contact: followRow?.contact_phone || followRow?.contact_email ? { phone: followRow.contact_phone, email: followRow.contact_email } : null,
     orders: ((orders.results || []) as OrderRow[]).map((o) => ({
       id: o.id,
       source: o.source,
@@ -485,12 +489,21 @@ async function refusalResponse(env: Env, orgId: string, tabId: string): Promise<
   return errorJson('tab_changed', 409, { tab });
 }
 
+// A guest's contact details go once the tab is paid or cancelled (run
+// whenever a kassa lists tabs — no timer needed).
+export function sweepContacts(env: Env, orgId: string): D1PreparedStatement {
+  return env.DB.prepare(
+    `UPDATE tabs SET contact_phone = NULL, contact_email = NULL WHERE org_id = ? AND status <> 'open' AND (contact_phone IS NOT NULL OR contact_email IS NOT NULL)`
+  ).bind(orgId);
+}
+
 // GET /organizations/:orgId/tabs?status=open|closed|cancelled|all&since=<ISO>
 // status defaults to open (the kassa's tab strip). `since` is for "today's
 // bills": tabs opened or closed at/after it, plus any still open whenever
 // they were opened — newest opened first.
 async function listTabs(request: Request, env: Env, orgId: string): Promise<Response> {
   await cancelExpiredSelfOrders(env, orgId);
+  await sweepContacts(env, orgId).run();
   const params = new URL(request.url).searchParams;
   const status = params.get('status') || 'open';
   if (!['open', 'closed', 'cancelled', 'all'].includes(status)) return json({ error: 'status must be open, closed, cancelled or all' }, 400);

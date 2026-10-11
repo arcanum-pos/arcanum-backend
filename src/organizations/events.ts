@@ -11,7 +11,7 @@
 //   PATCH  /organizations/:org/events/:id                      admin  { name?, date?, selfOrderEnabled?,
 //                                                                       linkName? (the name in its readable link) }
 //   POST   /organizations/:org/events/:id/modes                admin  { name, catalogId?, selfOrder?, kassa?,
-//                                                                       payAtCounter?, payBancontact?, tabs?, notifySms? }
+//                                                                       payAtCounter?, payBancontact?, tabs?, tabContact?, notifySms? }
 //   PATCH  /organizations/:org/events/:id/modes/:mode          admin  { the same, all optional, move?: 'up' | 'down' }
 //   DELETE /organizations/:org/events/:id/modes/:mode          admin
 //   POST   /organizations/:org/events/:id/self-order-code      admin  a new code (the old URL/QR stops working)
@@ -52,6 +52,7 @@ export interface OrderModeRow {
   tabs: number;
   created_at: string;
   notify_sms: number;
+  tab_contact: number;
 }
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -70,6 +71,8 @@ function rowToMode(row: OrderModeRow) {
     payAtCounter: !!row.pay_counter,
     payBancontact: !!row.pay_bancontact,
     tabs: !!row.tabs,
+    // On a tab: opening it asks a name and a mobile number or e-mail.
+    tabContact: !!row.tab_contact,
     // An SMS to the guest when a station's part is ready (MESSAGING.md).
     notifySms: !!row.notify_sms,
   };
@@ -201,7 +204,7 @@ export async function updateEvent(request: Request, env: Env, orgId: string, eve
   return eventResponse(env, orgId, eventId);
 }
 
-type ModeBody = Partial<Record<'name' | 'catalogId' | 'selfOrder' | 'kassa' | 'payAtCounter' | 'payBancontact' | 'tabs' | 'notifySms' | 'move', unknown>>;
+type ModeBody = Partial<Record<'name' | 'catalogId' | 'selfOrder' | 'kassa' | 'payAtCounter' | 'payBancontact' | 'tabs' | 'tabContact' | 'notifySms' | 'move', unknown>>;
 
 // A mode's fields from a request body over what it was: a Response when refused.
 async function applyModeBody(env: Env, orgId: string, mode: OrderModeRow, body: ModeBody): Promise<OrderModeRow | Response> {
@@ -225,6 +228,7 @@ async function applyModeBody(env: Env, orgId: string, mode: OrderModeRow, body: 
   next.pay_bancontact = flag(body.payBancontact, next.pay_bancontact);
   next.tabs = flag(body.tabs, next.tabs);
   next.notify_sms = flag(body.notifySms, next.notify_sms);
+  next.tab_contact = flag(body.tabContact, next.tab_contact);
   if (body.notifySms === true && !smsConfig(env)) return errorJson('sms_not_configured', 400);
   // With the QR: a menu to order from (no menu: not with the QR).
   if (body.selfOrder === true && !next.catalog_id) return errorJson('self_order_needs_menu', 400);
@@ -265,15 +269,16 @@ export async function createOrderMode(request: Request, env: Env, orgId: string,
     tabs: 0,
     created_at: new Date().toISOString(),
     notify_sms: 0,
+    tab_contact: 0,
   };
   // With a menu, guests order with it by default.
   const mode = await applyModeBody(env, orgId, blank, { selfOrder: typeof body.catalogId === 'string', ...body, name: body.name ?? '' });
   if (mode instanceof Response) return mode;
   await env.DB.prepare(
-    `INSERT INTO event_order_modes (id, org_id, event_id, name, position, catalog_id, self_order, kassa, pay_counter, pay_bancontact, tabs, created_at, notify_sms)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO event_order_modes (id, org_id, event_id, name, position, catalog_id, self_order, kassa, pay_counter, pay_bancontact, tabs, created_at, notify_sms, tab_contact)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
-    .bind(mode.id, orgId, eventId, mode.name, mode.position, mode.catalog_id, mode.self_order, mode.kassa, mode.pay_counter, mode.pay_bancontact, mode.tabs, mode.created_at, mode.notify_sms)
+    .bind(mode.id, orgId, eventId, mode.name, mode.position, mode.catalog_id, mode.self_order, mode.kassa, mode.pay_counter, mode.pay_bancontact, mode.tabs, mode.created_at, mode.notify_sms, mode.tab_contact)
     .run();
   return eventResponse(env, orgId, eventId, 201);
 }
@@ -290,8 +295,8 @@ export async function updateOrderMode(request: Request, env: Env, orgId: string,
 
   const statements = [
     env.DB.prepare(
-      'UPDATE event_order_modes SET name = ?, catalog_id = ?, self_order = ?, kassa = ?, pay_counter = ?, pay_bancontact = ?, tabs = ?, notify_sms = ? WHERE id = ?'
-    ).bind(mode.name, mode.catalog_id, mode.self_order, mode.kassa, mode.pay_counter, mode.pay_bancontact, mode.tabs, mode.notify_sms, modeId),
+      'UPDATE event_order_modes SET name = ?, catalog_id = ?, self_order = ?, kassa = ?, pay_counter = ?, pay_bancontact = ?, tabs = ?, notify_sms = ?, tab_contact = ? WHERE id = ?'
+    ).bind(mode.name, mode.catalog_id, mode.self_order, mode.kassa, mode.pay_counter, mode.pay_bancontact, mode.tabs, mode.notify_sms, mode.tab_contact, modeId),
   ];
   // Up or down a place: swapped with its neighbour (the order guests choose from).
   const other = body.move === 'up' ? modes[index - 1] : body.move === 'down' ? modes[index + 1] : undefined;

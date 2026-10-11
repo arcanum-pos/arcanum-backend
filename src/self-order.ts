@@ -5,7 +5,8 @@
 //
 //   GET  /public/self-order/:code          the event's ordering modes guests can use (each its menu —
 //                                          what a kassa could sell from it — and how to pay), or closed
-//   POST /public/self-order/:code/orders   { modeId?, lines: [{ variantId, quantity, note? }] }
+//   POST /public/self-order/:code/orders   { modeId?, lines: [{ variantId, quantity, note? }],
+//                                            contact?: { name, phone?, email? } (a tab whose mode asks it) }
 //                                          → 201 { token, number }: a new tab (source self_order);
 //                                          modeId may be left out when there's only one mode
 //   GET  /public/orders/:token             a "follow your order" page: number, lines, state
@@ -26,7 +27,7 @@
 // screens only show paid orders by default. No per-IP limit: a venue's
 // Wi-Fi or a mobile network puts many guests behind one address.
 import type { Env } from './env';
-import { codedError, errorBody, errorJson } from './errors';
+import { codedError, errorBody, errorJson, type CodedError } from './errors';
 import { json } from './http';
 import { sellableCatalog } from './catalog';
 import { orderHubTicket } from './devicehub-client';
@@ -58,6 +59,8 @@ interface SelfOrderMode {
   pay_counter: number;
   pay_bancontact: number;
   tabs: number;
+  tab_contact: number;
+  notify_sms: number;
 }
 
 // How guests may pay in an ordering mode: at the counter, and/or with
@@ -82,7 +85,7 @@ async function eventByCode(env: Env, code: string): Promise<SelfOrderEvent | nul
 // The event's modes guests can order with, in the order they choose from.
 async function selfOrderModes(env: Env, eventId: string): Promise<SelfOrderMode[]> {
   const { results } = await env.DB.prepare(
-    `SELECT id, name, catalog_id, pay_counter, pay_bancontact, tabs FROM event_order_modes
+    `SELECT id, name, catalog_id, pay_counter, pay_bancontact, tabs, tab_contact, notify_sms FROM event_order_modes
      WHERE event_id = ? AND self_order = 1 AND catalog_id IS NOT NULL ORDER BY position, created_at`
   )
     .bind(eventId)
@@ -111,6 +114,8 @@ async function menu(env: Env, code: string): Promise<Response> {
       name: mode.name,
       // tab: guests keep ordering on their tab and pay when they leave.
       payment: { counter: !!mode.pay_counter || !payBancontact, bancontact: payBancontact, tab: !!mode.tabs },
+      // On a tab: a name and a mobile number or e-mail asked when it opens.
+      contact: !!mode.tabs && !!mode.tab_contact,
       catalog: {
         id: catalog.id,
         sections: catalog.sections.map((s) => ({ id: s.id, name: s.name, entries: s.entries.map((e) => ({ variantId: e.variantId, name: e.name, priceCents: e.priceCents })) })),
@@ -126,12 +131,14 @@ async function placeOrder(request: Request, env: Env, code: string): Promise<Res
   if (!event || !event.self_order_enabled) return errorJson('self_order_closed', 409);
   const modes = await selfOrderModes(env, event.id);
   if (!modes.length) return errorJson('self_order_closed', 409);
-  const body = (await request.json().catch(() => ({}))) as { modeId?: unknown; lines?: unknown };
+  const body = (await request.json().catch(() => ({}))) as { modeId?: unknown; lines?: unknown; contact?: unknown };
   // Which mode: the one asked for; left out, the only one there is.
   const mode = body.modeId === undefined || body.modeId === null ? (modes.length === 1 ? modes[0] : null) : modes.find((m) => m.id === body.modeId);
   if (!mode) return errorJson(body.modeId === undefined || body.modeId === null ? 'order_mode_required' : 'unknown_order_mode', 400);
   const raw = Array.isArray(body.lines) ? body.lines : [];
   if (raw.length > MAX_LINES || raw.some((l) => Number((l as { quantity?: unknown })?.quantity) > MAX_QUANTITY)) return errorJson('self_order_too_large', 400);
+  const contact = mode.tabs && mode.tab_contact ? readContact(env, body.contact) : null;
+  if (contact && 'code' in contact) return errorJson(contact, 400);
 
   await cancelExpiredSelfOrders(env, event.org_id);
   // Tabs paid when leaving are unpaid on purpose: not counted.
@@ -146,7 +153,8 @@ async function placeOrder(request: Request, env: Env, code: string): Promise<Res
 
   const tabId = await openTab(env, {
     orgId: event.org_id,
-    label: '',
+    // Its guest's name, when the mode asks it: what the kassa calls the tab.
+    label: contact?.name ?? '',
     slotId: null,
     eventId: event.id,
     who: { deviceId: null, deviceName: null, userName: null, userEmail: null },
@@ -156,8 +164,33 @@ async function placeOrder(request: Request, env: Env, code: string): Promise<Res
     payLater: !!mode.tabs,
     orderMode: { id: mode.id, name: mode.name },
   });
+  if (contact) {
+    // Not verified; kept only while the tab is open (tabs.ts sweepContacts).
+    // A number given here also gets the "ready" SMS, when the mode sends them.
+    const sms = contact.phone && mode.notify_sms && smsConfig(env) ? contact.phone : null;
+    await env.DB.prepare('UPDATE tabs SET contact_phone = ?, contact_email = ?, notify_phone = COALESCE(?, notify_phone) WHERE id = ?')
+      .bind(contact.phone, contact.email, sms, tabId)
+      .run();
+  }
   const tab = await env.DB.prepare('SELECT order_token, event_number FROM tabs WHERE id = ?').bind(tabId).first<{ order_token: string; event_number: number }>();
   return json({ token: tab!.order_token, number: tab!.event_number }, 201);
+}
+
+// Who's behind a tab (an ordering mode that asks it): a name, and a mobile
+// number or e-mail — at least one. Not verified (no codes to send, no cost):
+// enough to find the guest back if the tab is left unpaid.
+function readContact(env: Env, raw: unknown): { name: string; phone: string | null; email: string | null } | CodedError {
+  const c = (raw && typeof raw === 'object' ? raw : {}) as { name?: unknown; phone?: unknown; email?: unknown };
+  const name = typeof c.name === 'string' ? c.name.trim().slice(0, 40) : '';
+  if (!name) return codedError('tab_contact_name');
+  const phoneText = typeof c.phone === 'string' ? c.phone.trim() : '';
+  const emailText = typeof c.email === 'string' ? c.email.trim().toLowerCase() : '';
+  if (!phoneText && !emailText) return codedError('tab_contact_reach');
+  const countries = smsConfig(env)?.countries ?? ['+32'];
+  const phone = phoneText ? normalizePhone(phoneText, countries) : null;
+  if (phoneText && !phone) return codedError('invalid_phone', { countries: countries.join(', ') });
+  if (emailText && (emailText.length > 200 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailText))) return codedError('invalid_email');
+  return { name, phone, email: emailText || null };
 }
 
 interface FollowTab {

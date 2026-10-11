@@ -221,3 +221,14 @@ describe('phone numbers', () => {
     expect(normalizePhone(undefined, ['+32'])).toBeNull();
   });
 });
+
+describe('a tab\'s contact number and the SMS', () => {
+  it('the number given when opening a tab also gets the "ready" SMS, when the mode sends them', async () => {
+    const env = withSms();
+    const org = await seedOrg();
+    const v = await venue(org, env);
+    await v.admin('PATCH', `/events/${v.event.id}/modes/${v.modeId}`, { notifySms: true, tabs: true, tabContact: true });
+    const placed = (await pub(env, 'POST', `/self-order/${v.code}/orders`, { lines: [{ variantId: v.pils, quantity: 1 }], contact: { name: 'Jan', phone: '0470123456' } })).body;
+    expect((await pub(env, 'GET', `/orders/${placed.token}`)).body.sms).toMatchObject({ available: true, phone: '••• 56' });
+  });
+});
