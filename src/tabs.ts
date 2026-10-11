@@ -537,7 +537,8 @@ async function listTabs(request: Request, env: Env, orgId: string): Promise<Resp
 // Optional `eventId` tags the tab (and so every sale paid on it) with one
 // of this org's events — a reporting tag only (DOMAIN_MODEL.md decision 1),
 // set once when the tab opens. `orderModeId`: one of that event's ordering
-// modes used at the kassa — left out, the only one there is (if so).
+// modes, when the event lets the kassa pick one (kassa_modes) — left out,
+// the only one there is (if so).
 async function createTab(request: Request, env: Env, orgId: string): Promise<Response> {
   const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
   const label = typeof body.label === 'string' ? body.label.trim().slice(0, 60) : '';
@@ -552,7 +553,11 @@ async function createTab(request: Request, env: Env, orgId: string): Promise<Res
 
   let orderMode: { id: string; name: string } | null = null;
   if (eventId) {
-    const { results: modes } = await env.DB.prepare('SELECT id, name FROM event_order_modes WHERE event_id = ? AND kassa = 1').bind(eventId).all<{ id: string; name: string }>();
+    const { results: modes } = await env.DB.prepare(
+      'SELECT m.id, m.name FROM event_order_modes m JOIN events e ON e.id = m.event_id WHERE m.event_id = ? AND e.kassa_modes = 1'
+    )
+      .bind(eventId)
+      .all<{ id: string; name: string }>();
     if (body.orderModeId !== undefined && body.orderModeId !== null) {
       orderMode = (modes || []).find((m) => m.id === body.orderModeId) ?? null;
       if (!orderMode) return errorJson('unknown_order_mode', 400);

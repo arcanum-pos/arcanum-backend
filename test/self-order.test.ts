@@ -419,9 +419,10 @@ describe('ordering modes (bestelwijzen)', () => {
     expect((await add({ name: '  ' })).body.code).toBe('order_mode_needs_name');
     expect((await add({ name: 'Take away', selfOrder: true })).body.code).toBe('self_order_needs_menu');
     const takeAway = (await add({ name: 'Take away', catalogId: v.catalog.id, tabs: false })).body.modes[1];
-    expect(takeAway).toMatchObject({ name: 'Take away', catalogId: v.catalog.id, selfOrder: true, kassa: true, payAtCounter: true, payBancontact: false, tabs: false });
+    expect(takeAway).toMatchObject({ name: 'Take away', catalogId: v.catalog.id, selfOrder: true, payAtCounter: true, payBancontact: false, tabs: false });
     const kassaOnly = (await add({ name: 'Alleen aan de kassa' })).body.modes[2];
-    expect(kassaOnly).toMatchObject({ selfOrder: false, kassa: true, catalogId: null });
+    expect(kassaOnly).toMatchObject({ selfOrder: false, catalogId: null });
+    expect(kassaOnly.kassa).toBeUndefined();
 
     // Guests choose from the QR modes, in their order.
     expect((await call('GET', `/public/self-order/${code}`)).body.modes.map((m: any) => m.name)).toEqual(['Ter plaatse', 'Take away']);
@@ -483,21 +484,26 @@ describe('ordering modes (bestelwijzen)', () => {
     expect((await call('POST', `/public/orders/${placed.token}/orders`, { lines: [{ variantId: v.pils, quantity: 1 }] })).body.code).toBe('self_order_closed');
   });
 
-  it('at the kassa: the only kassa mode by itself, else the one chosen; never a mode of another event or a QR-only one', async () => {
+  it('at the kassa: only when the event says so (off by default) — then the only mode by itself, else the one chosen; never another event\'s', async () => {
     const org = await seedOrg();
     const v = await venue(org);
     const kassaOnly = (await api('POST', modesPath(org, v), { user: org.admin, body: { name: 'Alleen aan de kassa' } })).body.modes[0];
-    const qrOnly = (await api('POST', modesPath(org, v), { user: org.admin, body: { name: 'Take away', catalogId: v.catalog.id, kassa: false } })).body.modes[1];
-    // One kassa mode: by itself (and with two modes on the event, its name shows).
-    expect((await kassaTab(org, v, [{ variantId: v.pils, quantity: 1 }])).body).toMatchObject({ orderModeId: kassaOnly.id, orderMode: 'Alleen aan de kassa' });
     const open = (orderModeId: string | null, eventId: string | null = v.event.id) =>
       api('POST', tabsPath(org.orgId), { user: org.cashier, body: { ...DEVICE, eventId, orderModeId, catalogId: v.catalog.id, lines: [{ variantId: v.pils, quantity: 1 }] } });
-    expect((await open(qrOnly.id)).body.code).toBe('unknown_order_mode');
-    expect((await open(kassaOnly.id, null)).body.code).toBe('unknown_order_mode');
-    const terPlaatse = (await api('POST', modesPath(org, v), { user: org.admin, body: { name: 'Ter plaatse' } })).body.modes[2];
-    // Two kassa modes, none chosen: no mode.
+    // Off (the default): the kassa labels nothing, and can't.
+    expect((await api('GET', `/organizations/${org.orgId}/events`, { user: org.cashier })).body.find((e: any) => e.id === v.event.id).kassaModes).toBe(false);
     expect((await open(null)).body.orderModeId).toBeNull();
-    expect((await open(terPlaatse.id)).body).toMatchObject({ orderModeId: terPlaatse.id, orderMode: 'Ter plaatse' });
+    expect((await open(kassaOnly.id)).body.code).toBe('unknown_order_mode');
+
+    // On: one mode — by itself.
+    const on = await api('PATCH', `/organizations/${org.orgId}/events/${v.event.id}`, { user: org.admin, body: { kassaModes: true } });
+    expect(on.body.kassaModes).toBe(true);
+    expect((await open(null)).body).toMatchObject({ orderModeId: kassaOnly.id, orderMode: null });
+    expect((await open(kassaOnly.id, null)).body.code).toBe('unknown_order_mode');
+    // Two: the one chosen (its name shows), none chosen = none.
+    const takeAway = (await api('POST', modesPath(org, v), { user: org.admin, body: { name: 'Take away', catalogId: v.catalog.id } })).body.modes[1];
+    expect((await open(null)).body.orderModeId).toBeNull();
+    expect((await open(takeAway.id)).body).toMatchObject({ orderModeId: takeAway.id, orderMode: 'Take away' });
   });
 });
 

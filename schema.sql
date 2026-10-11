@@ -22,7 +22,9 @@ CREATE TABLE IF NOT EXISTS events (
   -- self_order_pay_bancontact and self_order_tabs are read no more: they're
   -- per ordering mode (event_order_modes).
   -- The readable self-order link, <name>-<4 characters> (migration 0030).
-  self_order_slug TEXT
+  self_order_slug TEXT,
+  -- The kassa labels new orders with one of the ordering modes (migration 0032).
+  kassa_modes INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_org ON events(org_id);
@@ -41,6 +43,7 @@ CREATE TABLE IF NOT EXISTS event_order_modes (
   position INTEGER NOT NULL,
   catalog_id TEXT REFERENCES catalogs(id),
   self_order INTEGER NOT NULL DEFAULT 0,
+  -- Read no more since migration 0032 (one switch per event: events.kassa_modes).
   kassa INTEGER NOT NULL DEFAULT 1,
   pay_counter INTEGER NOT NULL DEFAULT 1,
   pay_bancontact INTEGER NOT NULL DEFAULT 0,
@@ -638,3 +641,4 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0028_order_modes.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0029_sms.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0030_self_order_link.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0031_tab_contact.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0032_kassa_modes.sql');

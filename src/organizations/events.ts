@@ -3,14 +3,16 @@
 // screens") an event's own short order numbers, its self-ordering (on/off,
 // the code in its public URL/QR, /bestel/<code>) and its ordering modes
 // (bestelwijzen: "Ter plaatse", "Take away", "Alleen aan de kassa", …), each
-// with its own menu, where it's used (the QR and/or the kassa), how guests
-// pay and whether they order on a tab.
+// with its own menu, whether guests order with it by QR, how they pay and
+// whether they order on a tab — and whether the kassa labels its orders with
+// one (kassaModes, off by default: one switch for the event).
 //
 //   GET    /organizations/:org/events                          member
 //   POST   /organizations/:org/events { name, date }           admin
 //   PATCH  /organizations/:org/events/:id                      admin  { name?, date?, selfOrderEnabled?,
-//                                                                       linkName? (the name in its readable link) }
-//   POST   /organizations/:org/events/:id/modes                admin  { name, catalogId?, selfOrder?, kassa?,
+//                                                                       linkName? (the name in its readable link),
+//                                                                       kassaModes? (the kassa picks an ordering mode) }
+//   POST   /organizations/:org/events/:id/modes                admin  { name, catalogId?, selfOrder?,
 //                                                                       payAtCounter?, payBancontact?, tabs?, tabContact?, notifySms? }
 //   PATCH  /organizations/:org/events/:id/modes/:mode          admin  { the same, all optional, move?: 'up' | 'down' }
 //   DELETE /organizations/:org/events/:id/modes/:mode          admin
@@ -36,6 +38,7 @@ export interface EventRow {
   self_order_code: string | null;
   order_counter: number;
   self_order_slug: string | null;
+  kassa_modes: number;
 }
 
 export interface OrderModeRow {
@@ -63,9 +66,8 @@ function rowToMode(row: OrderModeRow) {
     id: row.id,
     name: row.name,
     catalogId: row.catalog_id,
-    // Where it's used: with the event's QR code (guests order themselves), at the kassa.
+    // Guests order with it themselves, with the event's QR code.
     selfOrder: !!row.self_order,
-    kassa: !!row.kassa,
     // With the QR: how guests pay — at the counter, and/or with Bancontact on their phone —
     // and whether they keep ordering on their tab, paying when they leave.
     payAtCounter: !!row.pay_counter,
@@ -88,6 +90,8 @@ function rowToEvent(env: Env, row: EventRow, modes: OrderModeRow[]) {
     // characters>); linkName: its name part. The long code of before keeps working.
     selfOrder: { enabled: !!row.self_order_enabled, code: row.self_order_slug ?? row.self_order_code, linkName: row.self_order_slug ? row.self_order_slug.replace(/-[a-z0-9]{4}$/, '') : null },
     modes: modes.filter((m) => m.event_id === row.id).map(rowToMode),
+    // The kassa shows the ordering modes and labels a new order with the one chosen.
+    kassaModes: !!row.kassa_modes,
     // Whether this installation sends SMS (the installer's Geavanceerd → Sms).
     sms: !!smsConfig(env),
     // The last number given out (0: the next order is #1).
@@ -178,7 +182,7 @@ export async function updateEvent(request: Request, env: Env, orgId: string, eve
   if (refused) return refused;
   const event = await loadEvent(env, orgId, eventId);
   if (!event) return errorJson('event_not_found', 404);
-  const body = (await request.json().catch(() => ({}))) as { name?: unknown; date?: unknown; selfOrderEnabled?: unknown; linkName?: unknown };
+  const body = (await request.json().catch(() => ({}))) as { name?: unknown; date?: unknown; selfOrderEnabled?: unknown; linkName?: unknown; kassaModes?: unknown };
 
   let { name, event_date: date, self_order_enabled: enabled, self_order_code: code } = event;
   if (body.name !== undefined) {
@@ -196,15 +200,16 @@ export async function updateEvent(request: Request, env: Env, orgId: string, eve
 
   if (body.linkName !== undefined && (typeof body.linkName !== 'string' || !body.linkName.trim())) return errorJson('self_order_link_name', 400);
 
-  await env.DB.prepare('UPDATE events SET name = ?, event_date = ?, self_order_enabled = ?, self_order_code = ? WHERE id = ?')
-    .bind(name, date, enabled, code, eventId)
+  const kassaModes = body.kassaModes === undefined ? event.kassa_modes : body.kassaModes === true ? 1 : 0;
+  await env.DB.prepare('UPDATE events SET name = ?, event_date = ?, self_order_enabled = ?, self_order_code = ?, kassa_modes = ? WHERE id = ?')
+    .bind(name, date, enabled, code, kassaModes, eventId)
     .run();
   // Another name in the readable link (a fresh suffix: the old readable link stops working).
   if (typeof body.linkName === 'string') await setSlug(env, eventId, linkNameOf(body.linkName));
   return eventResponse(env, orgId, eventId);
 }
 
-type ModeBody = Partial<Record<'name' | 'catalogId' | 'selfOrder' | 'kassa' | 'payAtCounter' | 'payBancontact' | 'tabs' | 'tabContact' | 'notifySms' | 'move', unknown>>;
+type ModeBody = Partial<Record<'name' | 'catalogId' | 'selfOrder' | 'payAtCounter' | 'payBancontact' | 'tabs' | 'tabContact' | 'notifySms' | 'move', unknown>>;
 
 // A mode's fields from a request body over what it was: a Response when refused.
 async function applyModeBody(env: Env, orgId: string, mode: OrderModeRow, body: ModeBody): Promise<OrderModeRow | Response> {
@@ -223,7 +228,6 @@ async function applyModeBody(env: Env, orgId: string, mode: OrderModeRow, body: 
   }
   const flag = (value: unknown, current: number) => (value === undefined ? current : value === true ? 1 : 0);
   next.self_order = flag(body.selfOrder, next.self_order);
-  next.kassa = flag(body.kassa, next.kassa);
   next.pay_counter = flag(body.payAtCounter, next.pay_counter);
   next.pay_bancontact = flag(body.payBancontact, next.pay_bancontact);
   next.tabs = flag(body.tabs, next.tabs);
