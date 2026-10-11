@@ -244,6 +244,9 @@ describe('self-ordering (public, no sign-in)', () => {
     const token = (await rows<{ order_token: string }>('SELECT order_token FROM tabs WHERE id = ?', prepared.id))[0].order_token;
     expect(await customerOrder(env as any, org.orgId, prepared.id)).toMatchObject({ eventNumber: 1, followUrl: `https://arcanum.test/volg/${token}` });
     expect((await customerOrder(env as any, org.orgId, nothing.id))!.followUrl).toBeNull();
+    // The kassa's tab detail carries it too (a customer display on the same device).
+    expect((await api('GET', tabsPath(org.orgId, `/${prepared.id}`), { user: org.cashier })).body.followUrl).toBe(`https://arcanum.test/volg/${token}`);
+    expect((await api('GET', tabsPath(org.orgId, `/${nothing.id}`), { user: org.cashier })).body.followUrl).toBeNull();
   });
 });
 

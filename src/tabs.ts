@@ -369,7 +369,7 @@ async function loadTabDetail(env: Env, orgId: string, tabId: string) {
   const tab = await loadTabSummary(env, orgId, tabId);
   if (!tab) return null;
 
-  const [orders, lines, charges, paidUnits] = await env.DB.batch([
+  const [orders, lines, charges, paidUnits, follow] = await env.DB.batch([
     env.DB.prepare('SELECT id, source, device_id, device_name, user_name, user_email, submitted_at FROM orders WHERE tab_id = ? ORDER BY submitted_at').bind(tabId),
     env.DB.prepare('SELECT * FROM order_lines WHERE tab_id = ? ORDER BY created_at, rowid').bind(tabId),
     env.DB.prepare(
@@ -379,7 +379,9 @@ async function loadTabDetail(env: Env, orgId: string, tabId: string) {
       `SELECT cl.line_id, SUM(cl.quantity) AS quantity FROM charge_lines cl JOIN charges c ON c.id = cl.charge_id
        WHERE cl.tab_id = ? AND c.status = 'succeeded' GROUP BY cl.line_id`
     ).bind(tabId),
+    env.DB.prepare('SELECT order_token, EXISTS (SELECT 1 FROM prep_tickets WHERE tab_id = tabs.id) AS has_tickets FROM tabs WHERE id = ?').bind(tabId),
   ]);
+  const followRow = ((follow.results || [])[0] ?? null) as { order_token: string | null; has_tickets: number } | null;
 
   const paid = new Map(((paidUnits.results || []) as { line_id: string; quantity: number }[]).map((r) => [r.line_id, r.quantity]));
   const lineRows = (lines.results || []) as LineRow[];
@@ -392,6 +394,8 @@ async function loadTabDetail(env: Env, orgId: string, tabId: string) {
 
   return {
     ...tab,
+    // Something to prepare: where the customer follows it (the customer display's QR once paid).
+    followUrl: followRow?.order_token && followRow.has_tickets ? `${env.PUBLIC_BASE_URL}/volg/${followRow.order_token}` : null,
     orders: ((orders.results || []) as OrderRow[]).map((o) => ({
       id: o.id,
       source: o.source,
