@@ -129,11 +129,11 @@ describe('which SumUp account a merchant code and key are', () => {
     const save = (body: Record<string, unknown>) => api('PUT', `/organizations/${org.orgId}/payment-credentials/sumup`, { user: org.admin, body: { merchantId: 'msandbox1', apiKey: 'sup_sk_test', ...body } });
     const first = await save({});
     expect(first.status).toBe(409);
-    expect(first.body).toMatchObject({ code: 'sumup_confirm_account', account: { merchantId: 'MSANDBOX1', name: 'Scouts Kabouterland' } });
+    expect(first.body).toMatchObject({ code: 'sumup_confirm_account', account: { merchantId: 'MSANDBOX1', name: 'Scouts Kabouterland', sandbox: null } });
     expect((await api('GET', `/organizations/${org.orgId}/payment-credentials`, { user: org.admin })).body).toEqual([]);
     expect((await save({ confirmMerchantId: 'MSANDBOX1' })).status).toBe(200);
     const listed = (await api('GET', `/organizations/${org.orgId}/payment-credentials`, { user: org.admin })).body;
-    expect(listed).toEqual([expect.objectContaining({ provider: 'sumup', account: { merchantId: 'MSANDBOX1', name: 'Scouts Kabouterland' } })]);
+    expect(listed).toEqual([expect.objectContaining({ provider: 'sumup', account: { merchantId: 'MSANDBOX1', name: 'Scouts Kabouterland', sandbox: null } })]);
     expect(JSON.stringify(listed)).not.toContain('sup_sk_test');
   });
 
@@ -144,6 +144,18 @@ describe('which SumUp account a merchant code and key are', () => {
     expect((await save({})).body).toMatchObject({ code: 'sumup_key_refused', detail: '403: Forbidden' });
     accountReply.readers = () => Response.json({ items: [] });
     accountReply.profile = () => Response.json({ detail: 'insufficient scope' }, { status: 403 });
-    expect((await save({})).body).toMatchObject({ code: 'sumup_confirm_account', account: { merchantId: 'MOTHER', name: null } });
+    expect((await save({})).body).toMatchObject({ code: 'sumup_confirm_account', account: { merchantId: 'MOTHER', name: null, sandbox: null } });
+  });
+
+  it("a sandbox merchant: SumUp's profile says so, kept with the account and listed", async () => {
+    const org = await seedOrg();
+    accountReply.profile = () => Response.json({ merchant_code: 'MSANDBOX1', business_profile: { name: 'Kabouterland Sandbox' }, sandbox: true });
+    const save = (body: Record<string, unknown>) => api('PUT', `/organizations/${org.orgId}/payment-credentials/sumup`, { user: org.admin, body: { merchantId: 'MSANDBOX1', apiKey: 'sup_sk_test', ...body } });
+    expect((await save({})).body).toMatchObject({ account: { merchantId: 'MSANDBOX1', name: 'Kabouterland Sandbox', sandbox: true } });
+    expect((await save({ confirmMerchantId: 'MSANDBOX1' })).status).toBe(200);
+    const listed = (await api('GET', `/organizations/${org.orgId}/payment-credentials`, { user: org.admin })).body;
+    expect(listed).toEqual([expect.objectContaining({ account: { merchantId: 'MSANDBOX1', name: 'Kabouterland Sandbox', sandbox: true } })]);
+    accountReply.profile = () => Response.json({ merchant_code: 'MREAL', business_profile: { name: 'Echt' }, sandbox: false });
+    expect((await api('PUT', `/organizations/${org.orgId}/payment-credentials/sumup`, { user: org.admin, body: { merchantId: 'MREAL', apiKey: 'k' } })).body).toMatchObject({ account: { sandbox: false } });
   });
 });

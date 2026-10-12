@@ -48,7 +48,7 @@ export async function listPaymentCredentials(request: Request, env: Env, orgId: 
   for (const item of out) {
     if (item.provider !== 'sumup') continue;
     const config = await getDecryptedPaymentCredential(env, orgId, 'sumup');
-    Object.assign(item, { account: config?.confirmedAt ? { merchantId: String(config.merchantId), name: (config.accountName as string) ?? null } : null });
+    Object.assign(item, { account: config?.confirmedAt ? { merchantId: String(config.merchantId), name: (config.accountName as string) ?? null, sandbox: typeof config.sandbox === 'boolean' ? config.sandbox : null } : null });
   }
   return json(out);
 }
@@ -85,8 +85,8 @@ export async function setPaymentCredential(request: Request, env: Env, orgId: st
     if (!merchantId || !apiKey) return json({ error: 'merchantId and apiKey are required' }, 400);
     const checked = await checkSumupAccount(merchantId, apiKey);
     if (!checked.ok) return errorJson('sumup_key_refused', 400, { detail: checked.detail });
-    if (config.confirmMerchantId !== merchantId) return errorJson('sumup_confirm_account', 409, { account: { merchantId, name: checked.account.name } });
-    config = { merchantId, apiKey, accountName: checked.account.name, confirmedAt: new Date().toISOString() };
+    if (config.confirmMerchantId !== merchantId) return errorJson('sumup_confirm_account', 409, { account: { merchantId, name: checked.account.name, sandbox: checked.account.sandbox } });
+    config = { merchantId, apiKey, accountName: checked.account.name, sandbox: checked.account.sandbox, confirmedAt: new Date().toISOString() };
   }
 
   const dek = await getOrgDataKey(env, orgId);

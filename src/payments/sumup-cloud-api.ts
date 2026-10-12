@@ -131,22 +131,26 @@ export async function getSumupReaderCheckoutStatus(params: {
 // for that merchant code (its readers can be listed), and the account's name
 // is shown to confirm — SumUp's merchant profile, when the key may read it
 // (scope user.profile_readonly); null when it may not ("couldn't check the name").
+// The same profile says whether it's a sandbox (test) merchant — null when
+// it doesn't say, never taken for production.
 export async function checkSumupAccount(
   merchantCode: string,
   apiKey: string
-): Promise<{ ok: true; account: { merchantCode: string; name: string | null } } | { ok: false; detail: string }> {
+): Promise<{ ok: true; account: { merchantCode: string; name: string | null; sandbox: boolean | null } } | { ok: false; detail: string }> {
   try {
     await listSumupReaders(merchantCode, apiKey);
   } catch (err) {
     return { ok: false, detail: err instanceof SumupCloudApiError ? `${err.status}: ${err.message}` : String(err) };
   }
   let name: string | null = null;
+  let sandbox: boolean | null = null;
   try {
     const res = await sumupFetch(`/v1/merchants/${encodeURIComponent(merchantCode)}`, apiKey);
-    const data = (await res.json().catch(() => ({}))) as { business_profile?: { name?: string }; company?: { name?: string } };
+    const data = (await res.json().catch(() => ({}))) as { business_profile?: { name?: string }; company?: { name?: string }; sandbox?: unknown };
     name = data.business_profile?.name || data.company?.name || null;
+    sandbox = typeof data.sandbox === 'boolean' ? data.sandbox : null;
   } catch {
     // The key may not read the profile: the name stays unknown.
   }
-  return { ok: true, account: { merchantCode, name } };
+  return { ok: true, account: { merchantCode, name, sandbox } };
 }
