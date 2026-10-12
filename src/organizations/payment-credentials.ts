@@ -9,6 +9,8 @@ import { extractCaller, requireOrgRole } from './auth';
 import { getOrgDataKey } from './organizations';
 import { encryptWithKey, decryptWithKey } from './crypto';
 import type { PaymentProvider, PaymentProviderCredentialRow } from './types';
+import { errorJson } from '../errors';
+import { checkBancontactKey } from '../payments/bancontact-account';
 
 const VALID_PROVIDERS = new Set<PaymentProvider>(['bancontact', 'sumup']);
 
@@ -27,8 +29,21 @@ export async function listPaymentCredentials(request: Request, env: Env, orgId: 
     .bind(orgId)
     .all<{ provider: PaymentProvider; updated_at: string }>();
 
-  // Never returns the decrypted config — just which providers are configured.
-  return json((results || []).map((r) => ({ provider: r.provider, configured: true, updatedAt: r.updated_at })));
+  // Never returns a key — which providers are configured, and for
+  // Bancontact the account its key pays out to (null: saved before that was
+  // checked).
+  const out = [];
+  for (const r of results || []) {
+    const base = { provider: r.provider, configured: true, updatedAt: r.updated_at };
+    if (r.provider !== 'bancontact') {
+      out.push(base);
+      continue;
+    }
+    const config = await getDecryptedPaymentCredential(env, orgId, 'bancontact');
+    const account = typeof config?.merchantId === 'string' ? { merchantId: config.merchantId, name: (config.accountName as string) ?? null, iban: (config.accountIban as string) ?? null } : null;
+    out.push({ ...base, environment: config?.environment ?? null, account });
+  }
+  return json(out);
 }
 
 export async function setPaymentCredential(request: Request, env: Env, orgId: string, provider: string): Promise<Response> {
@@ -40,8 +55,20 @@ export async function setPaymentCredential(request: Request, env: Env, orgId: st
   const membership = await requireOrgRole(env, orgId, caller, ['admin']);
   if (!membership) return json({ error: 'Forbidden' }, 403);
 
-  const config = await request.json().catch(() => null);
+  let config = (await request.json().catch(() => null)) as Record<string, unknown> | null;
   if (!config || typeof config !== 'object') return json({ error: 'A config object is required' }, 400);
+
+  // Bancontact: which account the key pays out to — shown to confirm first
+  // (409 with the account), kept only once confirmed (bancontact-account.ts).
+  if (provider === 'bancontact') {
+    const apiKey = typeof config.apiKey === 'string' ? config.apiKey.trim() : '';
+    const environment = config.environment === 'preprod' ? 'preprod' : config.environment === 'prod' ? 'prod' : null;
+    if (!apiKey || !environment) return json({ error: 'apiKey and environment (prod or preprod) are required' }, 400);
+    const checked = await checkBancontactKey(env, apiKey, environment);
+    if (!checked.ok) return errorJson(checked.code, 400, { detail: checked.detail });
+    if (config.confirmMerchantId !== checked.account.merchantId) return errorJson('bancontact_confirm_account', 409, { account: checked.account });
+    config = { apiKey, environment, merchantId: checked.account.merchantId, accountName: checked.account.name, accountIban: checked.account.iban, confirmedAt: new Date().toISOString() };
+  }
 
   const dek = await getOrgDataKey(env, orgId);
   if (!dek) return json({ error: 'Unknown organization' }, 404);

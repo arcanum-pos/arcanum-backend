@@ -130,6 +130,10 @@ export const ERROR_TEXTS = {
 
   // --- Payments ---
   bancontact_not_configured: 'Bancontact niet geconfigureerd voor deze organisatie',
+  bancontact_key_refused: 'Bancontact aanvaardt deze sleutel niet — kijk of hij juist is en bij de gekozen omgeving hoort',
+  bancontact_no_account: 'Bancontact zei niet bij welk account deze sleutel hoort — probeer opnieuw',
+  bancontact_confirm_account: 'Bevestig het account waarop deze sleutel uitbetaalt',
+  bancontact_wrong_account: 'Deze Bancontact-betaling ging naar een ander account dan het bevestigde — ze werd geannuleerd. Kijk de sleutel na bij Instellingen → Betalingen.',
   // `error` is SumUp's own message when it gave one — then also in params.detail.
   sumup_readers_failed: 'Kon SumUp readers niet ophalen',
   sumup_not_configured: 'SumUp is niet ingesteld voor deze organisatie',

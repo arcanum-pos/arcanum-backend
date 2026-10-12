@@ -2,7 +2,7 @@
 // own order numbers — DOMAIN_MODEL.md "Self-ordering and station screens".
 import { env, SELF } from 'cloudflare:test';
 import { describe, expect, it, vi } from 'vitest';
-import { api, chargeCash, confirmCharge, DEVICE, payCash, recordedCalls, rows, seedOrg, tabsPath, type TestOrg } from './helpers';
+import { api, chargeCash, confirmCharge, DEVICE, payCash, recordedCalls, rows, seedOrg, storeBancontactKey, tabsPath, type TestOrg } from './helpers';
 
 const BASE = 'https://backend';
 const call = async (method: string, path: string, body?: unknown) => {
@@ -301,8 +301,8 @@ describe('self-ordering: how guests pay (per event)', () => {
       return realFetch(input, init)
     })
   }
-  const withBancontact = async (org: TestOrg) =>
-    expect((await api('PUT', `/organizations/${org.orgId}/payment-credentials/bancontact`, { user: org.admin, body: { apiKey: 'k', environment: 'preprod' } })).status).toBe(200)
+  // A key whose account was confirmed — without the test payment (bancontact-account.ts).
+  const withBancontact = (org: TestOrg) => storeBancontactKey(org)
 
   it('the counter by default; Bancontact only when set up; never neither', async () => {
     const org = await seedOrg();

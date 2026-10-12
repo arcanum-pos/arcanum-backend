@@ -2,7 +2,8 @@
 // tests never depend on each other or on a clean database.
 import { env, SELF } from 'cloudflare:test';
 import worker from '../src';
-import { generateDataKey, wrapDataKey } from '../src/organizations/crypto';
+import { encryptWithKey, generateDataKey, wrapDataKey } from '../src/organizations/crypto';
+import { getOrgDataKey } from '../src/organizations/organizations';
 
 export interface TestUser {
   sub: string;
@@ -217,4 +218,19 @@ export async function rows<T = Record<string, unknown>>(sql: string, ...params: 
 export async function recordedCalls(service: 'devicehub' | 'mailer'): Promise<{ path: string; body: any }[]> {
   const binding = service === 'devicehub' ? env.ARCANUM_DEVICEHUB_SERVICE : env.ARCANUM_MAILER_SERVICE;
   return (await binding.fetch('https://stub/__calls')).json();
+}
+
+
+// A Bancontact key stored as the console stores it once its account was
+// confirmed (bancontact-account.ts) — without the test payment, for tests
+// about something else.
+export async function storeBancontactKey(org: TestOrg, config: Record<string, unknown> = {}) {
+  const dek = await getOrgDataKey(env as any, org.orgId);
+  const encrypted = await encryptWithKey(JSON.stringify({ apiKey: 'k', environment: 'preprod', merchantId: 'm-1', accountName: 'Test org', accountIban: 'BE•• •••• •••• 7034', ...config }), dek!);
+  await env.DB.prepare(
+    `INSERT INTO payment_provider_credentials (org_id, provider, config_ciphertext, config_iv, updated_at) VALUES (?, 'bancontact', ?, ?, ?)
+     ON CONFLICT(org_id, provider) DO UPDATE SET config_ciphertext = excluded.config_ciphertext, config_iv = excluded.config_iv`
+  )
+    .bind(org.orgId, encrypted.ciphertext, encrypted.iv, new Date().toISOString())
+    .run();
 }

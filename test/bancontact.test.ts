@@ -9,9 +9,12 @@ const BANCONTACT_HOST = 'merchant.api.preprod.bancontact.net';
 
 let bancontactRequests: { url: string; body: any }[] = [];
 let bancontactReply: () => Response;
+// Whose account Bancontact's answers name.
+let creditorId = 'm-1';
 
 beforeEach(() => {
   bancontactRequests = [];
+  creditorId = 'm-1';
   bancontactReply = () =>
     Response.json(
       {
@@ -22,6 +25,8 @@ beforeEach(() => {
         createdAt: new Date().toISOString(),
         expiresAt: new Date(Date.now() + 120_000).toISOString(),
         _links: { qrcode: { href: 'https://qr.test/1.png' }, deeplink: { href: 'bancontact://pay/1' } },
+        // The account the key pays out to (what bancontact-account.ts checks).
+        creditor: { merchantId: creditorId, name: 'Scouts Kabouterland', iban: 'BE68539007547034' },
       },
       { status: 201 }
     );
@@ -42,13 +47,14 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+// A key saved through the console: its account shown, then confirmed.
 async function orgWithBancontact(): Promise<TestOrg> {
   const org = await seedOrg();
-  const res = await api('PUT', `/organizations/${org.orgId}/payment-credentials/bancontact`, {
-    user: org.admin,
-    body: { apiKey: 'test-api-key', environment: 'preprod' },
-  });
-  expect(res.status).toBe(200);
+  const save = (confirmMerchantId?: string) =>
+    api('PUT', `/organizations/${org.orgId}/payment-credentials/bancontact`, { user: org.admin, body: { apiKey: 'test-api-key', environment: 'preprod', confirmMerchantId } });
+  expect((await save()).status).toBe(409);
+  expect((await save('m-1')).status).toBe(200);
+  bancontactRequests = [];
   return org;
 }
 
@@ -162,5 +168,42 @@ describe('bancontact tab payments', () => {
     const res = await payBancontact(org, tab.id, 1150);
     expect(res.status).toBe(400);
     expect(bancontactRequests).toHaveLength(0);
+  });
+});
+
+describe('which account a Bancontact key pays out to', () => {
+  it('saving a key: a test payment of a cent, cancelled, its account shown to confirm — kept only once confirmed', async () => {
+    const org = await seedOrg();
+    const save = (body: Record<string, unknown>) => api('PUT', `/organizations/${org.orgId}/payment-credentials/bancontact`, { user: org.admin, body: { apiKey: 'test-api-key', environment: 'preprod', ...body } });
+    const first = await save({});
+    expect(first.status).toBe(409);
+    expect(first.body).toMatchObject({ code: 'bancontact_confirm_account', account: { merchantId: 'm-1', name: 'Scouts Kabouterland', iban: 'BE•• •••• •••• 7034' } });
+    // A cent, then cancelled; nothing kept yet.
+    expect(bancontactRequests.map((r) => [new URL(r.url).pathname, r.body?.amount ?? null])).toEqual([['/v3/payments', 1], ['/v3/payments/bc-payment-1', null]]);
+    expect((await api('GET', `/organizations/${org.orgId}/payment-credentials`, { user: org.admin })).body).toEqual([]);
+    // Confirming another account than the key's: not kept.
+    expect((await save({ confirmMerchantId: 'm-2' })).status).toBe(409);
+    expect((await save({ confirmMerchantId: 'm-1' })).status).toBe(200);
+    const listed = (await api('GET', `/organizations/${org.orgId}/payment-credentials`, { user: org.admin })).body;
+    expect(listed).toEqual([expect.objectContaining({ provider: 'bancontact', environment: 'preprod', account: { merchantId: 'm-1', name: 'Scouts Kabouterland', iban: 'BE•• •••• •••• 7034' } })]);
+    expect(JSON.stringify(listed)).not.toContain('test-api-key');
+  });
+
+  it('a key Bancontact refuses: says so, nothing kept', async () => {
+    const org = await seedOrg();
+    bancontactReply = () => Response.json({ code: 'UNAUTHORIZED', message: 'Invalid API key' }, { status: 401 });
+    const res = await api('PUT', `/organizations/${org.orgId}/payment-credentials/bancontact`, { user: org.admin, body: { apiKey: 'wrong', environment: 'preprod' } });
+    expect(res.body).toMatchObject({ code: 'bancontact_key_refused', detail: '401 UNAUTHORIZED: Invalid API key' });
+  });
+
+  it('a payment that would go to another account than the confirmed one: cancelled and refused', async () => {
+    const org = await orgWithBancontact();
+    const tab = await openTab(org);
+    creditorId = 'm-other';
+    const res = await payBancontact(org, tab.id, 1150);
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('bancontact_wrong_account');
+    expect(bancontactRequests.map((r) => [r.url.endsWith('/v3/payments') ? 'create' : 'cancel'])).toEqual([['create'], ['cancel']]);
+    expect(await rows('SELECT id FROM charges WHERE tab_id = ?', tab.id)).toEqual([]);
   });
 });

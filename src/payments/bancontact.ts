@@ -19,6 +19,7 @@ import { verifyBancontactCallback } from './bancontact-jws';
 import { createCharge, getCharge, parseTipCents, resolveCharge, updateChargeProviderStatus } from './charges';
 import { isPendingTabChargeConflict, prepareTabCharge } from '../tabs';
 import { ensureChargePolling } from './charge-poller-client';
+import { accountOf, cancelBancontactPayment } from './bancontact-account';
 
 export const BASE_URLS: Record<string, string> = {
   preprod: 'https://merchant.api.preprod.bancontact.net',
@@ -33,6 +34,8 @@ const TERMINAL_STATUSES = new Set(['SUCCEEDED', 'FAILED', 'AUTHORIZATION_FAILED'
 interface BancontactCredential {
   apiKey: string;
   environment: 'preprod' | 'prod';
+  // The merchant the admin confirmed when saving the key (bancontact-account.ts) — null for a key saved before that check.
+  merchantId: string | null;
 }
 
 async function resolveCredential(env: Env, orgId: string): Promise<BancontactCredential | null> {
@@ -40,10 +43,10 @@ async function resolveCredential(env: Env, orgId: string): Promise<BancontactCre
   const apiKey = credential?.apiKey ? String(credential.apiKey) : '';
   const environment = credential?.environment === 'preprod' || credential?.environment === 'prod' ? credential.environment : null;
   if (!apiKey || !environment) return null;
-  return { apiKey, environment };
+  return { apiKey, environment, merchantId: typeof credential?.merchantId === 'string' ? credential.merchantId : null };
 }
 
-function bancontactHeaders(env: Env, apiKey: string): Record<string, string> {
+export function bancontactHeaders(env: Env, apiKey: string): Record<string, string> {
   const authValue = env.AUTH_SCHEME ? `${env.AUTH_SCHEME} ${apiKey}` : apiKey;
   return {
     'Content-Type': 'application/json',
@@ -173,6 +176,15 @@ export async function startBancontactPayment(
 
   if (!response.ok) {
     return json({ error: 'Bancontact API error', details: data }, response.status);
+  }
+
+  // The account it pays out to must be the one confirmed when the key was
+  // saved — else it's cancelled and refused (a key of another merchant).
+  const creditor = accountOf(data.creditor);
+  if (credential.merchantId && creditor && creditor.merchantId !== credential.merchantId) {
+    if (typeof data.paymentId === 'string') await cancelBancontactPayment(env, credential.environment, credential.apiKey, data.paymentId);
+    console.error(`Bancontact: payment for merchant ${creditor.merchantId}, the key was confirmed for ${credential.merchantId} (org ${orgId})`);
+    return errorJson('bancontact_wrong_account', 409);
   }
 
   let charge;
