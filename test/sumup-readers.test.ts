@@ -6,9 +6,14 @@ import { api, seedOrg, type TestOrg } from './helpers';
 
 let sumupRequests: { method: string; url: string; auth: string | null; body: any }[] = [];
 let sumupReply: (method: string) => Response;
+let accountReply: { readers: () => Response; profile: () => Response };
 
 beforeEach(() => {
   sumupRequests = [];
+  accountReply = {
+    readers: () => Response.json({ items: [] }),
+    profile: () => Response.json({ merchant_code: 'MSANDBOX1', business_profile: { name: 'Scouts Kabouterland' }, company: { name: 'Scouts Kabouterland vzw' } }),
+  };
   sumupReply = (method) =>
     method === 'DELETE'
       ? new Response(null, { status: 204 })
@@ -19,6 +24,9 @@ beforeEach(() => {
     const url = new URL(request.url);
     if (url.hostname === 'api.sumup.com') {
       sumupRequests.push({ method: request.method, url: request.url, auth: request.headers.get('Authorization'), body: await request.clone().json().catch(() => null) });
+      // The account check when saving (checkSumupAccount): the readers, the merchant's profile.
+      if (request.method === 'GET' && url.pathname.endsWith('/readers')) return accountReply.readers();
+      if (request.method === 'GET' && url.pathname.startsWith('/v1/merchants/')) return accountReply.profile();
       return sumupReply(request.method);
     }
     if (url.hostname.endsWith('.test') || url.hostname === 'localhost') return realFetch(input, init);
@@ -28,13 +36,14 @@ beforeEach(() => {
 
 afterEach(() => vi.restoreAllMocks());
 
+// A merchant code and key saved through the console: the account shown, then confirmed.
 async function orgWithSumup(): Promise<TestOrg> {
   const org = await seedOrg();
-  const res = await api('PUT', `/organizations/${org.orgId}/payment-credentials/sumup`, {
-    user: org.admin,
-    body: { merchantId: 'MSANDBOX1', apiKey: 'sup_sk_test' },
-  });
-  expect(res.status).toBe(200);
+  const save = (confirmMerchantId?: string) =>
+    api('PUT', `/organizations/${org.orgId}/payment-credentials/sumup`, { user: org.admin, body: { merchantId: 'MSANDBOX1', apiKey: 'sup_sk_test', confirmMerchantId } });
+  expect((await save()).status).toBe(409);
+  expect((await save('MSANDBOX1')).status).toBe(200);
+  sumupRequests = [];
   return org;
 }
 
@@ -111,5 +120,30 @@ describe('only for an admin of the org', () => {
       expect((await api('DELETE', `/sumup/readers/rdr_1?org_id=${org.orgId}`, { user })).status).toBe(status);
     }
     expect(sumupRequests).toHaveLength(0);
+  });
+});
+
+describe('which SumUp account a merchant code and key are', () => {
+  it("the key must work for the merchant code; the account's name shown to confirm — kept only once confirmed", async () => {
+    const org = await seedOrg();
+    const save = (body: Record<string, unknown>) => api('PUT', `/organizations/${org.orgId}/payment-credentials/sumup`, { user: org.admin, body: { merchantId: 'msandbox1', apiKey: 'sup_sk_test', ...body } });
+    const first = await save({});
+    expect(first.status).toBe(409);
+    expect(first.body).toMatchObject({ code: 'sumup_confirm_account', account: { merchantId: 'MSANDBOX1', name: 'Scouts Kabouterland' } });
+    expect((await api('GET', `/organizations/${org.orgId}/payment-credentials`, { user: org.admin })).body).toEqual([]);
+    expect((await save({ confirmMerchantId: 'MSANDBOX1' })).status).toBe(200);
+    const listed = (await api('GET', `/organizations/${org.orgId}/payment-credentials`, { user: org.admin })).body;
+    expect(listed).toEqual([expect.objectContaining({ provider: 'sumup', account: { merchantId: 'MSANDBOX1', name: 'Scouts Kabouterland' } })]);
+    expect(JSON.stringify(listed)).not.toContain('sup_sk_test');
+  });
+
+  it("a key that doesn't work for the merchant code: refused; a profile it may not read: confirmed without a name", async () => {
+    const org = await seedOrg();
+    const save = (body: Record<string, unknown>) => api('PUT', `/organizations/${org.orgId}/payment-credentials/sumup`, { user: org.admin, body: { merchantId: 'MOTHER', apiKey: 'sup_sk_test', ...body } });
+    accountReply.readers = () => Response.json({ detail: 'Forbidden', type: 'FORBIDDEN' }, { status: 403 });
+    expect((await save({})).body).toMatchObject({ code: 'sumup_key_refused', detail: '403: Forbidden' });
+    accountReply.readers = () => Response.json({ items: [] });
+    accountReply.profile = () => Response.json({ detail: 'insufficient scope' }, { status: 403 });
+    expect((await save({})).body).toMatchObject({ code: 'sumup_confirm_account', account: { merchantId: 'MOTHER', name: null } });
   });
 });

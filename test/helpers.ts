@@ -224,13 +224,18 @@ export async function recordedCalls(service: 'devicehub' | 'mailer'): Promise<{ 
 // A Bancontact key stored as the console stores it once its account was
 // confirmed (bancontact-account.ts) — without the test payment, for tests
 // about something else.
-export async function storeBancontactKey(org: TestOrg, config: Record<string, unknown> = {}) {
+export function storeBancontactKey(org: TestOrg, config: Record<string, unknown> = {}) {
+  return storePaymentConfig(org, 'bancontact', { apiKey: 'k', environment: 'preprod', merchantId: 'm-1', accountName: 'Test org', accountIban: 'BE•• •••• •••• 7034', confirmedAt: '2026-10-12T00:00:00Z', ...config });
+}
+
+// A provider's settings stored as the console stores them once confirmed.
+export async function storePaymentConfig(org: TestOrg, provider: 'bancontact' | 'sumup', config: Record<string, unknown>) {
   const dek = await getOrgDataKey(env as any, org.orgId);
-  const encrypted = await encryptWithKey(JSON.stringify({ apiKey: 'k', environment: 'preprod', merchantId: 'm-1', accountName: 'Test org', accountIban: 'BE•• •••• •••• 7034', ...config }), dek!);
+  const encrypted = await encryptWithKey(JSON.stringify(config), dek!);
   await env.DB.prepare(
-    `INSERT INTO payment_provider_credentials (org_id, provider, config_ciphertext, config_iv, updated_at) VALUES (?, 'bancontact', ?, ?, ?)
+    `INSERT INTO payment_provider_credentials (org_id, provider, config_ciphertext, config_iv, updated_at) VALUES (?, ?, ?, ?, ?)
      ON CONFLICT(org_id, provider) DO UPDATE SET config_ciphertext = excluded.config_ciphertext, config_iv = excluded.config_iv`
   )
-    .bind(org.orgId, encrypted.ciphertext, encrypted.iv, new Date().toISOString())
+    .bind(org.orgId, provider, encrypted.ciphertext, encrypted.iv, new Date().toISOString())
     .run();
 }

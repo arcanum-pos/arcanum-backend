@@ -7,7 +7,7 @@ import { env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { EXPORT_TABLES } from '../src/org-transfer';
 import { getDecryptedPaymentCredential } from '../src/organizations/payment-credentials';
-import { api, chargeCash, confirmCharge, createTab, DEVICE, rows, seedOrg, tabsPath, type TestOrg, type TestUser } from './helpers';
+import { api, chargeCash, confirmCharge, createTab, DEVICE, rows, seedOrg, tabsPath, type TestOrg, type TestUser, storePaymentConfig } from './helpers';
 
 const exportOf = (org: TestOrg, query = '', user: TestUser = org.admin) => api('GET', `/organizations/${org.orgId}/export${query}`, { user });
 
@@ -17,7 +17,7 @@ const exportOf = (org: TestOrg, query = '', user: TestUser = org.admin) => api('
 async function richOrg() {
   const org = await seedOrg();
   await api('POST', `/organizations/${org.orgId}/members`, { user: org.admin, body: { email: 'kok@example.test', role: 'cashier' } });
-  await api('PUT', `/organizations/${org.orgId}/payment-credentials/sumup`, { user: org.admin, body: { merchantCode: 'M123', apiKey: 'sup3r-secret' } });
+  await storePaymentConfig(org, 'sumup', { merchantCode: 'M123', apiKey: 'sup3r-secret' });
   const imported = await api('POST', `/organizations/${org.orgId}/catalogs/import`, {
     user: org.admin,
     body: {

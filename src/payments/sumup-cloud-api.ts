@@ -125,3 +125,28 @@ export async function getSumupReaderCheckoutStatus(params: {
   const data = (await response.json()) as { data: { status: SumupReaderCheckoutStatus['status']; payment_failure_reason: string | null } };
   return { status: data.data.status, paymentFailureReason: data.data.payment_failure_reason || null };
 }
+
+// Which SumUp account a merchant code and key are (the console's check when
+// saving them, like Bancontact's — bancontact-account.ts): the key must work
+// for that merchant code (its readers can be listed), and the account's name
+// is shown to confirm — SumUp's merchant profile, when the key may read it
+// (scope user.profile_readonly); null when it may not ("couldn't check the name").
+export async function checkSumupAccount(
+  merchantCode: string,
+  apiKey: string
+): Promise<{ ok: true; account: { merchantCode: string; name: string | null } } | { ok: false; detail: string }> {
+  try {
+    await listSumupReaders(merchantCode, apiKey);
+  } catch (err) {
+    return { ok: false, detail: err instanceof SumupCloudApiError ? `${err.status}: ${err.message}` : String(err) };
+  }
+  let name: string | null = null;
+  try {
+    const res = await sumupFetch(`/v1/merchants/${encodeURIComponent(merchantCode)}`, apiKey);
+    const data = (await res.json().catch(() => ({}))) as { business_profile?: { name?: string }; company?: { name?: string } };
+    name = data.business_profile?.name || data.company?.name || null;
+  } catch {
+    // The key may not read the profile: the name stays unknown.
+  }
+  return { ok: true, account: { merchantCode, name } };
+}

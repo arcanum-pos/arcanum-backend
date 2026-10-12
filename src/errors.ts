@@ -133,6 +133,8 @@ export const ERROR_TEXTS = {
   bancontact_key_refused: 'Bancontact aanvaardt deze sleutel niet — kijk of hij juist is en bij de gekozen omgeving hoort',
   bancontact_no_account: 'Bancontact zei niet bij welk account deze sleutel hoort — probeer opnieuw',
   bancontact_confirm_account: 'Bevestig het account waarop deze sleutel uitbetaalt',
+  sumup_key_refused: 'SumUp aanvaardt deze sleutel niet voor deze merchant code — kijk ze allebei na',
+  sumup_confirm_account: 'Bevestig het SumUp-account van deze merchant code en sleutel',
   bancontact_wrong_account: 'Deze Bancontact-betaling ging naar een ander account dan het bevestigde — ze werd geannuleerd. Kijk de sleutel na bij Instellingen → Betalingen.',
   // `error` is SumUp's own message when it gave one — then also in params.detail.
   sumup_readers_failed: 'Kon SumUp readers niet ophalen',
