@@ -9,6 +9,7 @@
 //
 // Credentials (API key + environment) are per-organization, configured in
 // the admin portal and stored encrypted in payment_provider_credentials.
+import { shiftForSale } from '../shifts';
 import { staffForSale } from '../staff';
 import { refuseUnlessOrgMember } from '../organizations/auth';
 import type { Env } from '../env';
@@ -70,6 +71,7 @@ export async function createPayment(request: Request, env: Env): Promise<Respons
     splitPart?: boolean;
     partial?: boolean;
     lines?: unknown;
+    registerId?: unknown;
   };
   const amountCents = Number(body.amount);
 
@@ -85,6 +87,9 @@ export async function createPayment(request: Request, env: Env): Promise<Respons
   // The person handling it on a shared kassa (staff.ts).
   const staff = await staffForSale(request, env, orgId);
   if (staff instanceof Response) return staff;
+  // On a register: its open shift (none open: refused).
+  const shiftId = await shiftForSale(env, orgId, body.registerId);
+  if (shiftId instanceof Response) return shiftId;
 
   // Checked before calling Bancontact, so a refused tab payment never leaves
   // a provider-side payment behind (see tabs.ts's prepareTabCharge).
@@ -121,6 +126,7 @@ export async function createPayment(request: Request, env: Env): Promise<Respons
     userEmail: request.headers.get('X-User-Email') || null,
     staffId: staff?.id ?? null,
     staffName: staff?.name ?? null,
+    shiftId,
     returnUrl: null,
   });
 }
@@ -148,6 +154,7 @@ export async function startBancontactPayment(
     userEmail: string | null;
     staffId?: string | null;
     staffName?: string | null;
+    shiftId?: string | null;
     returnUrl: string | null;
   }
 ): Promise<Response> {
@@ -212,6 +219,7 @@ export async function startBancontactPayment(
       userEmail: p.userEmail,
       staffId: p.staffId ?? null,
       staffName: p.staffName ?? null,
+      shiftId: p.shiftId ?? null,
       tabId,
       tipCents,
       splitPart,

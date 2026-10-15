@@ -179,6 +179,8 @@ describe('import', () => {
       member_id: 'memberships',
       staff_id: 'staff',
       claimed_by_staff_id: 'staff',
+      register_id: 'registers',
+      shift_id: 'shifts',
       category_id: 'categories',
       prep_station_id: 'prep_stations',
       station_id: 'prep_stations',

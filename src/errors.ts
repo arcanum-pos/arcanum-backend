@@ -109,6 +109,19 @@ export const ERROR_TEXTS = {
   staff_pin_too_many: 'Te veel verkeerde pincodes — wacht een minuut',
   member_not_found: 'Lid niet gevonden',
 
+  // --- Registers, shifts and kasopmaak (DOMAIN_MODEL.md, release B2) ---
+  register_not_found: 'Kassa (lade) niet gevonden — kies ze opnieuw in de instellingen',
+  register_closed: 'Deze kassa is niet open — doe eerst "Kassa openen"',
+  register_name_required: 'Geef de kassa een naam',
+  register_open: 'Deze kassa is nog open — doe eerst de kasopmaak',
+  shift_not_found: 'Shift niet gevonden',
+  shift_closed: 'Deze shift is al afgesloten',
+  shift_already_open: 'Deze kassa werd net geopend op een ander toestel',
+  shift_count_invalid: 'Deze telling klopt niet',
+  shift_payment_pending: 'Er loopt nog een betaling op deze kassa — rond die eerst af',
+  shift_note_required: 'Er is een verschil: schrijf erbij wat er gebeurd is',
+  movement_invalid: 'Geef een bedrag en een reden',
+
   // --- Self-ordering and station screens (DOMAIN_MODEL.md) ---
   ticket_not_found: 'Bon niet gevonden',
   event_not_found: 'Evenement niet gevonden',

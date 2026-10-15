@@ -21,6 +21,7 @@
 // catalogId) and is priced by the server from it — the kassa never sends a
 // price — with name/price/code/category/VAT copied in at sale time. Fooi is
 // a tip on the payment (charges.tip_cents), not a line.
+import { shiftForSale } from './shifts';
 import { staffForSale } from './staff';
 import type { Env } from './env';
 import { json } from './http';
@@ -224,9 +225,12 @@ async function authorize(request: Request, env: Env, orgId: string): Promise<Res
 // (the same per-browser device id/name every charge already carries).
 // The person on a shared device (staff.ts) from its signed X-Staff token —
 // refused here when the organisation requires one and none was chosen.
-async function attribution(request: Request, env: Env, orgId: string, body: { deviceId?: unknown; deviceName?: unknown }): Promise<Who | Response> {
+async function attribution(request: Request, env: Env, orgId: string, body: { deviceId?: unknown; deviceName?: unknown; registerId?: unknown }): Promise<Who | Response> {
   const staff = await staffForSale(request, env, orgId);
   if (staff instanceof Response) return staff;
+  // A kassa on a register sells only while its drawer is open (shifts.ts).
+  const shift = await shiftForSale(env, orgId, body.registerId);
+  if (shift instanceof Response) return shift;
   return {
     deviceId: body.deviceId ? String(body.deviceId).slice(0, 100) : null,
     deviceName: body.deviceName ? String(body.deviceName).slice(0, 100) : null,

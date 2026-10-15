@@ -18,6 +18,7 @@
 // catalogs aren't coupled to payment processing in a way that tolerates
 // network failure, and don't justify the operational cost of separate
 // deployments yet.
+import { dispatchShiftsRoute } from './shifts';
 import type { Env } from './env';
 export type { Env };
 
@@ -137,6 +138,8 @@ export default {
         if (ticketsResponse) return ticketsResponse;
         const staffResponse = await dispatchStaffRoute(request, env, url.pathname);
         if (staffResponse) return staffResponse;
+        const shiftsResponse = await dispatchShiftsRoute(request, env, url.pathname);
+        if (shiftsResponse) return shiftsResponse;
         // Before the generic catalog routes, which would read 'import' as a catalog id.
         const importResponse = await dispatchCatalogImportRoute(request, env, url.pathname);
         if (importResponse) return importResponse;

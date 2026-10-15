@@ -123,6 +123,25 @@ export const EXPORT_TABLES: TableSpec[] = [
     orderBy: 'event_id, position, rowid',
   },
   { table: 'org_counters', columns: ['name', 'value'], excluded: ORG, remap: [], orderBy: 'name' },
+  { table: 'registers', columns: ['id', 'name', 'created_at', 'archived_at'], excluded: ORG, remap: ['id'], orderBy: 'created_at, rowid' },
+  {
+    table: 'shifts',
+    columns: [
+      'id', 'register_id', 'number', 'status', 'opened_at', 'opened_by_name', 'opened_by_staff_name', 'opening_float_cents', 'opening_count',
+      'closed_at', 'closed_by_name', 'closed_by_staff_name', 'counted_cents', 'closing_count', 'expected_cents', 'difference_cents', 'totals',
+      'note', 'left_in_drawer_cents',
+    ],
+    excluded: ORG,
+    remap: ['id', 'register_id'],
+    orderBy: 'opened_at, rowid',
+  },
+  {
+    table: 'cash_movements',
+    columns: ['id', 'shift_id', 'direction', 'amount_cents', 'reason', 'device_name', 'user_name', 'staff_name', 'created_at'],
+    excluded: ORG,
+    remap: ['id', 'shift_id'],
+    orderBy: 'created_at, rowid',
+  },
   {
     table: 'tabs',
     columns: [
@@ -170,14 +189,14 @@ export const EXPORT_TABLES: TableSpec[] = [
     columns: [
       'id', 'method', 'status', 'provider_status', 'amount_cents', 'description', 'items', 'slot_id', 'device_id', 'device_name', 'user_name',
       'user_email', 'created_at', 'resolved_at', 'transaction_code', 'error_message', 'provider_ref', 'expires_at', 'tab_id', 'tip_cents', 'split_part',
-      'staff_id', 'staff_name',
+      'staff_id', 'staff_name', 'shift_id',
     ],
     excluded: {
       ...ORG,
       pos_terminal_id: "a devicehub terminal of this installation — devices re-register",
       provider_data: 'callback token / QR link, only meaningful while a payment is in progress',
     },
-    remap: ['id', 'tab_id', 'staff_id'],
+    remap: ['id', 'tab_id', 'staff_id', 'shift_id'],
     orderBy: 'created_at, rowid',
   },
   {
@@ -191,10 +210,10 @@ export const EXPORT_TABLES: TableSpec[] = [
     table: 'transactions',
     columns: [
       'id', 'amount_cents', 'description', 'method', 'items', 'slot_id', 'device_id', 'device_name', 'user_name', 'user_email', 'event_id', 'tab_id',
-      'tip_cents', 'completed_at', 'staff_id', 'staff_name',
+      'tip_cents', 'completed_at', 'staff_id', 'staff_name', 'shift_id',
     ],
     excluded: ORG,
-    remap: ['id', 'event_id', 'tab_id', 'staff_id'],
+    remap: ['id', 'event_id', 'tab_id', 'staff_id', 'shift_id'],
     orderBy: 'completed_at, rowid',
   },
   // --- Secrets: only with ?secrets=1, exported decrypted, re-encrypted with the new org's key on import.

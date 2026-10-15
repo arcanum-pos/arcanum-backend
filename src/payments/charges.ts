@@ -44,6 +44,8 @@ export interface ChargeRecord {
   // Who handled it, on a shared device (staff.ts).
   staffId?: string | null;
   staffName?: string | null;
+  // The register's shift it was paid in (shifts.ts).
+  shiftId?: string | null;
 }
 
 interface ChargeRow {
@@ -73,6 +75,7 @@ interface ChargeRow {
   split_part?: number;
   staff_id?: string | null;
   staff_name?: string | null;
+  shift_id?: string | null;
 }
 
 function rowToCharge(row: ChargeRow): ChargeRecord {
@@ -103,6 +106,7 @@ function rowToCharge(row: ChargeRow): ChargeRecord {
     splitPart: row.split_part || 0,
     staffId: row.staff_id ?? null,
     staffName: row.staff_name ?? null,
+    shiftId: row.shift_id ?? null,
   };
 }
 
@@ -141,6 +145,8 @@ export interface CreateChargeFields {
   // Who handles it, on a shared device (staff.ts).
   staffId?: string | null;
   staffName?: string | null;
+  // The register's open shift (shifts.ts shiftForSale).
+  shiftId?: string | null;
 }
 
 // A tip (fooi) on a payment: an integer 0..100000 cents, part of the charged
@@ -161,8 +167,8 @@ export async function createCharge(env: Env, fields: CreateChargeFields): Promis
 
   const insertCharge = env.DB.prepare(
     `INSERT INTO charges
-      (id, org_id, method, status, provider_status, amount_cents, description, pos_terminal_id, items, slot_id, device_id, device_name, user_name, user_email, created_at, provider_ref, provider_data, expires_at, tab_id, tip_cents, split_part, staff_id, staff_name)
-     VALUES (?, ?, ?, 'pending', NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      (id, org_id, method, status, provider_status, amount_cents, description, pos_terminal_id, items, slot_id, device_id, device_name, user_name, user_email, created_at, provider_ref, provider_data, expires_at, tab_id, tip_cents, split_part, staff_id, staff_name, shift_id)
+     VALUES (?, ?, ?, 'pending', NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       id,
@@ -185,7 +191,8 @@ export async function createCharge(env: Env, fields: CreateChargeFields): Promis
       fields.tipCents || 0,
       fields.tabId && fields.splitPart ? fields.splitPart : 0,
       fields.staffId || null,
-      fields.staffName || null
+      fields.staffName || null,
+      fields.shiftId || null
     );
   const insertLines =
     fields.tabId && fields.lines?.length

@@ -15,6 +15,7 @@
 // No more local pending-queue/claim flow: that only ever existed for the
 // iOS SumUp Air bridge, which is retired (SumUp Air itself is gone; a
 // specific Solo reader is targeted directly now, chosen in Instellingen).
+import { shiftForSale } from '../shifts';
 import { staffForSale } from '../staff';
 import type { Env } from '../env';
 import { json } from '../http';
@@ -124,6 +125,7 @@ interface CreateChargeBody {
   partial?: boolean;
   // Per item: [{ lineId, quantity }] — the units this payment covers.
   lines?: unknown;
+  registerId?: unknown;
 }
 
 export async function createSumupCharge(request: Request, env: Env): Promise<Response> {
@@ -147,6 +149,9 @@ export async function createSumupCharge(request: Request, env: Env): Promise<Res
   // The person handling it on a shared kassa (staff.ts).
   const staff = await staffForSale(request, env, orgId);
   if (staff instanceof Response) return staff;
+  // On a register: its open shift (none open: refused).
+  const shiftId = await shiftForSale(env, orgId, body.registerId);
+  if (shiftId instanceof Response) return shiftId;
 
   const tipCents = parseTipCents(body.tipCents);
   if (tipCents === null || tipCents > amountCents) return json({ error: 'tipCents must be an integer between 0 and 100000, and not more than the amount' }, 400);
@@ -182,6 +187,7 @@ export async function createSumupCharge(request: Request, env: Env): Promise<Res
       userEmail: request.headers.get('X-User-Email') || null,
       staffId: staff?.id ?? null,
       staffName: staff?.name ?? null,
+      shiftId,
       tabId,
       tipCents,
       splitPart: body.splitPart === true ? splitPart : 0,
