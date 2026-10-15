@@ -176,6 +176,9 @@ describe('import', () => {
     // pointing at the source org's rows — on a new installation it would
     // not. So: every reference must resolve inside the imported org.
     const REFERS_TO: Record<string, string> = {
+      member_id: 'memberships',
+      staff_id: 'staff',
+      claimed_by_staff_id: 'staff',
       category_id: 'categories',
       prep_station_id: 'prep_stations',
       station_id: 'prep_stations',

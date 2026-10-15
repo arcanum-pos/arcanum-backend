@@ -79,7 +79,10 @@ CREATE TABLE IF NOT EXISTS transactions (
   tab_id TEXT REFERENCES tabs(id),
   -- Part of amount_cents, not revenue (step 3d). 0 for everything before tips.
   tip_cents INTEGER NOT NULL DEFAULT 0,
-  completed_at TEXT NOT NULL
+  completed_at TEXT NOT NULL,
+  -- Who handled the payment (migration 0035).
+  staff_id TEXT,
+  staff_name TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_transactions_completed_at ON transactions(completed_at);
@@ -129,7 +132,9 @@ CREATE TABLE IF NOT EXISTS organizations (
   locale TEXT NOT NULL DEFAULT 'nl' CHECK (locale IN ('nl', 'fr', 'en')),
   -- 'N' = arcanum-cleaner deletes this org (every row of it) once it's 4 hours
   -- old; any other value, NULL included, keeps it (migration 0022).
-  is_locked TEXT
+  is_locked TEXT,
+  -- A person must be chosen to sell (migration 0035).
+  staff_required INTEGER NOT NULL DEFAULT 0
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_organizations_custom_domain ON organizations(custom_domain);
 
@@ -290,7 +295,10 @@ CREATE TABLE IF NOT EXISTS charges (
   -- counted toward the tab's paid amount — see tabs.ts PAID_SQL.
   tip_cents INTEGER NOT NULL DEFAULT 0,
   -- Which part of the tab's "Gelijk verdelen" plan this pays (1-based; 0 = not a part) (0018).
-  split_part INTEGER NOT NULL DEFAULT 0
+  split_part INTEGER NOT NULL DEFAULT 0,
+  -- Who handled the payment (migration 0035).
+  staff_id TEXT,
+  staff_name TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_charges_org ON charges(org_id);
@@ -361,7 +369,10 @@ CREATE TABLE IF NOT EXISTS tabs (
   notify_phone TEXT,
   -- Who's behind a guest's tab (migration 0031), kept only while it's open.
   contact_phone TEXT,
-  contact_email TEXT
+  contact_email TEXT,
+  -- Who opened it, on a shared device (migration 0035).
+  staff_id TEXT,
+  staff_name TEXT
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tabs_org_number ON tabs(org_id, number);
@@ -381,7 +392,10 @@ CREATE TABLE IF NOT EXISTS orders (
   device_name TEXT,
   user_name TEXT,
   user_email TEXT,
-  submitted_at TEXT NOT NULL
+  submitted_at TEXT NOT NULL,
+  -- Who took it (migration 0035).
+  staff_id TEXT,
+  staff_name TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_orders_tab ON orders(tab_id);
@@ -573,7 +587,11 @@ CREATE TABLE IF NOT EXISTS prep_tickets (
   updated_at TEXT NOT NULL,
   updated_by TEXT,
   -- Its "ready" SMS (migration 0029): sending | sent | failed | capped.
-  sms_status TEXT
+  sms_status TEXT,
+  -- Who's making it, since when (migration 0035).
+  claimed_by_staff_id TEXT,
+  claimed_by_name TEXT,
+  claimed_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_prep_tickets_station ON prep_tickets(org_id, station_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_prep_tickets_tab ON prep_tickets(tab_id);
@@ -614,6 +632,25 @@ CREATE TABLE IF NOT EXISTS station_devices (
   -- NULL = the prep screen, 'pickup' = the pickup screen for guests (migration 0034).
   view TEXT
 );
+
+-- Staff on shared devices (migration 0035, DOMAIN_MODEL.md release B1):
+-- a name and an optional PIN, to record who did what.
+CREATE TABLE IF NOT EXISTS staff (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES organizations(id),
+  name TEXT NOT NULL,
+  pin_hash TEXT,
+  pin_changed_at TEXT,
+  member_id TEXT,
+  created_at TEXT NOT NULL,
+  archived_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_staff_org ON staff(org_id);
+CREATE TABLE IF NOT EXISTS staff_pin_failures (
+  caller TEXT NOT NULL,
+  at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_staff_pin_failures ON staff_pin_failures(caller, at);
 
 -- --- Migration tracking ---
 -- wrangler's own table (`wrangler d1 migrations apply`), with the exact DDL
@@ -661,3 +698,4 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0031_tab_contact.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0032_kassa_modes.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0033_device_keys.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0034_pickup_screens.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0035_staff.sql');

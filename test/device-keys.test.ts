@@ -162,6 +162,24 @@ describe("a station screen's key: its own station, nothing else", () => {
   });
 });
 
+describe("a station screen's key and the staff list (release B1)", () => {
+  it('reads the names, chooses a person (with their PIN), passes a ticket on — a customer display does none of it', async () => {
+    const org = await seedOrg();
+    const v = await venue(org);
+    const o = `/organizations/${org.orgId}`;
+    const jan = (await api('POST', `${o}/staff`, { user: org.admin, body: { name: 'Jan', pin: '2468' } })).body;
+    const key = (await asDevice(null, 'POST', '/public/pair', { code: await code(org, { role: 'station', name: 'Scherm keuken', stationId: v.kitchen.id }) })).body.deviceKey;
+    expect((await asDevice(key, 'GET', `${o}/staff`)).body).toEqual({ required: false, staff: [{ id: jan.id, name: 'Jan', hasPin: true }] });
+    expect((await asDevice(key, 'POST', `${o}/staff/${jan.id}/token`, { pin: '2468' })).body.staff).toEqual({ id: jan.id, name: 'Jan' });
+    // Never managing staff.
+    expect((await asDevice(key, 'POST', `${o}/staff`, { name: 'Indringer' })).status).toBe(401);
+    expect((await asDevice(key, 'POST', `${o}/tickets/${v.kitchenTicket}/claim`, { staffId: jan.id })).body.claimedBy).toEqual({ id: jan.id, name: 'Jan' });
+    expect((await asDevice(key, 'POST', `${o}/tickets/${v.barTicket}/claim`, { staffId: jan.id })).status).toBe(403);
+    const cfd = (await asDevice(null, 'POST', '/public/pair', { code: await code(org, { role: 'cfd', name: 'Klantscherm' }) })).body.deviceKey;
+    expect((await asDevice(cfd, 'GET', `${o}/staff`)).status).toBe(403);
+  });
+});
+
 describe('a pickup screen (ROADMAP.md §5): order numbers for guests, read-only', () => {
   const paidAll = (org: TestOrg) => env.DB.prepare("UPDATE tabs SET status = 'closed' WHERE org_id = ?").bind(org.orgId).run();
 

@@ -22,6 +22,8 @@ interface TransactionFields {
   deviceName?: string | null;
   userName?: string | null;
   userEmail?: string | null;
+  staffId?: string | null;
+  staffName?: string | null;
   orgId: string;
   // Explicit, or else the event of the tab it was paid on (set when the
   // kassa opened the tab — see tabs.ts createTab).
@@ -37,8 +39,8 @@ async function insertTransaction(env: Env, fields: TransactionFields): Promise<{
 
   await env.DB.prepare(
     `INSERT INTO transactions
-      (id, amount_cents, description, method, items, slot_id, device_id, device_name, user_name, user_email, org_id, event_id, tab_id, tip_cents, completed_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, (SELECT event_id FROM tabs WHERE id = ?)), ?, ?, ?)`
+      (id, amount_cents, description, method, items, slot_id, device_id, device_name, user_name, user_email, org_id, event_id, tab_id, tip_cents, completed_at, staff_id, staff_name)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, (SELECT event_id FROM tabs WHERE id = ?)), ?, ?, ?, ?, ?)`
   )
     .bind(
       id,
@@ -56,7 +58,9 @@ async function insertTransaction(env: Env, fields: TransactionFields): Promise<{
       fields.tabId ? String(fields.tabId) : null,
       fields.tabId ? String(fields.tabId) : null,
       Number.isInteger(fields.tipCents) && (fields.tipCents as number) > 0 ? fields.tipCents : 0,
-      completedAt
+      completedAt,
+      fields.staffId || null,
+      fields.staffName || null
     )
     .run();
 
@@ -81,6 +85,8 @@ export interface RecordableCharge {
   orgId: string | null;
   tabId: string | null;
   tipCents: number;
+  staffId?: string | null;
+  staffName?: string | null;
 }
 
 export async function recordChargeTransaction(env: Env, charge: RecordableCharge): Promise<void> {
@@ -102,6 +108,8 @@ export async function recordChargeTransaction(env: Env, charge: RecordableCharge
     orgId: charge.orgId || '',
     tabId: charge.tabId,
     tipCents: charge.tipCents,
+    staffId: charge.staffId ?? null,
+    staffName: charge.staffName ?? null,
   });
 }
 

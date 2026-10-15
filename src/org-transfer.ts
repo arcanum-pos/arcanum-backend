@@ -63,6 +63,17 @@ export const EXPORT_TABLES: TableSpec[] = [
     remap: ['id'],
     orderBy: 'invited_at, rowid',
   },
+  {
+    table: 'staff',
+    columns: ['id', 'name', 'member_id', 'created_at', 'archived_at'],
+    excluded: {
+      ...ORG,
+      pin_hash: 'salted with the staff id, which is new on import — PINs are set again',
+      pin_changed_at: 'goes with the PIN',
+    },
+    remap: ['id', 'member_id'],
+    orderBy: 'created_at, rowid',
+  },
   { table: 'categories', columns: ['id', 'name', 'position', 'created_at'], excluded: ORG, remap: ['id'], orderBy: 'position, rowid' },
   { table: 'prep_stations', columns: ['id', 'name', 'position', 'created_at'], excluded: ORG, remap: ['id'], orderBy: 'position, rowid' },
   {
@@ -117,20 +128,20 @@ export const EXPORT_TABLES: TableSpec[] = [
     columns: [
       'id', 'number', 'label', 'status', 'slot_id', 'event_id', 'opened_device_id', 'opened_device_name', 'opened_by_name', 'opened_by_email',
       'opened_at', 'closed_at', 'receipt_number', 'cancel_reason', 'split_parts', 'split_paid', 'event_number', 'source', 'pay_later',
-      'order_mode_id', 'order_mode_name',
+      'order_mode_id', 'order_mode_name', 'staff_id', 'staff_name',
     ],
     excluded: { ...ORG, order_token: "a follow-your-order page of this installation", notify_phone: "a guest's number, kept only until their order is ready",
       contact_phone: "a guest's contact, kept only while the tab is open",
       contact_email: "a guest's contact, kept only while the tab is open",
     },
-    remap: ['id', 'event_id', 'order_mode_id'],
+    remap: ['id', 'event_id', 'order_mode_id', 'staff_id'],
     orderBy: 'number',
   },
   {
     table: 'orders',
-    columns: ['id', 'tab_id', 'source', 'catalog_id', 'device_id', 'device_name', 'user_name', 'user_email', 'submitted_at'],
+    columns: ['id', 'tab_id', 'source', 'catalog_id', 'device_id', 'device_name', 'user_name', 'user_email', 'submitted_at', 'staff_id', 'staff_name'],
     excluded: ORG,
-    remap: ['id', 'tab_id', 'catalog_id'],
+    remap: ['id', 'tab_id', 'catalog_id', 'staff_id'],
     orderBy: 'submitted_at, rowid',
   },
   {
@@ -146,9 +157,12 @@ export const EXPORT_TABLES: TableSpec[] = [
   },
   {
     table: 'prep_tickets',
-    columns: ['id', 'tab_id', 'order_id', 'station_id', 'station_name', 'status', 'created_at', 'updated_at', 'updated_by', 'sms_status'],
+    columns: [
+      'id', 'tab_id', 'order_id', 'station_id', 'station_name', 'status', 'created_at', 'updated_at', 'updated_by', 'sms_status',
+      'claimed_by_staff_id', 'claimed_by_name', 'claimed_at',
+    ],
     excluded: ORG,
-    remap: ['id', 'tab_id', 'order_id', 'station_id'],
+    remap: ['id', 'tab_id', 'order_id', 'station_id', 'claimed_by_staff_id'],
     orderBy: 'created_at, rowid',
   },
   {
@@ -156,13 +170,14 @@ export const EXPORT_TABLES: TableSpec[] = [
     columns: [
       'id', 'method', 'status', 'provider_status', 'amount_cents', 'description', 'items', 'slot_id', 'device_id', 'device_name', 'user_name',
       'user_email', 'created_at', 'resolved_at', 'transaction_code', 'error_message', 'provider_ref', 'expires_at', 'tab_id', 'tip_cents', 'split_part',
+      'staff_id', 'staff_name',
     ],
     excluded: {
       ...ORG,
       pos_terminal_id: "a devicehub terminal of this installation — devices re-register",
       provider_data: 'callback token / QR link, only meaningful while a payment is in progress',
     },
-    remap: ['id', 'tab_id'],
+    remap: ['id', 'tab_id', 'staff_id'],
     orderBy: 'created_at, rowid',
   },
   {
@@ -176,10 +191,10 @@ export const EXPORT_TABLES: TableSpec[] = [
     table: 'transactions',
     columns: [
       'id', 'amount_cents', 'description', 'method', 'items', 'slot_id', 'device_id', 'device_name', 'user_name', 'user_email', 'event_id', 'tab_id',
-      'tip_cents', 'completed_at',
+      'tip_cents', 'completed_at', 'staff_id', 'staff_name',
     ],
     excluded: ORG,
-    remap: ['id', 'event_id', 'tab_id'],
+    remap: ['id', 'event_id', 'tab_id', 'staff_id'],
     orderBy: 'completed_at, rowid',
   },
   // --- Secrets: only with ?secrets=1, exported decrypted, re-encrypted with the new org's key on import.

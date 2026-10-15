@@ -15,6 +15,7 @@
 // No more local pending-queue/claim flow: that only ever existed for the
 // iOS SumUp Air bridge, which is retired (SumUp Air itself is gone; a
 // specific Solo reader is targeted directly now, chosen in Instellingen).
+import { staffForSale } from '../staff';
 import type { Env } from '../env';
 import { json } from '../http';
 import { errorJson, providerErrorJson } from '../errors';
@@ -143,6 +144,9 @@ export async function createSumupCharge(request: Request, env: Env): Promise<Res
   const orgId = String(body.orgId);
   const refused = await refuseUnlessOrgMember(request, env, orgId);
   if (refused) return refused;
+  // The person handling it on a shared kassa (staff.ts).
+  const staff = await staffForSale(request, env, orgId);
+  if (staff instanceof Response) return staff;
 
   const tipCents = parseTipCents(body.tipCents);
   if (tipCents === null || tipCents > amountCents) return json({ error: 'tipCents must be an integer between 0 and 100000, and not more than the amount' }, 400);
@@ -176,6 +180,8 @@ export async function createSumupCharge(request: Request, env: Env): Promise<Res
       // from the client body, since the client could claim to be anyone.
       userName: request.headers.get('X-User-Name') || null,
       userEmail: request.headers.get('X-User-Email') || null,
+      staffId: staff?.id ?? null,
+      staffName: staff?.name ?? null,
       tabId,
       tipCents,
       splitPart: body.splitPart === true ? splitPart : 0,

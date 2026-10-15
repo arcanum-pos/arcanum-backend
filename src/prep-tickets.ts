@@ -12,6 +12,11 @@
 //   GET  /organizations/:org/stations/:station/tickets[?delivered=1]   member, or that station's screen (its own key)
 //   POST /organizations/:org/tickets/:id { status }                    member, or that ticket's station's screen
 //   GET  /organizations/:org/stations/:station/pickup                  member, or any screen of that station
+//   POST /organizations/:org/tickets/:id/claim { staffId }             member, or that ticket's station's screen: pass it on
+//
+// Who's making a ticket (staff.ts, DOMAIN_MODEL.md "Staff on shared
+// devices"): Start records the device's person (none is fine, S4); back to
+// "Besteld" clears it (S3); passing it on names someone else.
 //
 // A pickup screen (a station screen with view 'pickup', devices.ts — or the
 // station screen's own second window) shows guests only the order numbers:
@@ -20,6 +25,7 @@
 //
 // Changes reach the station screens, the kassas and the "follow your order"
 // pages through one notification (devicehub-client.ts notifyTabChanged).
+import { staffOf } from './staff';
 import type { Env } from './env';
 import { errorJson } from './errors';
 import { json } from './http';
@@ -109,6 +115,9 @@ interface TicketRow {
   source: string;
   pay_later: number;
   mode_label: string | null;
+  claimed_by_staff_id: string | null;
+  claimed_by_name: string | null;
+  claimed_at: string | null;
 }
 
 interface TicketLineRow {
@@ -131,7 +140,7 @@ async function listStationTickets(request: Request, env: Env, orgId: string, sta
   const since = new Date(Date.now() - STATION_WINDOW_HOURS * 3600_000).toISOString();
 
   const { results } = await env.DB.prepare(
-    `SELECT t.id, t.tab_id, t.order_id, t.status, t.created_at, t.updated_at,
+    `SELECT t.id, t.tab_id, t.order_id, t.status, t.created_at, t.updated_at, t.claimed_by_staff_id, t.claimed_by_name, t.claimed_at,
        tabs.number, tabs.event_number, tabs.label, tabs.status AS tab_status, tabs.source, tabs.pay_later,
        ${MODE_LABEL_SQL('tabs')} AS mode_label
      FROM prep_tickets t JOIN tabs ON tabs.id = t.tab_id
@@ -175,6 +184,8 @@ async function listStationTickets(request: Request, env: Env, orgId: string, sta
       // information for whoever prepares it; the station got it from the
       // products' prep station, never from the mode.
       mode: t.mode_label,
+      // Who's making it (a staff member), when someone is.
+      claimedBy: t.claimed_by_name ? { id: t.claimed_by_staff_id, name: t.claimed_by_name, at: t.claimed_at } : null,
       lines: (byOrder.get(t.order_id) || []).map((l) => ({ name: l.name, quantity: l.quantity, voided: l.voided, note: l.note })),
     }))
   );
@@ -189,16 +200,47 @@ async function setTicketStatus(request: Request, env: Env, orgId: string, ticket
   const status = String(body.status ?? '');
   if (!(TICKET_STATUSES as readonly string[]).includes(status)) return json({ error: `status must be one of ${TICKET_STATUSES.join(', ')}` }, 400);
 
+  // The device's person: whoever starts it makes it (unless someone already
+  // does — back from "Klaar" keeps them); back to "Besteld" frees it.
+  const staff = await staffOf(request, env, orgId);
+  const now = new Date().toISOString();
   const row = await env.DB.prepare(
-    'UPDATE prep_tickets SET status = ?, updated_at = ?, updated_by = ? WHERE id = ? AND org_id = ? RETURNING id, tab_id, status, updated_at'
+    `UPDATE prep_tickets SET status = ?1, updated_at = ?2, updated_by = ?3,
+       claimed_by_staff_id = CASE WHEN ?1 = 'ordered' THEN NULL WHEN ?1 = 'in_progress' AND claimed_by_name IS NULL THEN ?4 ELSE claimed_by_staff_id END,
+       claimed_by_name = CASE WHEN ?1 = 'ordered' THEN NULL WHEN ?1 = 'in_progress' AND claimed_by_name IS NULL THEN ?5 ELSE claimed_by_name END,
+       claimed_at = CASE WHEN ?1 = 'ordered' THEN NULL WHEN ?1 = 'in_progress' AND claimed_by_name IS NULL AND ?5 IS NOT NULL THEN ?2 ELSE claimed_at END
+     WHERE id = ?6 AND org_id = ?7 RETURNING id, tab_id, status, updated_at, claimed_by_name`
   )
-    .bind(status, new Date().toISOString(), caller.who, ticketId, orgId)
-    .first<{ id: string; tab_id: string; status: TicketStatus; updated_at: string }>();
+    .bind(status, now, staff?.name ?? caller.who, staff?.id ?? null, staff?.name ?? null, ticketId, orgId)
+    .first<{ id: string; tab_id: string; status: TicketStatus; updated_at: string; claimed_by_name: string | null }>();
   if (!row) return errorJson('ticket_not_found', 404);
   notifyTabsChanged(env, orgId, [row.tab_id]);
   // Ready: the guest's SMS, if they left a number (messaging.ts).
   if (row.status === 'ready') notifyTicketReady(env, orgId, row.id);
-  return json({ id: row.id, status: row.status, updatedAt: row.updated_at });
+  return json({ id: row.id, status: row.status, updatedAt: row.updated_at, claimedBy: row.claimed_by_name });
+}
+
+// Passing a ticket on: someone else (an active staff member) makes it now.
+async function claimTicket(request: Request, env: Env, orgId: string, ticketId: string): Promise<Response> {
+  const caller = await member(request, env, orgId, async () =>
+    (await env.DB.prepare('SELECT station_id FROM prep_tickets WHERE id = ? AND org_id = ?').bind(ticketId, orgId).first<{ station_id: string }>())?.station_id ?? null
+  );
+  if (caller instanceof Response) return caller;
+  const body = (await request.json().catch(() => ({}))) as { staffId?: unknown };
+  const to =
+    typeof body.staffId === 'string'
+      ? await env.DB.prepare('SELECT id, name FROM staff WHERE id = ? AND org_id = ? AND archived_at IS NULL').bind(body.staffId, orgId).first<{ id: string; name: string }>()
+      : null;
+  if (!to) return errorJson('staff_not_found', 404);
+  const row = await env.DB.prepare(
+    `UPDATE prep_tickets SET claimed_by_staff_id = ?, claimed_by_name = ?, claimed_at = ?, updated_at = ?, updated_by = ?
+     WHERE id = ? AND org_id = ? AND status <> 'delivered' RETURNING id, tab_id, status`
+  )
+    .bind(to.id, to.name, new Date().toISOString(), new Date().toISOString(), caller.who, ticketId, orgId)
+    .first<{ id: string; tab_id: string; status: TicketStatus }>();
+  if (!row) return errorJson('ticket_not_found', 404);
+  notifyTabsChanged(env, orgId, [row.tab_id]);
+  return json({ id: row.id, status: row.status, claimedBy: { id: to.id, name: to.name } });
 }
 
 // How long an order stays under "Klaar" on a pickup screen when nobody
@@ -238,6 +280,8 @@ export async function dispatchPrepTicketsRoute(request: Request, env: Env, pathn
   if (list && request.method === 'GET') return listStationTickets(request, env, list[1], decodeURIComponent(list[2]));
   const pickup = pathname.match(/^\/organizations\/([^/]+)\/stations\/([^/]+)\/pickup$/);
   if (pickup && request.method === 'GET') return listPickup(request, env, pickup[1], decodeURIComponent(pickup[2]));
+  const claim = pathname.match(/^\/organizations\/([^/]+)\/tickets\/([^/]+)\/claim$/);
+  if (claim && request.method === 'POST') return claimTicket(request, env, claim[1], decodeURIComponent(claim[2]));
   const one = pathname.match(/^\/organizations\/([^/]+)\/tickets\/([^/]+)$/);
   if (one && request.method === 'POST') return setTicketStatus(request, env, one[1], decodeURIComponent(one[2]));
   return null;

@@ -3,7 +3,7 @@
 // station's ticket turning ready — only paid (or on a tab), never twice,
 // within the daily maximum; the number gone once it's not needed.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { apiWith, DEVICE, payCash, rows, seedOrg, tabsPath, type TestOrg } from './helpers';
+import { apiWith, payCash, rows, seedOrg, type TestOrg } from './helpers';
 
 const CONFIG = { provider: 'twilio', accountSid: 'AC123', authToken: 'secret', sender: 'KABOUTERS', countries: ['+32', '+31'], dailyCap: 300 };
 const withSms = (overrides: Partial<typeof CONFIG> = {}) => ({ MESSAGING_CONFIG: JSON.stringify({ ...CONFIG, ...overrides }) });

@@ -9,6 +9,7 @@
 //
 // Credentials (API key + environment) are per-organization, configured in
 // the admin portal and stored encrypted in payment_provider_credentials.
+import { staffForSale } from '../staff';
 import { refuseUnlessOrgMember } from '../organizations/auth';
 import type { Env } from '../env';
 import { json } from '../http';
@@ -81,6 +82,9 @@ export async function createPayment(request: Request, env: Env): Promise<Respons
   const orgId = String(body.orgId);
   const refused = await refuseUnlessOrgMember(request, env, orgId);
   if (refused) return refused;
+  // The person handling it on a shared kassa (staff.ts).
+  const staff = await staffForSale(request, env, orgId);
+  if (staff instanceof Response) return staff;
 
   // Checked before calling Bancontact, so a refused tab payment never leaves
   // a provider-side payment behind (see tabs.ts's prepareTabCharge).
@@ -115,6 +119,8 @@ export async function createPayment(request: Request, env: Env): Promise<Respons
     deviceName: body.deviceName ? String(body.deviceName) : null,
     userName: request.headers.get('X-User-Name') || null,
     userEmail: request.headers.get('X-User-Email') || null,
+    staffId: staff?.id ?? null,
+    staffName: staff?.name ?? null,
     returnUrl: null,
   });
 }
@@ -140,6 +146,8 @@ export async function startBancontactPayment(
     deviceName: string | null;
     userName: string | null;
     userEmail: string | null;
+    staffId?: string | null;
+    staffName?: string | null;
     returnUrl: string | null;
   }
 ): Promise<Response> {
@@ -202,6 +210,8 @@ export async function startBancontactPayment(
       deviceName: p.deviceName,
       userName: p.userName,
       userEmail: p.userEmail,
+      staffId: p.staffId ?? null,
+      staffName: p.staffName ?? null,
       tabId,
       tipCents,
       splitPart,

@@ -21,6 +21,7 @@
 // catalogId) and is priced by the server from it — the kassa never sends a
 // price — with name/price/code/category/VAT copied in at sale time. Fooi is
 // a tip on the payment (charges.tip_cents), not a line.
+import { staffForSale } from './staff';
 import type { Env } from './env';
 import { json } from './http';
 import { codedError, errorBody, errorJson, type CodedError } from './errors';
@@ -46,6 +47,7 @@ interface TabRow {
   opened_device_id: string | null;
   opened_device_name: string | null;
   opened_by_name: string | null;
+  staff_name?: string | null;
   opened_by_email: string | null;
   opened_at: string;
   closed_at: string | null;
@@ -78,6 +80,7 @@ interface OrderRow {
   device_id: string | null;
   device_name: string | null;
   user_name: string | null;
+  staff_name?: string | null;
   user_email: string | null;
   submitted_at: string;
 }
@@ -108,6 +111,7 @@ interface TabChargeRow {
   tip_cents: number;
   device_name: string | null;
   user_name: string | null;
+  staff_name?: string | null;
   created_at: string;
   resolved_at: string | null;
 }
@@ -170,6 +174,8 @@ function rowToTabSummary(row: TabSummaryRow) {
     openedDeviceId: row.opened_device_id,
     openedDeviceName: row.opened_device_name,
     openedByName: row.opened_by_name,
+    // The person chosen on the device (staff), when there was one.
+    openedByStaff: row.staff_name ?? null,
     openedAt: row.opened_at,
     closedAt: row.closed_at,
     receiptNumber: row.receipt_number,
@@ -216,13 +222,30 @@ async function authorize(request: Request, env: Env, orgId: string): Promise<Res
 // Who/where an order or tab came from — user from the BFF's session headers
 // (never the body, a client could claim to be anyone), device from the body
 // (the same per-browser device id/name every charge already carries).
-function attribution(request: Request, body: { deviceId?: unknown; deviceName?: unknown }) {
+// The person on a shared device (staff.ts) from its signed X-Staff token —
+// refused here when the organisation requires one and none was chosen.
+async function attribution(request: Request, env: Env, orgId: string, body: { deviceId?: unknown; deviceName?: unknown }): Promise<Who | Response> {
+  const staff = await staffForSale(request, env, orgId);
+  if (staff instanceof Response) return staff;
   return {
     deviceId: body.deviceId ? String(body.deviceId).slice(0, 100) : null,
     deviceName: body.deviceName ? String(body.deviceName).slice(0, 100) : null,
     userName: request.headers.get('X-User-Name') || null,
     userEmail: request.headers.get('X-User-Email') || null,
+    staffId: staff?.id ?? null,
+    staffName: staff?.name ?? null,
   };
+}
+
+// Who did something: the device, the account it's signed in with, and the
+// person chosen on it (staff — not on a guest's self-order).
+export interface Who {
+  deviceId: string | null;
+  deviceName: string | null;
+  userName: string | null;
+  userEmail: string | null;
+  staffId?: string | null;
+  staffName?: string | null;
 }
 
 export interface LineInput {
@@ -381,10 +404,10 @@ async function loadTabDetail(env: Env, orgId: string, tabId: string) {
   if (!tab) return null;
 
   const [orders, lines, charges, paidUnits, follow] = await env.DB.batch([
-    env.DB.prepare('SELECT id, source, device_id, device_name, user_name, user_email, submitted_at FROM orders WHERE tab_id = ? ORDER BY submitted_at').bind(tabId),
+    env.DB.prepare('SELECT id, source, device_id, device_name, user_name, user_email, submitted_at, staff_name FROM orders WHERE tab_id = ? ORDER BY submitted_at').bind(tabId),
     env.DB.prepare('SELECT * FROM order_lines WHERE tab_id = ? ORDER BY created_at, rowid').bind(tabId),
     env.DB.prepare(
-      'SELECT id, method, status, amount_cents, tip_cents, device_name, user_name, created_at, resolved_at FROM charges WHERE tab_id = ? ORDER BY created_at'
+      'SELECT id, method, status, amount_cents, tip_cents, device_name, user_name, created_at, resolved_at, staff_name FROM charges WHERE tab_id = ? ORDER BY created_at'
     ).bind(tabId),
     env.DB.prepare(
       `SELECT cl.line_id, SUM(cl.quantity) AS quantity FROM charge_lines cl JOIN charges c ON c.id = cl.charge_id
@@ -417,6 +440,7 @@ async function loadTabDetail(env: Env, orgId: string, tabId: string) {
       deviceId: o.device_id,
       deviceName: o.device_name,
       userName: o.user_name,
+      staffName: o.staff_name ?? null,
       submittedAt: o.submitted_at,
     })),
     // paidQuantity: units already paid by an item payment (split per item).
@@ -429,6 +453,7 @@ async function loadTabDetail(env: Env, orgId: string, tabId: string) {
       tipCents: c.tip_cents,
       deviceName: c.device_name,
       userName: c.user_name,
+      staffName: c.staff_name ?? null,
       createdAt: c.created_at,
       resolvedAt: c.resolved_at,
     })),
@@ -572,7 +597,8 @@ async function createTab(request: Request, env: Env, orgId: string): Promise<Res
     ({ lines, catalogId } = prepared);
   }
 
-  const who = attribution(request, body);
+  const who = await attribution(request, env, orgId, body);
+  if (who instanceof Response) return who;
   const tabId = await openTab(env, { orgId, label, slotId: body.slotId ? String(body.slotId).slice(0, 100) : null, eventId, who, source: 'kassa', lines, catalogId, orderMode });
   return json(await loadTabDetail(env, orgId, tabId), 201);
 }
@@ -597,7 +623,7 @@ export async function openTab(
     label: string;
     slotId: string | null;
     eventId: string | null;
-    who: { deviceId: string | null; deviceName: string | null; userName: string | null; userEmail: string | null };
+    who: Who;
     source: 'kassa' | 'self_order';
     lines: LineInput[];
     catalogId: string | null;
@@ -632,11 +658,11 @@ export async function openTab(
   statements.push(
     env.DB.prepare(
       `INSERT INTO tabs (id, org_id, number, label, status, slot_id, event_id, opened_device_id, opened_device_name, opened_by_name, opened_by_email, opened_at,
-         event_number, source, order_token, pay_later, order_mode_id, order_mode_name)
-       SELECT ?, ?, value, ?, 'open', ?, ?, ?, ?, ?, ?, ?, (SELECT order_counter FROM events WHERE id = ?), ?, ?, ?, ?, ? FROM org_counters WHERE org_id = ? AND name = 'tab'`
+         event_number, source, order_token, pay_later, order_mode_id, order_mode_name, staff_id, staff_name)
+       SELECT ?, ?, value, ?, 'open', ?, ?, ?, ?, ?, ?, ?, (SELECT order_counter FROM events WHERE id = ?), ?, ?, ?, ?, ?, ?, ? FROM org_counters WHERE org_id = ? AND name = 'tab'`
     ).bind(
       tabId, orgId, o.label, o.slotId, eventId, who.deviceId, who.deviceName, who.userName, who.userEmail, now, eventId, o.source, newOrderToken(), o.payLater ? 1 : 0,
-      o.orderMode?.id ?? null, o.orderMode?.name ?? null, orgId
+      o.orderMode?.id ?? null, o.orderMode?.name ?? null, who.staffId ?? null, who.staffName ?? null, orgId
     )
   );
 
@@ -644,9 +670,9 @@ export async function openTab(
     const orderId = crypto.randomUUID();
     statements.push(
       env.DB.prepare(
-        `INSERT INTO orders (id, org_id, tab_id, source, catalog_id, device_id, device_name, user_name, user_email, submitted_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      ).bind(orderId, orgId, tabId, o.source, o.catalogId, who.deviceId, who.deviceName, who.userName, who.userEmail, now),
+        `INSERT INTO orders (id, org_id, tab_id, source, catalog_id, device_id, device_name, user_name, user_email, submitted_at, staff_id, staff_name)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(orderId, orgId, tabId, o.source, o.catalogId, who.deviceId, who.deviceName, who.userName, who.userEmail, now, who.staffId ?? null, who.staffName ?? null),
       ...lineInsertStatements(env, orgId, tabId, orderId, o.lines, now),
       ticketInsertStatement(env, orgId, tabId, orderId, now)
     );
@@ -681,7 +707,8 @@ async function addOrder(request: Request, env: Env, orgId: string, tabId: string
   if (typeof prepared === 'string' || 'code' in prepared) return json(errorBody(prepared), 400);
   const { lines, catalogId } = prepared;
 
-  const who = attribution(request, body);
+  const who = await attribution(request, env, orgId, body);
+  if (who instanceof Response) return who;
   if (!(await addOrderToTab(env, { orgId, tabId, lines, catalogId, source: 'kassa', who }))) return refusalResponse(env, orgId, tabId);
   return json(await loadTabDetail(env, orgId, tabId), 201);
 }
@@ -698,7 +725,7 @@ export async function addOrderToTab(
     lines: LineInput[];
     catalogId: string | null;
     source: 'kassa' | 'self_order';
-    who: { deviceId: string | null; deviceName: string | null; userName: string | null; userEmail: string | null };
+    who: Who;
   }
 ): Promise<boolean> {
   const { orgId, tabId, who } = o;
@@ -706,11 +733,11 @@ export async function addOrderToTab(
   const now = new Date().toISOString();
   const [orderResult] = await env.DB.batch([
     env.DB.prepare(
-      `INSERT INTO orders (id, org_id, tab_id, source, catalog_id, device_id, device_name, user_name, user_email, submitted_at)
-       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      `INSERT INTO orders (id, org_id, tab_id, source, catalog_id, device_id, device_name, user_name, user_email, submitted_at, staff_id, staff_name)
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
        WHERE EXISTS (SELECT 1 FROM tabs WHERE id = ? AND org_id = ? AND status = 'open')
          AND NOT EXISTS (SELECT 1 FROM charges WHERE tab_id = ? AND status = 'pending')`
-    ).bind(orderId, orgId, tabId, o.source, o.catalogId, who.deviceId, who.deviceName, who.userName, who.userEmail, now, tabId, orgId, tabId),
+    ).bind(orderId, orgId, tabId, o.source, o.catalogId, who.deviceId, who.deviceName, who.userName, who.userEmail, now, who.staffId ?? null, who.staffName ?? null, tabId, orgId, tabId),
     ...lineInsertStatements(env, orgId, tabId, orderId, o.lines, now),
     ticketInsertStatement(env, orgId, tabId, orderId, now),
   ]);
@@ -739,7 +766,8 @@ async function voidLine(request: Request, env: Env, orgId: string, tabId: string
   const quantity = body.quantity === undefined ? original.remaining : Number(body.quantity);
   if (!Number.isInteger(quantity) || quantity < 1) return errorJson('nothing_to_void', 409);
 
-  const who = attribution(request, body);
+  const who = await attribution(request, env, orgId, body);
+  if (who instanceof Response) return who;
   const orderId = crypto.randomUUID();
   const now = new Date().toISOString();
 
@@ -755,9 +783,9 @@ async function voidLine(request: Request, env: Env, orgId: string, tabId: string
 
   const [orderResult] = await env.DB.batch([
     env.DB.prepare(
-      `INSERT INTO orders (id, org_id, tab_id, source, device_id, device_name, user_name, user_email, submitted_at)
-       SELECT ?, ?, ?, 'kassa', ?, ?, ?, ?, ? WHERE ${voidable}`
-    ).bind(orderId, orgId, tabId, who.deviceId, who.deviceName, who.userName, who.userEmail, now, tabId, orgId, tabId, lineId, quantity, tabId, quantity, lineId, tabId),
+      `INSERT INTO orders (id, org_id, tab_id, source, device_id, device_name, user_name, user_email, submitted_at, staff_id, staff_name)
+       SELECT ?, ?, ?, 'kassa', ?, ?, ?, ?, ?, ?, ? WHERE ${voidable}`
+    ).bind(orderId, orgId, tabId, who.deviceId, who.deviceName, who.userName, who.userEmail, now, who.staffId ?? null, who.staffName ?? null, tabId, orgId, tabId, lineId, quantity, tabId, quantity, lineId, tabId),
     env.DB.prepare(
       `INSERT INTO order_lines (id, org_id, tab_id, order_id, item_code, variant_id, name, unit_price_cents, quantity, category, vat_rate_bp,
          prep_station_id, prep_station_name, voids_line_id, void_reason, created_at)

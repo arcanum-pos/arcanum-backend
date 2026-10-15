@@ -41,6 +41,9 @@ export interface ChargeRecord {
   tipCents: number;
   // Which part of the tab's "Gelijk verdelen" plan this pays (1-based; 0 = not a part).
   splitPart: number;
+  // Who handled it, on a shared device (staff.ts).
+  staffId?: string | null;
+  staffName?: string | null;
 }
 
 interface ChargeRow {
@@ -68,6 +71,8 @@ interface ChargeRow {
   tab_id: string | null;
   tip_cents: number;
   split_part?: number;
+  staff_id?: string | null;
+  staff_name?: string | null;
 }
 
 function rowToCharge(row: ChargeRow): ChargeRecord {
@@ -96,6 +101,8 @@ function rowToCharge(row: ChargeRow): ChargeRecord {
     tabId: row.tab_id,
     tipCents: row.tip_cents || 0,
     splitPart: row.split_part || 0,
+    staffId: row.staff_id ?? null,
+    staffName: row.staff_name ?? null,
   };
 }
 
@@ -131,6 +138,9 @@ export interface CreateChargeFields {
   // Per item: the units this payment covers — written with the charge, in
   // the same batch (see tabs.ts checkItemLines).
   lines?: { lineId: string; quantity: number }[];
+  // Who handles it, on a shared device (staff.ts).
+  staffId?: string | null;
+  staffName?: string | null;
 }
 
 // A tip (fooi) on a payment: an integer 0..100000 cents, part of the charged
@@ -151,8 +161,8 @@ export async function createCharge(env: Env, fields: CreateChargeFields): Promis
 
   const insertCharge = env.DB.prepare(
     `INSERT INTO charges
-      (id, org_id, method, status, provider_status, amount_cents, description, pos_terminal_id, items, slot_id, device_id, device_name, user_name, user_email, created_at, provider_ref, provider_data, expires_at, tab_id, tip_cents, split_part)
-     VALUES (?, ?, ?, 'pending', NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      (id, org_id, method, status, provider_status, amount_cents, description, pos_terminal_id, items, slot_id, device_id, device_name, user_name, user_email, created_at, provider_ref, provider_data, expires_at, tab_id, tip_cents, split_part, staff_id, staff_name)
+     VALUES (?, ?, ?, 'pending', NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       id,
@@ -173,7 +183,9 @@ export async function createCharge(env: Env, fields: CreateChargeFields): Promis
       fields.expiresAt || null,
       fields.tabId || null,
       fields.tipCents || 0,
-      fields.tabId && fields.splitPart ? fields.splitPart : 0
+      fields.tabId && fields.splitPart ? fields.splitPart : 0,
+      fields.staffId || null,
+      fields.staffName || null
     );
   const insertLines =
     fields.tabId && fields.lines?.length

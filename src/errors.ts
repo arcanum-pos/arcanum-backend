@@ -99,6 +99,16 @@ export const ERROR_TEXTS = {
   import_too_many_chunk_rows: 'Maximaal {max} rijen per stuk',
   import_not_abortable: 'Alleen een onafgewerkte import kan geannuleerd worden',
 
+  // --- Staff on shared devices (DOMAIN_MODEL.md, release B1) ---
+  staff_required: 'Kies eerst wie er werkt (bovenaan het scherm)',
+  staff_not_found: 'Medewerker niet gevonden',
+  staff_name_required: 'Geef de medewerker een naam',
+  staff_name_taken: 'Er is al een medewerker met die naam',
+  staff_pin_invalid: 'Een pincode heeft 4 tot 6 cijfers',
+  staff_pin_wrong: 'Verkeerde pincode',
+  staff_pin_too_many: 'Te veel verkeerde pincodes — wacht een minuut',
+  member_not_found: 'Lid niet gevonden',
+
   // --- Self-ordering and station screens (DOMAIN_MODEL.md) ---
   ticket_not_found: 'Bon niet gevonden',
   event_not_found: 'Evenement niet gevonden',

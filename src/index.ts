@@ -35,6 +35,7 @@ import { dispatchOrgTransferRoute } from './org-transfer';
 import { dispatchDemoOrgsRoute } from './demo-orgs';
 import { dispatchSelfOrderRoute } from './self-order';
 import { dispatchPrepTicketsRoute } from './prep-tickets';
+import { dispatchStaffRoute } from './staff';
 import { dispatchPublicDeviceRoute } from './devices';
 import { QueryBudgetExceeded, withQueryBudget } from './query-budget';
 
@@ -134,6 +135,8 @@ export default {
         if (tabsResponse) return tabsResponse;
         const ticketsResponse = await dispatchPrepTicketsRoute(request, env, url.pathname);
         if (ticketsResponse) return ticketsResponse;
+        const staffResponse = await dispatchStaffRoute(request, env, url.pathname);
+        if (staffResponse) return staffResponse;
         // Before the generic catalog routes, which would read 'import' as a catalog id.
         const importResponse = await dispatchCatalogImportRoute(request, env, url.pathname);
         if (importResponse) return importResponse;
