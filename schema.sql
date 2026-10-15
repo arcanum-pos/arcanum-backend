@@ -544,7 +544,9 @@ CREATE TABLE IF NOT EXISTS device_pairings (
   -- A customer display's kassa, linked on claim (migration 0024).
   link_to TEXT,
   -- A station screen's station (migration 0025).
-  station_id TEXT
+  station_id TEXT,
+  -- A station screen's kind (migration 0034): NULL = prep, 'pickup' = for guests.
+  view TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_device_pairings_code ON device_pairings(code_hash);
 CREATE INDEX IF NOT EXISTS idx_device_pairings_org ON device_pairings(org_id, created_at);
@@ -608,7 +610,9 @@ CREATE TABLE IF NOT EXISTS station_devices (
   terminal_id TEXT PRIMARY KEY,
   org_id TEXT NOT NULL REFERENCES organizations(id),
   station_id TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  -- NULL = the prep screen, 'pickup' = the pickup screen for guests (migration 0034).
+  view TEXT
 );
 
 -- --- Migration tracking ---
@@ -656,3 +660,4 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0030_self_order_link.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0031_tab_contact.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0032_kassa_modes.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0033_device_keys.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0034_pickup_screens.sql');

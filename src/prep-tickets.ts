@@ -11,6 +11,12 @@
 //
 //   GET  /organizations/:org/stations/:station/tickets[?delivered=1]   member, or that station's screen (its own key)
 //   POST /organizations/:org/tickets/:id { status }                    member, or that ticket's station's screen
+//   GET  /organizations/:org/stations/:station/pickup                  member, or any screen of that station
+//
+// A pickup screen (a station screen with view 'pickup', devices.ts — or the
+// station screen's own second window) shows guests only the order numbers:
+// it may read the pickup list, never the tickets (names, lines) and never
+// move one.
 //
 // Changes reach the station screens, the kassas and the "follow your order"
 // pages through one notification (devicehub-client.ts notifyTabChanged).
@@ -68,16 +74,20 @@ export async function cancelExpiredSelfOrders(env: Env, orgId: string): Promise<
 }
 
 // A member — or a station screen with its own key (device-keys.ts), for its
-// own station only (`stationId`: the station asked about).
-async function member(request: Request, env: Env, orgId: string, stationId?: string | (() => Promise<string | null>)): Promise<Response | { who: string }> {
+// own station only (`stationId`: the station asked about). A pickup screen
+// only where `pickup` says so (the pickup list).
+async function member(request: Request, env: Env, orgId: string, stationId?: string | (() => Promise<string | null>), pickup = false): Promise<Response | { who: string }> {
   const caller = extractCaller(request);
   if (!caller) {
     const device = stationId !== undefined ? await deviceCaller(request, env) : null;
     if (!device) return json({ error: 'Unauthorized' }, 401);
     if (device.role !== 'station' || device.orgId !== orgId) return json({ error: 'Forbidden' }, 403);
-    const own = await env.DB.prepare('SELECT station_id FROM station_devices WHERE terminal_id = ? AND org_id = ?').bind(device.terminalId, orgId).first<{ station_id: string }>();
+    const own = await env.DB.prepare('SELECT station_id, view FROM station_devices WHERE terminal_id = ? AND org_id = ?')
+      .bind(device.terminalId, orgId)
+      .first<{ station_id: string; view: string | null }>();
     const asked = typeof stationId === 'function' ? await stationId() : stationId;
     if (!own || !asked || own.station_id !== asked) return json({ error: 'Forbidden' }, 403);
+    if (own.view === 'pickup' && !pickup) return json({ error: 'Forbidden' }, 403);
     const name = await env.DB.prepare('SELECT name FROM prep_stations WHERE id = ?').bind(own.station_id).first<{ name: string }>();
     return { who: name?.name ? `Scherm ${name.name}` : 'Stationscherm' };
   }
@@ -191,10 +201,43 @@ async function setTicketStatus(request: Request, env: Env, orgId: string, ticket
   return json({ id: row.id, status: row.status, updatedAt: row.updated_at });
 }
 
-// Handles /organizations/:org/stations/:station/tickets and /organizations/:org/tickets/:id.
+// How long an order stays under "Klaar" on a pickup screen when nobody
+// marks it delivered.
+export const PICKUP_READY_MINUTES = 15;
+
+// The pickup screen's list: a station's orders as guests see them — only
+// their number, status and ordering mode; paid ones (or on a tab paid when
+// leaving), not delivered, a ready one for PICKUP_READY_MINUTES at most.
+async function listPickup(request: Request, env: Env, orgId: string, stationId: string): Promise<Response> {
+  const caller = await member(request, env, orgId, stationId, true);
+  if (caller instanceof Response) return caller;
+  await cancelExpiredSelfOrders(env, orgId);
+  const now = Date.now();
+  const since = new Date(now - STATION_WINDOW_HOURS * 3600_000).toISOString();
+  const readySince = new Date(now - PICKUP_READY_MINUTES * 60_000).toISOString();
+  const station = await env.DB.prepare('SELECT name FROM prep_stations WHERE id = ? AND org_id = ?').bind(stationId, orgId).first<{ name: string }>();
+  const { results } = await env.DB.prepare(
+    `SELECT t.status, t.updated_at, tabs.number, tabs.event_number, ${MODE_LABEL_SQL('tabs')} AS mode_label
+     FROM prep_tickets t JOIN tabs ON tabs.id = t.tab_id
+     WHERE t.org_id = ? AND t.station_id = ? AND t.created_at >= ?
+       AND (tabs.status = 'closed' OR (tabs.status = 'open' AND tabs.pay_later = 1))
+       AND (t.status IN ('ordered', 'in_progress') OR (t.status = 'ready' AND t.updated_at >= ?))
+     ORDER BY t.created_at, t.rowid LIMIT 200`
+  )
+    .bind(orgId, stationId, since, readySince)
+    .all<{ status: TicketStatus; updated_at: string; number: number; event_number: number | null; mode_label: string | null }>();
+  return json({
+    station: station?.name ?? '',
+    orders: (results || []).map((r) => ({ number: r.event_number ?? r.number, status: r.status, mode: r.mode_label, updatedAt: r.updated_at })),
+  });
+}
+
+// Handles /organizations/:org/stations/:station/tickets|pickup and /organizations/:org/tickets/:id.
 export async function dispatchPrepTicketsRoute(request: Request, env: Env, pathname: string): Promise<Response | null> {
   const list = pathname.match(/^\/organizations\/([^/]+)\/stations\/([^/]+)\/tickets$/);
   if (list && request.method === 'GET') return listStationTickets(request, env, list[1], decodeURIComponent(list[2]));
+  const pickup = pathname.match(/^\/organizations\/([^/]+)\/stations\/([^/]+)\/pickup$/);
+  if (pickup && request.method === 'GET') return listPickup(request, env, pickup[1], decodeURIComponent(pickup[2]));
   const one = pathname.match(/^\/organizations\/([^/]+)\/tickets\/([^/]+)$/);
   if (one && request.method === 'POST') return setTicketStatus(request, env, one[1], decodeURIComponent(one[2]));
   return null;

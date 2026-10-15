@@ -67,7 +67,14 @@ interface PairingRow {
   link_to: string | null;
   // A station screen's prep station (migration 0025).
   station_id: string | null;
+  // A station screen's kind: null = prep, 'pickup' = for guests (migration 0034).
+  view: StationView | null;
 }
+
+// A station screen shows the station's tickets to work on, or — a pickup
+// screen — only their numbers, to guests (read-only, prep-tickets.ts).
+export type StationView = 'pickup';
+const viewOf = (value: unknown): StationView | null => (value === 'pickup' ? 'pickup' : null);
 
 interface DeviceRow {
   terminal_id: string;
@@ -119,6 +126,7 @@ function pairingJson(row: PairingRow) {
     terminalId: row.terminal_id,
     linkTo: row.link_to,
     stationId: row.station_id,
+    view: row.view,
   };
 }
 
@@ -153,7 +161,7 @@ const COMPANION_KASSA: Record<string, string> = { nl: 'Kassa', fr: 'Caisse', en:
 async function createPairing(request: Request, env: Env, orgId: string): Promise<Response> {
   const caller = await memberOf(request, env, orgId, ADMIN);
   if (caller instanceof Response) return caller;
-  const body = (await request.json().catch(() => null)) as { role?: unknown; name?: unknown; linkTo?: unknown; stationId?: unknown } | null;
+  const body = (await request.json().catch(() => null)) as { role?: unknown; name?: unknown; linkTo?: unknown; stationId?: unknown; view?: unknown } | null;
   const role = String(body?.role ?? '');
   if (!ROLES.has(role)) return json({ error: "role must be 'pos', 'cfd' or 'station'" }, 400);
   const name = (typeof body?.name === 'string' ? body.name.trim() : '').slice(0, MAX_NAME);
@@ -171,7 +179,7 @@ async function createPairing(request: Request, env: Env, orgId: string): Promise
     stationId = typeof body?.stationId === 'string' && (await orgStation(env, orgId, body.stationId)) ? body.stationId : null;
     if (!stationId) return errorJson('station_not_found', 400);
   }
-  const { row, code } = await issuePairingCode(env, orgId, role as Role, name, who(caller), linkTo, stationId);
+  const { row, code } = await issuePairingCode(env, orgId, role as Role, name, who(caller), linkTo, stationId, role === 'station' ? viewOf(body?.view) : null);
   return json({ ...pairingJson(row), code }, 201);
 }
 
@@ -185,7 +193,8 @@ export async function issuePairingCode(
   name: string,
   createdBy: string,
   linkTo: string | null = null,
-  stationId: string | null = null
+  stationId: string | null = null,
+  view: StationView | null = null
 ): Promise<{ row: PairingRow; code: string }> {
   const code = newCode();
   const now = new Date();
@@ -203,11 +212,12 @@ export async function issuePairingCode(
     revoked_at: null,
     link_to: linkTo,
     station_id: stationId,
+    view,
   };
   await env.DB.batch([
     env.DB.prepare(
-      'INSERT INTO device_pairings (id, org_id, code_hash, role, name, created_by, created_at, expires_at, link_to, station_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-    ).bind(row.id, orgId, await sha256(code), row.role, name, row.created_by, row.created_at, row.expires_at, linkTo, stationId),
+      'INSERT INTO device_pairings (id, org_id, code_hash, role, name, created_by, created_at, expires_at, link_to, station_id, view) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    ).bind(row.id, orgId, await sha256(code), row.role, name, row.created_by, row.created_at, row.expires_at, linkTo, stationId, view),
     env.DB.prepare('DELETE FROM device_pairings WHERE created_at < ?').bind(new Date(now.getTime() - KEEP_DAYS * 86_400_000).toISOString()),
   ]);
   return { row, code: shownCode(code) };
@@ -308,8 +318,8 @@ async function completeClaim(env: Env, row: PairingRow, claimedBy: string, withK
   }
   // A station screen: which station it shows.
   if (row.role === 'station' && row.station_id) {
-    await env.DB.prepare('INSERT OR REPLACE INTO station_devices (terminal_id, org_id, station_id, updated_at) VALUES (?, ?, ?, ?)')
-      .bind(terminalId, row.org_id, row.station_id, now.toISOString())
+    await env.DB.prepare('INSERT OR REPLACE INTO station_devices (terminal_id, org_id, station_id, updated_at, view) VALUES (?, ?, ?, ?, ?)')
+      .bind(terminalId, row.org_id, row.station_id, now.toISOString(), row.view)
       .run();
   }
   // A customer display meant for a kassa: linked now — if that kassa is still there.
@@ -335,6 +345,7 @@ async function completeClaim(env: Env, row: PairingRow, claimedBy: string, withK
       name: row.name,
       linkedTo,
       stationId: row.station_id,
+      view: row.view,
       // The device's own key — arcanum-bff keeps it as a cookie and takes it out of this answer.
       ...(deviceKey ? { deviceKey } : {}),
     },
@@ -368,14 +379,14 @@ async function listDevices(request: Request, env: Env, orgId: string): Promise<R
   return json(Array.isArray(body) ? body.map((d: { terminal_id: string }) => ({ ...d, ...stations.get(d.terminal_id) })) : body);
 }
 
-// Station screens' stations: terminal id → { station_id, station_name }.
-async function stationsOfDevices(env: Env, orgId: string): Promise<Map<string, { station_id: string; station_name: string | null }>> {
+// Station screens' stations: terminal id → { station_id, station_name, view }.
+async function stationsOfDevices(env: Env, orgId: string): Promise<Map<string, { station_id: string; station_name: string | null; view: StationView | null }>> {
   const { results } = await env.DB.prepare(
-    'SELECT sd.terminal_id, sd.station_id, ps.name AS station_name FROM station_devices sd LEFT JOIN prep_stations ps ON ps.id = sd.station_id WHERE sd.org_id = ?'
+    'SELECT sd.terminal_id, sd.station_id, sd.view, ps.name AS station_name FROM station_devices sd LEFT JOIN prep_stations ps ON ps.id = sd.station_id WHERE sd.org_id = ?'
   )
     .bind(orgId)
-    .all<{ terminal_id: string; station_id: string; station_name: string | null }>();
-  return new Map((results || []).map((r) => [r.terminal_id, { station_id: r.station_id, station_name: r.station_name }]));
+    .all<{ terminal_id: string; station_id: string; station_name: string | null; view: string | null }>();
+  return new Map((results || []).map((r) => [r.terminal_id, { station_id: r.station_id, station_name: r.station_name, view: viewOf(r.view) }]));
 }
 
 async function orgStation(env: Env, orgId: string, stationId: string): Promise<boolean> {
@@ -397,15 +408,18 @@ async function getDevice(request: Request, env: Env, orgId: string, terminalId: 
 async function renameDevice(request: Request, env: Env, orgId: string, terminalId: string): Promise<Response> {
   const caller = await memberOf(request, env, orgId, MEMBER);
   if (caller instanceof Response) return caller;
-  const body = (await request.json().catch(() => null)) as { name?: unknown; stationId?: unknown } | null;
+  const body = (await request.json().catch(() => null)) as { name?: unknown; stationId?: unknown; view?: unknown } | null;
   const device = await orgDevice(env, orgId, terminalId);
   if (!device) return errorJson('device_not_found', 404);
-  // Another station for a station screen: admins only.
-  if (body?.stationId !== undefined) {
+  // Another station, or prep ↔ pickup, for a station screen: admins only.
+  if (body?.stationId !== undefined || body?.view !== undefined) {
     if (!(await requireOrgRole(env, orgId, caller, ADMIN))) return json({ error: 'Forbidden' }, 403);
-    if (device.role !== 'station' || typeof body.stationId !== 'string' || !(await orgStation(env, orgId, body.stationId))) return errorJson('station_not_found', 400);
-    await env.DB.prepare('INSERT OR REPLACE INTO station_devices (terminal_id, org_id, station_id, updated_at) VALUES (?, ?, ?, ?)')
-      .bind(terminalId, orgId, body.stationId, new Date().toISOString())
+    const current = (await stationsOfDevices(env, orgId)).get(terminalId);
+    const stationId = body.stationId !== undefined ? body.stationId : current?.station_id;
+    if (device.role !== 'station' || typeof stationId !== 'string' || !(await orgStation(env, orgId, stationId))) return errorJson('station_not_found', 400);
+    const view = body.view !== undefined ? viewOf(body.view) : (current?.view ?? null);
+    await env.DB.prepare('INSERT OR REPLACE INTO station_devices (terminal_id, org_id, station_id, updated_at, view) VALUES (?, ?, ?, ?, ?)')
+      .bind(terminalId, orgId, stationId, new Date().toISOString(), view)
       .run();
     if (body.name === undefined) return json({ ...device, ...(await stationsOfDevices(env, orgId)).get(terminalId) });
   }

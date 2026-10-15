@@ -162,6 +162,66 @@ describe("a station screen's key: its own station, nothing else", () => {
   });
 });
 
+describe('a pickup screen (ROADMAP.md §5): order numbers for guests, read-only', () => {
+  const paidAll = (org: TestOrg) => env.DB.prepare("UPDATE tabs SET status = 'closed' WHERE org_id = ?").bind(org.orgId).run();
+
+  it("paired as one: its station's numbers by status — never the tickets, never moving one", async () => {
+    const org = await seedOrg();
+    const v = await venue(org);
+    const pairing = await api('POST', `/organizations/${org.orgId}/device-pairings`, { user: org.admin, body: { role: 'station', name: 'Afhaal keuken', stationId: v.kitchen.id, view: 'pickup' } });
+    expect(pairing.body.view).toBe('pickup');
+    const paired = (await asDevice(null, 'POST', '/public/pair', { code: pairing.body.code })).body;
+    expect(paired).toMatchObject({ role: 'station', stationId: v.kitchen.id, view: 'pickup' });
+    const key = paired.deviceKey as string;
+    const o = `/organizations/${org.orgId}`;
+    expect((await asDevice(key, 'GET', `${o}/devices/${paired.terminalId}`)).body).toMatchObject({ station_id: v.kitchen.id, station_name: 'Keuken', view: 'pickup' });
+
+    // Unpaid: not received yet.
+    expect((await asDevice(key, 'GET', `${o}/stations/${v.kitchen.id}/pickup`)).body).toEqual({ station: 'Keuken', orders: [] });
+    await paidAll(org);
+    const list = await asDevice(key, 'GET', `${o}/stations/${v.kitchen.id}/pickup`);
+    expect(list.status).toBe(200);
+    expect(list.body.orders).toEqual([{ number: expect.any(Number), status: 'ordered', mode: null, updatedAt: expect.any(String) }]);
+    // Nothing more than that: no names, no lines.
+    expect(Object.keys(list.body.orders[0]).sort()).toEqual(['mode', 'number', 'status', 'updatedAt']);
+
+    // Read-only: not the tickets, not moving one, not another station's numbers.
+    expect((await asDevice(key, 'GET', `${o}/stations/${v.kitchen.id}/tickets`)).status).toBe(403);
+    expect((await asDevice(key, 'POST', `${o}/tickets/${v.kitchenTicket}`, { status: 'ready' })).status).toBe(403);
+    expect((await asDevice(key, 'GET', `${o}/stations/${v.bar.id}/pickup`)).status).toBe(403);
+  });
+
+  it("the station screen's own second window: the same key reads the pickup list too", async () => {
+    const org = await seedOrg();
+    const v = await venue(org);
+    await paidAll(org);
+    const key = (await asDevice(null, 'POST', '/public/pair', { code: await code(org, { role: 'station', name: 'Scherm keuken', stationId: v.kitchen.id }) })).body.deviceKey;
+    const o = `/organizations/${org.orgId}`;
+    expect((await asDevice(key, 'GET', `${o}/stations/${v.kitchen.id}/pickup`)).body.orders.map((x: any) => x.status)).toEqual(['ordered']);
+    // In progress, ready: it follows; delivered — or ready for too long — and it's gone.
+    await asDevice(key, 'POST', `${o}/tickets/${v.kitchenTicket}`, { status: 'ready' });
+    expect((await asDevice(key, 'GET', `${o}/stations/${v.kitchen.id}/pickup`)).body.orders.map((x: any) => x.status)).toEqual(['ready']);
+    await env.DB.prepare('UPDATE prep_tickets SET updated_at = ? WHERE id = ?').bind(new Date(Date.now() - 16 * 60_000).toISOString(), v.kitchenTicket).run();
+    expect((await asDevice(key, 'GET', `${o}/stations/${v.kitchen.id}/pickup`)).body.orders).toEqual([]);
+    // A member may look too (the console).
+    expect((await api('GET', `${o}/stations/${v.kitchen.id}/pickup`, { user: org.cashier })).status).toBe(200);
+  });
+
+  it('switched between prep and pickup in the console (admins), keeping its station', async () => {
+    const org = await seedOrg();
+    const v = await venue(org);
+    const paired = (await asDevice(null, 'POST', '/public/pair', { code: await code(org, { role: 'station', name: 'Scherm keuken', stationId: v.kitchen.id }) })).body;
+    const o = `/organizations/${org.orgId}`;
+    expect((await api('PATCH', `${o}/devices/${paired.terminalId}`, { user: org.cashier, body: { view: 'pickup' } })).status).toBe(403);
+    const changed = await api('PATCH', `${o}/devices/${paired.terminalId}`, { user: org.admin, body: { view: 'pickup' } });
+    expect(changed.body).toMatchObject({ station_id: v.kitchen.id, view: 'pickup' });
+    expect((await asDevice(paired.deviceKey, 'GET', `${o}/stations/${v.kitchen.id}/tickets`)).status).toBe(403);
+    // Another station keeps it a pickup screen.
+    expect((await api('PATCH', `${o}/devices/${paired.terminalId}`, { user: org.admin, body: { stationId: v.bar.id } })).body).toMatchObject({ station_id: v.bar.id, view: 'pickup' });
+    expect((await api('PATCH', `${o}/devices/${paired.terminalId}`, { user: org.admin, body: { view: null } })).body.view).toBeNull();
+  });
+});
+
 describe("a customer display's key: its kassa's payments, nothing else", () => {
   it("follows a payment of the kassa it's linked to — not another kassa's", async () => {
     const org = await seedOrg();
