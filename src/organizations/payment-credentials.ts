@@ -48,7 +48,11 @@ export async function listPaymentCredentials(request: Request, env: Env, orgId: 
   for (const item of out) {
     if (item.provider !== 'sumup') continue;
     const config = await getDecryptedPaymentCredential(env, orgId, 'sumup');
-    Object.assign(item, { account: config?.confirmedAt ? { merchantId: String(config.merchantId), name: (config.accountName as string) ?? null, sandbox: typeof config.sandbox === 'boolean' ? config.sandbox : null } : null });
+    Object.assign(item, {
+      account: config?.confirmedAt ? { merchantId: String(config.merchantId), name: (config.accountName as string) ?? null, sandbox: typeof config.sandbox === 'boolean' ? config.sandbox : null } : null,
+      // Tap to Pay through the SumUp app: the app id the affiliate key is for (null: not set up).
+      tapToPay: config?.affiliateKey ? { appId: String(config.appId ?? '') } : null,
+    });
   }
   return json(out);
 }
@@ -86,9 +90,16 @@ export async function setPaymentCredential(request: Request, env: Env, orgId: st
     const checked = await checkSumupAccount(merchantId, apiKey);
     if (!checked.ok) return errorJson('sumup_key_refused', 400, { detail: checked.detail });
     if (config.confirmMerchantId !== merchantId) return errorJson('sumup_confirm_account', 409, { account: { merchantId, name: checked.account.name, sandbox: checked.account.sandbox } });
-    config = { merchantId, apiKey, accountName: checked.account.name, sandbox: checked.account.sandbox, confirmedAt: new Date().toISOString() };
+    // Tap to Pay's affiliate key (setSumupTapToPay below) stays.
+    const previous = await getDecryptedPaymentCredential(env, orgId, 'sumup');
+    const app = previous?.affiliateKey ? { affiliateKey: previous.affiliateKey, appId: previous.appId } : {};
+    config = { merchantId, apiKey, accountName: checked.account.name, sandbox: checked.account.sandbox, confirmedAt: new Date().toISOString(), ...app };
   }
 
+  return storeCredential(env, orgId, provider, config);
+}
+
+async function storeCredential(env: Env, orgId: string, provider: PaymentProvider, config: Record<string, unknown>): Promise<Response> {
   const dek = await getOrgDataKey(env, orgId);
   if (!dek) return json({ error: 'Unknown organization' }, 404);
 
@@ -107,6 +118,29 @@ export async function setPaymentCredential(request: Request, env: Env, orgId: st
     .run();
 
   return json({ provider, configured: true, updatedAt: now });
+}
+
+// Tap to Pay through the SumUp app (payments/sumup.ts): the affiliate key
+// the admin made in SumUp (Settings → For Developers → Affiliate Keys) and
+// the app identifier entered there. Added to the saved SumUp account, which
+// must exist; an empty key turns Tap to Pay off again.
+export async function setSumupTapToPay(request: Request, env: Env, orgId: string): Promise<Response> {
+  const caller = extractCaller(request);
+  if (!caller) return json({ error: 'Unauthorized' }, 401);
+  if (!(await requireOrgRole(env, orgId, caller, ['admin']))) return json({ error: 'Forbidden' }, 403);
+  const body = (await request.json().catch(() => null)) as { affiliateKey?: unknown; appId?: unknown } | null;
+  const affiliateKey = typeof body?.affiliateKey === 'string' ? body.affiliateKey.trim() : '';
+  const appId = typeof body?.appId === 'string' ? body.appId.trim() : '';
+  const config = await getDecryptedPaymentCredential(env, orgId, 'sumup');
+  if (!config?.apiKey) return errorJson('sumup_not_configured', 409);
+  if (!affiliateKey) {
+    delete config.affiliateKey;
+    delete config.appId;
+  } else {
+    if (!/^[A-Za-z0-9_-]{8,128}$/.test(affiliateKey) || !/^[A-Za-z0-9._-]{1,128}$/.test(appId)) return errorJson('sumup_affiliate_key_invalid', 400);
+    Object.assign(config, { affiliateKey, appId });
+  }
+  return storeCredential(env, orgId, 'sumup', config);
 }
 
 // Internal use only (e.g. by payment processing when it needs the actual

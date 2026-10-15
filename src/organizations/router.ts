@@ -1,7 +1,7 @@
 import type { Env } from '../env';
 import { createOrganization, listMyOrganizations, listMyMemberships, getOrganization, updateBranding } from './organizations';
 import { listMembers, inviteMember, updateMemberRole, removeMember } from './members';
-import { listPaymentCredentials, setPaymentCredential } from './payment-credentials';
+import { listPaymentCredentials, setPaymentCredential, setSumupTapToPay } from './payment-credentials';
 import { testInstallationMail } from './mail';
 import { listEvents, createEvent, createOrderMode, deleteOrderMode, newEventSelfOrderCode, resetEventNumbers, updateEvent, updateOrderMode } from './events';
 import { getOrgLocale, setOrgLocale } from './locale';
@@ -75,6 +75,9 @@ export async function dispatchOrganizationsRoute(request: Request, env: Env, pat
   if (credsMatch && request.method === 'GET') {
     return listPaymentCredentials(request, env, credsMatch[1]);
   }
+
+  const tapMatch = pathname.match(/^\/organizations\/([^/]+)\/payment-credentials\/sumup\/tap-to-pay$/);
+  if (tapMatch && request.method === 'PUT') return setSumupTapToPay(request, env, tapMatch[1]);
 
   const credMatch = pathname.match(/^\/organizations\/([^/]+)\/payment-credentials\/([^/]+)$/);
   if (credMatch && request.method === 'PUT') {

@@ -25,7 +25,7 @@ import { getDecryptedPaymentCredential } from '../organizations/payment-credenti
 import { deviceCaller } from '../device-keys';
 import { callDeviceHub } from '../devicehub-client';
 import { extractCaller, refuseUnlessOrgMember, requireOrgRole } from '../organizations/auth';
-import { createSumupReaderCheckout, SumupCloudApiError, listSumupReaders, pairSumupReader, removeSumupReader } from './sumup-cloud-api';
+import { createSumupReaderCheckout, findSumupTransaction, SumupCloudApiError, listSumupReaders, pairSumupReader, removeSumupReader } from './sumup-cloud-api';
 import { createCharge, getCharge, parseTipCents, setChargeProviderRef, resolveCharge, type ChargeRecord } from './charges';
 import { ensureChargePolling } from './charge-poller-client';
 import { customerOrder, isPendingTabChargeConflict, prepareTabCharge } from '../tabs';
@@ -44,14 +44,16 @@ export async function listSumupReadersForOrg(request: Request, env: Env): Promis
   const merchantId = credential?.merchantId ? String(credential.merchantId) : '';
   const apiKey = credential?.apiKey ? String(credential.apiKey) : '';
   if (!merchantId || !apiKey) {
-    return json({ configured: false, readers: [] });
+    return json({ configured: false, readers: [], tapToPay: false });
   }
+  // Tap to Pay through the SumUp app: an affiliate key is set.
+  const tapToPay = Boolean(credential?.affiliateKey);
 
   try {
     const readers = await listSumupReaders(merchantId, apiKey);
-    return json({ configured: true, readers });
+    return json({ configured: true, readers, tapToPay });
   } catch (err) {
-    return providerErrorJson('sumup_readers_failed', err instanceof SumupCloudApiError ? err.message : null, 502, { configured: true, readers: [] });
+    return providerErrorJson('sumup_readers_failed', err instanceof SumupCloudApiError ? err.message : null, 502, { configured: true, readers: [], tapToPay });
   }
 }
 
@@ -126,6 +128,8 @@ interface CreateChargeBody {
   // Per item: [{ lineId, quantity }] — the units this payment covers.
   lines?: unknown;
   registerId?: unknown;
+  // Tap to Pay on this phone through the SumUp app (see sumupApp below).
+  app?: unknown;
 }
 
 export async function createSumupCharge(request: Request, env: Env): Promise<Response> {
@@ -152,6 +156,15 @@ export async function createSumupCharge(request: Request, env: Env): Promise<Res
   // On a register: its open shift (none open: refused).
   const shiftId = await shiftForSale(env, orgId, body.registerId);
   if (shiftId instanceof Response) return shiftId;
+
+  // Tap to Pay through the SumUp app: the org's affiliate key, for the link.
+  const app = method === 'sumup' && body.app === true;
+  let sumupApp: { affiliateKey: string; appId: string } | null = null;
+  if (app) {
+    const credential = await getDecryptedPaymentCredential(env, orgId, 'sumup');
+    if (!credential?.apiKey || !credential.affiliateKey) return errorJson('sumup_app_not_configured', 409);
+    sumupApp = { affiliateKey: String(credential.affiliateKey), appId: String(credential.appId ?? '') };
+  }
 
   const tipCents = parseTipCents(body.tipCents);
   if (tipCents === null || tipCents > amountCents) return json({ error: 'tipCents must be an integer between 0 and 100000, and not more than the amount' }, 400);
@@ -192,6 +205,8 @@ export async function createSumupCharge(request: Request, env: Env): Promise<Res
       tipCents,
       splitPart: body.splitPart === true ? splitPart : 0,
       lines,
+      // The waiter goes to the SumUp app and back: more time than at a reader.
+      expiresAt: app ? new Date(Date.now() + APP_CHARGE_TTL_MS).toISOString() : null,
     });
   } catch (err) {
     if (isPendingTabChargeConflict(err)) return errorJson('tab_payment_already_pending', 409);
@@ -200,7 +215,10 @@ export async function createSumupCharge(request: Request, env: Env): Promise<Res
 
   // A dispatch that fails resolves the charge (failed) right away, and
   // resolveCharge already tells the org's kassas about the tab then.
-  const resolved = method === 'sumup' && body.readerId ? await dispatchToReader(env, charge, String(body.readerId)) : false;
+  const resolved = method === 'sumup' && body.readerId && !app ? await dispatchToReader(env, charge, String(body.readerId)) : false;
+  // The charge's own id is the payment's foreign id at SumUp: the poller
+  // looks it up there (provider_ref set: it's polled).
+  if (app) await setChargeProviderRef(env, charge.id, charge.id, { app: true });
   if (tabId && !resolved) notifyTabChanged(env, orgId, tabId);
 
   // Unconditional — not just on a successful reader dispatch. This is what
@@ -218,7 +236,60 @@ export async function createSumupCharge(request: Request, env: Env): Promise<Res
     await broadcastPaymentEvent(env, posTerminalId, 'payment_updated', { payment_id: charge.id, method });
   }
 
-  return json({ chargeId: charge.id }, 201);
+  return json({ chargeId: charge.id, ...(sumupApp ? { sumupApp } : {}) }, 201);
+}
+
+const APP_CHARGE_TTL_MS = 10 * 60 * 1000;
+
+// Tap to Pay through the SumUp app ("Payment Switch", developer.sumup.com):
+// the waiter's page opens the app with the amount and our charge id as the
+// foreign transaction id; the app takes the card and opens our page again
+// with smp-status. That status is never believed by itself — SumUp's own
+// record of the transaction decides (also what the poller does).
+// `reportedFailed`: the app said it failed; with no transaction at SumUp
+// at all, nothing was paid — the charge fails right away.
+export async function checkSumupAppCharge(env: Env, charge: ChargeRecord, reportedFailed = false): Promise<void> {
+  const credential = await getDecryptedPaymentCredential(env, charge.orgId, 'sumup');
+  const merchantId = credential?.merchantId ? String(credential.merchantId) : '';
+  const apiKey = credential?.apiKey ? String(credential.apiKey) : '';
+  if (!merchantId || !apiKey) return;
+  const tx = await findSumupTransaction(merchantId, apiKey, charge.id);
+  if (!tx) {
+    if (reportedFailed) await resolveCharge(env, charge.id, { success: false, providerStatus: 'failed', errorMessage: 'Niet betaald in de SumUp-app' });
+    return;
+  }
+  if (tx.status === 'SUCCESSFUL') {
+    const right = tx.amountCents === charge.amountCents && tx.currency === 'EUR';
+    await resolveCharge(env, charge.id, {
+      success: right,
+      providerStatus: tx.status,
+      transactionCode: tx.transactionCode,
+      errorMessage: right ? null : `Bedrag bij SumUp (${tx.amountCents} cent ${tx.currency}) klopt niet met de betaling`,
+    });
+  } else if (tx.status === 'FAILED' || tx.status === 'CANCELLED') {
+    await resolveCharge(env, charge.id, { success: false, providerStatus: tx.status, transactionCode: tx.transactionCode });
+  }
+}
+
+// The waiter's page, back from the SumUp app: check it now rather than at
+// the poller's next round. A member of the charge's org only.
+export async function postSumupAppReturn(request: Request, env: Env): Promise<Response> {
+  if (!extractCaller(request)) return json({ error: 'Unauthorized' }, 401);
+  const body = (await request.json().catch(() => ({}))) as { chargeId?: unknown; status?: unknown };
+  const charge = typeof body.chargeId === 'string' ? await getCharge(env, body.chargeId) : null;
+  if (!charge || charge.method !== 'sumup' || !(charge.providerData as { app?: boolean }).app) return json({ error: 'Unknown chargeId' }, 404);
+  const refused = await refuseUnlessOrgMember(request, env, charge.orgId);
+  if (refused) return refused;
+  if (charge.status === 'pending') {
+    try {
+      await checkSumupAppCharge(env, charge, body.status === 'failed');
+    } catch (err) {
+      // SumUp unreachable: the poller tries again.
+      console.error(`Kon SumUp-transactie niet opvragen voor ${charge.id}`, err);
+    }
+  }
+  const current = await getCharge(env, charge.id);
+  return chargeStatusResponse(env, current ?? charge);
 }
 
 // True when the dispatch failed and the charge was resolved (as failed) here.

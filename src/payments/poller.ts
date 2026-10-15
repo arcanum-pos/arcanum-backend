@@ -20,6 +20,7 @@ import type { Env } from '../env';
 import { expireStaleCharges, listPendingChargesForPolling, resolveCharge, type ChargeRecord } from './charges';
 import { getSumupReaderCheckoutStatus } from './sumup-cloud-api';
 import { getDecryptedPaymentCredential } from '../organizations/payment-credentials';
+import { checkSumupAppCharge } from './sumup';
 import { getBancontactPaymentStatus, BANCONTACT_TERMINAL_STATUSES } from './bancontact';
 
 const POLL_INTERVAL_MS = 30 * 1000;
@@ -115,6 +116,8 @@ async function pollCharge(env: Env, charge: ChargeRecord): Promise<void> {
 }
 
 async function pollSumup(env: Env, charge: ChargeRecord): Promise<void> {
+  // Tap to Pay through the SumUp app: looked up by our charge id.
+  if ((charge.providerData as { app?: boolean }).app) return checkSumupAppCharge(env, charge);
   const readerId = (charge.providerData as { readerId?: string }).readerId;
   if (!charge.providerRef || !readerId) return;
 

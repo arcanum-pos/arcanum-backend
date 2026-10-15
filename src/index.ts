@@ -25,7 +25,7 @@ export type { Env };
 
 import { json, CORS_HEADERS } from './http';
 import { createPayment, postBancontactCallback } from './payments/bancontact';
-import { createSumupCharge, postSumupCallback, confirmChargeFromPos, getSumupStatus, listSumupReadersForOrg, pairSumupReaderForOrg, removeSumupReaderForOrg } from './payments/sumup';
+import { createSumupCharge, postSumupAppReturn, postSumupCallback, confirmChargeFromPos, getSumupStatus, listSumupReadersForOrg, pairSumupReaderForOrg, removeSumupReaderForOrg } from './payments/sumup';
 import { ChargePoller } from './payments/poller';
 import { createTransaction, listTransactions } from './transactions';
 import { dispatchOrganizationsRoute } from './organizations/router';
@@ -64,6 +64,9 @@ export default {
         return await createSumupCharge(request, env);
       }
 
+      if (request.method === 'POST' && url.pathname === '/sumup/app-return') {
+        return await postSumupAppReturn(request, env);
+      }
       if (request.method === 'POST' && url.pathname === '/sumup/confirm') {
         return await confirmChargeFromPos(request, env);
       }

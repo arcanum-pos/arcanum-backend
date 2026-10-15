@@ -154,3 +154,33 @@ export async function checkSumupAccount(
   }
   return { ok: true, account: { merchantCode, name, sandbox } };
 }
+
+// Tap to Pay through the SumUp app (sumup.ts, "Payment Switch"): the app
+// takes the card and reports back by URL — never trusted by itself; the
+// transaction with our charge id as its foreign id is looked up here.
+// null: SumUp has no such transaction (yet).
+export interface SumupTransaction {
+  status: 'SUCCESSFUL' | 'CANCELLED' | 'FAILED' | 'PENDING' | 'REFUNDED' | string;
+  amountCents: number;
+  currency: string;
+  transactionCode: string | null;
+}
+
+export async function findSumupTransaction(merchantCode: string, apiKey: string, foreignId: string): Promise<SumupTransaction | null> {
+  try {
+    const response = await sumupFetch(
+      `/v2.1/merchants/${encodeURIComponent(merchantCode)}/transactions?foreign_transaction_id=${encodeURIComponent(foreignId)}`,
+      apiKey
+    );
+    const data = (await response.json()) as { status?: string; amount?: number; currency?: string; transaction_code?: string | null };
+    return {
+      status: String(data.status ?? ''),
+      amountCents: Math.round(Number(data.amount ?? 0) * 100),
+      currency: String(data.currency ?? ''),
+      transactionCode: data.transaction_code ?? null,
+    };
+  } catch (err) {
+    if (err instanceof SumupCloudApiError && err.status === 404) return null;
+    throw err;
+  }
+}
