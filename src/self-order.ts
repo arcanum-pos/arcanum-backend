@@ -312,7 +312,8 @@ async function addRound(request: Request, env: Env, token: string): Promise<Resp
     .bind(token)
     .first<{ id: string; org_id: string; status: string; source: string; pay_later: number; catalog_id: string | null; self_order_enabled: number | null }>();
   if (!tab) return errorJson('order_not_found', 404);
-  if (tab.source !== 'self_order' || !tab.pay_later || !tab.self_order_enabled || !tab.catalog_id) return errorJson('self_order_closed', 409);
+  // A guest's own tab — or a table's (release C, T3: its QR lets the guests order on it).
+  if ((tab.source !== 'self_order' && tab.source !== 'table') || !tab.pay_later || !tab.self_order_enabled || !tab.catalog_id) return errorJson('self_order_closed', 409);
   if (tab.status !== 'open') return errorJson('tab_not_open', 409);
 
   const body = (await request.json().catch(() => ({}))) as { lines?: unknown };

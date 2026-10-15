@@ -117,12 +117,19 @@ export const EXPORT_TABLES: TableSpec[] = [
   // After the events: an event's ordering modes, each naming its menu.
   {
     table: 'event_order_modes',
-    columns: ['id', 'event_id', 'name', 'position', 'catalog_id', 'self_order', 'kassa', 'pay_counter', 'pay_bancontact', 'tabs', 'created_at', 'notify_sms', 'tab_contact'],
+    columns: ['id', 'event_id', 'name', 'position', 'catalog_id', 'self_order', 'kassa', 'pay_counter', 'pay_bancontact', 'tabs', 'created_at', 'notify_sms', 'tab_contact', 'at_table'],
     excluded: ORG,
     remap: ['id', 'event_id', 'catalog_id'],
     orderBy: 'event_id, position, rowid',
   },
   { table: 'org_counters', columns: ['name', 'value'], excluded: ORG, remap: [], orderBy: 'name' },
+  {
+    table: 'tables',
+    columns: ['id', 'name', 'zone', 'position', 'cleared_at', 'created_at', 'archived_at'],
+    excluded: { ...ORG, qr_token: "this installation's QR address — a new one is made when the tables are listed" },
+    remap: ['id'],
+    orderBy: 'position, rowid',
+  },
   { table: 'registers', columns: ['id', 'name', 'created_at', 'archived_at'], excluded: ORG, remap: ['id'], orderBy: 'created_at, rowid' },
   {
     table: 'shifts',
@@ -147,13 +154,13 @@ export const EXPORT_TABLES: TableSpec[] = [
     columns: [
       'id', 'number', 'label', 'status', 'slot_id', 'event_id', 'opened_device_id', 'opened_device_name', 'opened_by_name', 'opened_by_email',
       'opened_at', 'closed_at', 'receipt_number', 'cancel_reason', 'split_parts', 'split_paid', 'event_number', 'source', 'pay_later',
-      'order_mode_id', 'order_mode_name', 'staff_id', 'staff_name',
+      'order_mode_id', 'order_mode_name', 'staff_id', 'staff_name', 'table_id',
     ],
     excluded: { ...ORG, order_token: "a follow-your-order page of this installation", notify_phone: "a guest's number, kept only until their order is ready",
       contact_phone: "a guest's contact, kept only while the tab is open",
       contact_email: "a guest's contact, kept only while the tab is open",
     },
-    remap: ['id', 'event_id', 'order_mode_id', 'staff_id'],
+    remap: ['id', 'event_id', 'order_mode_id', 'staff_id', 'table_id'],
     orderBy: 'number',
   },
   {

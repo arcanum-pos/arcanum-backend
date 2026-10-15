@@ -1,4 +1,5 @@
-export type OrgRole = 'admin' | 'cashier';
+// 'waiter' = Bediening (release C): the waiter screen only (T6).
+export type OrgRole = 'admin' | 'cashier' | 'waiter';
 export type MembershipStatus = 'pending' | 'active';
 
 export interface CallerIdentity {

@@ -17,7 +17,7 @@
 import type { Env } from './env';
 import { json } from './http';
 import { errorJson } from './errors';
-import { extractCaller, requireOrgRole } from './organizations/auth';
+import { extractCaller, requireOrgRole, SERVICE_ROLES } from './organizations/auth';
 import { jsonRowsStatement, present } from './sql-json';
 
 // --- Rows ---
@@ -936,7 +936,7 @@ export async function sellableCatalog(env: Env, orgId: string, catalogIdOrDefaul
 async function authorize(request: Request, env: Env, orgId: string, write: boolean): Promise<Response | null> {
   const caller = extractCaller(request);
   if (!caller) return json({ error: 'Unauthorized' }, 401);
-  const membership = await requireOrgRole(env, orgId, caller, write ? ['admin'] : ['admin', 'cashier']);
+  const membership = await requireOrgRole(env, orgId, caller, write ? ['admin'] : SERVICE_ROLES);
   if (!membership) return json({ error: 'Forbidden' }, 403);
   return null;
 }

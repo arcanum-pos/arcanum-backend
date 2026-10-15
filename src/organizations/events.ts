@@ -13,7 +13,7 @@
 //                                                                       linkName? (the name in its readable link),
 //                                                                       kassaModes? (the kassa picks an ordering mode) }
 //   POST   /organizations/:org/events/:id/modes                admin  { name, catalogId?, selfOrder?,
-//                                                                       payAtCounter?, payBancontact?, tabs?, tabContact?, notifySms? }
+//                                                                       payAtCounter?, payBancontact?, tabs?, tabContact?, notifySms?, atTable? }
 //   PATCH  /organizations/:org/events/:id/modes/:mode          admin  { the same, all optional, move?: 'up' | 'down' }
 //   DELETE /organizations/:org/events/:id/modes/:mode          admin
 //   POST   /organizations/:org/events/:id/self-order-code      admin  a new code (the old URL/QR stops working)
@@ -24,7 +24,7 @@
 import type { Env } from '../env';
 import { codedError, errorJson } from '../errors';
 import { json } from '../http';
-import { extractCaller, requireOrgRole } from './auth';
+import { extractCaller, requireOrgRole, SERVICE_ROLES } from './auth';
 import { getDecryptedPaymentCredential } from './payment-credentials';
 import { smsConfig } from '../messaging';
 
@@ -56,6 +56,8 @@ export interface OrderModeRow {
   created_at: string;
   notify_sms: number;
   tab_contact: number;
+  // Used at the table by waiters (release C, T2): its menu is theirs.
+  at_table?: number;
 }
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -77,6 +79,8 @@ function rowToMode(row: OrderModeRow) {
     tabContact: !!row.tab_contact,
     // An SMS to the guest when a station's part is ready (MESSAGING.md).
     notifySms: !!row.notify_sms,
+    // Waiters take orders at the table with it (its menu).
+    atTable: !!row.at_table,
   };
 }
 
@@ -242,7 +246,7 @@ async function makeSelfOrderMode(env: Env, orgId: string, eventId: string): Prom
   return true;
 }
 
-type ModeBody = Partial<Record<'name' | 'catalogId' | 'selfOrder' | 'payAtCounter' | 'payBancontact' | 'tabs' | 'tabContact' | 'notifySms' | 'move', unknown>>;
+type ModeBody = Partial<Record<'name' | 'catalogId' | 'selfOrder' | 'payAtCounter' | 'payBancontact' | 'tabs' | 'tabContact' | 'notifySms' | 'atTable' | 'move', unknown>>;
 
 // A mode's fields from a request body over what it was: a Response when refused.
 async function applyModeBody(env: Env, orgId: string, mode: OrderModeRow, body: ModeBody): Promise<OrderModeRow | Response> {
@@ -266,10 +270,16 @@ async function applyModeBody(env: Env, orgId: string, mode: OrderModeRow, body: 
   next.tabs = flag(body.tabs, next.tabs);
   next.notify_sms = flag(body.notifySms, next.notify_sms);
   next.tab_contact = flag(body.tabContact, next.tab_contact);
+  next.at_table = flag(body.atTable, next.at_table ?? 0);
   if (body.notifySms === true && !smsConfig(env)) return errorJson('sms_not_configured', 400);
   // With the QR: a menu to order from (no menu: not with the QR).
   if (body.selfOrder === true && !next.catalog_id) return errorJson('self_order_needs_menu', 400);
-  if (!next.catalog_id) next.self_order = 0;
+  // At the table too: waiters order from its menu.
+  if (body.atTable === true && !next.catalog_id) return errorJson('self_order_needs_menu', 400);
+  if (!next.catalog_id) {
+    next.self_order = 0;
+    next.at_table = 0;
+  }
   if (!next.pay_counter && !next.pay_bancontact) return errorJson('self_order_needs_payment', 400);
   // Bancontact only for an org that has it set up (Instellingen → Betalingen).
   if (body.payBancontact === true && !(await getDecryptedPaymentCredential(env, orgId, 'bancontact'))?.apiKey) return errorJson('bancontact_not_configured', 400);
@@ -307,15 +317,16 @@ export async function createOrderMode(request: Request, env: Env, orgId: string,
     created_at: new Date().toISOString(),
     notify_sms: 0,
     tab_contact: 0,
+    at_table: 0,
   };
   // With a menu, guests order with it by default.
   const mode = await applyModeBody(env, orgId, blank, { selfOrder: typeof body.catalogId === 'string', ...body, name: body.name ?? '' });
   if (mode instanceof Response) return mode;
   await env.DB.prepare(
-    `INSERT INTO event_order_modes (id, org_id, event_id, name, position, catalog_id, self_order, kassa, pay_counter, pay_bancontact, tabs, created_at, notify_sms, tab_contact)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO event_order_modes (id, org_id, event_id, name, position, catalog_id, self_order, kassa, pay_counter, pay_bancontact, tabs, created_at, notify_sms, tab_contact, at_table)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
-    .bind(mode.id, orgId, eventId, mode.name, mode.position, mode.catalog_id, mode.self_order, mode.kassa, mode.pay_counter, mode.pay_bancontact, mode.tabs, mode.created_at, mode.notify_sms, mode.tab_contact)
+    .bind(mode.id, orgId, eventId, mode.name, mode.position, mode.catalog_id, mode.self_order, mode.kassa, mode.pay_counter, mode.pay_bancontact, mode.tabs, mode.created_at, mode.notify_sms, mode.tab_contact, mode.at_table ?? 0)
     .run();
   return eventResponse(env, orgId, eventId, 201);
 }
@@ -332,8 +343,8 @@ export async function updateOrderMode(request: Request, env: Env, orgId: string,
 
   const statements = [
     env.DB.prepare(
-      'UPDATE event_order_modes SET name = ?, catalog_id = ?, self_order = ?, kassa = ?, pay_counter = ?, pay_bancontact = ?, tabs = ?, notify_sms = ?, tab_contact = ? WHERE id = ?'
-    ).bind(mode.name, mode.catalog_id, mode.self_order, mode.kassa, mode.pay_counter, mode.pay_bancontact, mode.tabs, mode.notify_sms, mode.tab_contact, modeId),
+      'UPDATE event_order_modes SET name = ?, catalog_id = ?, self_order = ?, kassa = ?, pay_counter = ?, pay_bancontact = ?, tabs = ?, notify_sms = ?, tab_contact = ?, at_table = ? WHERE id = ?'
+    ).bind(mode.name, mode.catalog_id, mode.self_order, mode.kassa, mode.pay_counter, mode.pay_bancontact, mode.tabs, mode.notify_sms, mode.tab_contact, mode.at_table ?? 0, modeId),
   ];
   // Up or down a place: swapped with its neighbour (the order guests choose from).
   const other = body.move === 'up' ? modes[index - 1] : body.move === 'down' ? modes[index + 1] : undefined;
@@ -392,7 +403,7 @@ export async function listEvents(request: Request, env: Env, orgId: string): Pro
   const caller = extractCaller(request);
   if (!caller) return json({ error: 'Unauthorized' }, 401);
 
-  const membership = await requireOrgRole(env, orgId, caller, ['admin', 'cashier']);
+  const membership = await requireOrgRole(env, orgId, caller, SERVICE_ROLES);
   if (!membership) return json({ error: 'Forbidden' }, 403);
 
   const [events, modes] = await env.DB.batch([

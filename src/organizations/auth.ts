@@ -49,10 +49,14 @@ function parseEmailVerified(value: string | null): boolean | null {
 // The payment and ledger routes (kassa, customer display,
 // settings): only an active admin or cashier of that org. A response to
 // return as is (401/403), or null when the caller may go on.
+// Who takes orders and payments: admins, the Kassa role and Bediening
+// (waiters, release C) — for tabs, payments, menus and events.
+export const SERVICE_ROLES: OrgRole[] = ['admin', 'cashier', 'waiter'];
+
 export async function refuseUnlessOrgMember(request: Request, env: Env, orgId: string): Promise<Response | null> {
   const caller = extractCaller(request);
   if (!caller) return json({ error: 'Unauthorized' }, 401);
-  if (!(await requireOrgRole(env, orgId, caller, ['admin', 'cashier']))) return json({ error: 'Forbidden' }, 403);
+  if (!(await requireOrgRole(env, orgId, caller, SERVICE_ROLES))) return json({ error: 'Forbidden' }, 403);
   return null;
 }
 

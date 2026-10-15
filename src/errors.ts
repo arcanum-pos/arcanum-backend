@@ -122,6 +122,14 @@ export const ERROR_TEXTS = {
   shift_note_required: 'Er is een verschil: schrijf erbij wat er gebeurd is',
   movement_invalid: 'Geef een bedrag en een reden',
 
+  // --- Tables and waiters (DOMAIN_MODEL.md, release C) ---
+  table_not_found: 'Tafel niet gevonden',
+  table_name_required: 'Geef de tafel een naam',
+  table_name_taken: 'Er is al een tafel met die naam',
+  table_occupied: 'Aan deze tafel zitten al gasten',
+  table_not_cleared: 'Deze tafel moet eerst opgeruimd worden',
+  no_table_mode: 'Dit evenement heeft geen bestelwijze "aan tafel" met een menukaart — stel er een in bij het evenement',
+
   // --- Self-ordering and station screens (DOMAIN_MODEL.md) ---
   ticket_not_found: 'Bon niet gevonden',
   event_not_found: 'Evenement niet gevonden',

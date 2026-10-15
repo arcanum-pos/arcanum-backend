@@ -180,6 +180,7 @@ describe('import', () => {
       staff_id: 'staff',
       claimed_by_staff_id: 'staff',
       register_id: 'registers',
+      table_id: 'tables',
       shift_id: 'shifts',
       category_id: 'categories',
       prep_station_id: 'prep_stations',

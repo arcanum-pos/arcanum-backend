@@ -1,6 +1,6 @@
 import type { Env } from '../env';
 import { json } from '../http';
-import { extractCaller, requireOrgRole } from './auth';
+import { extractCaller, requireOrgRole, SERVICE_ROLES } from './auth';
 import { NO_ORG_YET_SQL, orgCreationMode, orgCreationRefusal } from './org-creation';
 import { demoInfo } from './demo';
 import { errorJson } from '../errors';
@@ -108,7 +108,7 @@ export async function getOrganization(request: Request, env: Env, orgId: string)
   const caller = extractCaller(request);
   if (!caller) return json({ error: 'Unauthorized' }, 401);
 
-  const membership = await requireOrgRole(env, orgId, caller, ['admin', 'cashier']);
+  const membership = await requireOrgRole(env, orgId, caller, SERVICE_ROLES);
   if (!membership) return json({ error: 'Forbidden' }, 403);
 
   const row = await env.DB.prepare('SELECT * FROM organizations WHERE id = ?').bind(orgId).first<OrganizationRow>();

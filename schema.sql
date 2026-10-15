@@ -52,7 +52,9 @@ CREATE TABLE IF NOT EXISTS event_order_modes (
   -- An SMS when a station's part is ready (migration 0029, MESSAGING.md).
   notify_sms INTEGER NOT NULL DEFAULT 0,
   -- Opening a tab asks a name and a mobile number or e-mail (migration 0031).
-  tab_contact INTEGER NOT NULL DEFAULT 0
+  tab_contact INTEGER NOT NULL DEFAULT 0,
+  -- Used at the table by waiters: its menu is theirs (migration 0037).
+  at_table INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_event_order_modes_event ON event_order_modes(event_id, position);
 
@@ -153,7 +155,7 @@ CREATE TABLE IF NOT EXISTS memberships (
   -- impersonation path. NULL only for rows predating multi-issuer support.
   issuer TEXT,
   invited_email TEXT NOT NULL,
-  role TEXT NOT NULL, -- 'admin' | 'cashier'
+  role TEXT NOT NULL, -- 'admin' | 'cashier' | 'waiter' (Bediening, release C)
   status TEXT NOT NULL, -- 'pending' | 'active'
   invited_at TEXT NOT NULL,
   accepted_at TEXT
@@ -378,7 +380,9 @@ CREATE TABLE IF NOT EXISTS tabs (
   contact_email TEXT,
   -- Who opened it, on a shared device (migration 0035).
   staff_id TEXT,
-  staff_name TEXT
+  staff_name TEXT,
+  -- The table it's on (migration 0037, release C).
+  table_id TEXT
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tabs_org_number ON tabs(org_id, number);
@@ -715,6 +719,26 @@ CREATE INDEX IF NOT EXISTS idx_cash_movements_shift ON cash_movements(shift_id);
 
 CREATE INDEX IF NOT EXISTS idx_charges_shift ON charges(shift_id);
 
+-- Tables (migration 0037, DOMAIN_MODEL.md release C).
+CREATE TABLE IF NOT EXISTS tables (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES organizations(id),
+  name TEXT NOT NULL,
+  zone TEXT,
+  position INTEGER NOT NULL DEFAULT 0,
+  -- In the table's QR code (/tafel/<token>): random, not guessable; made
+  -- when first needed (none after an import: another installation's link).
+  qr_token TEXT,
+  -- The last "Opgeruimd": a table is Vrij when its last tab closed before this.
+  cleared_at TEXT,
+  created_at TEXT NOT NULL,
+  archived_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_tables_org ON tables(org_id, position);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tables_qr ON tables(qr_token) WHERE qr_token IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tabs_one_open_per_table ON tabs(table_id) WHERE status = 'open' AND table_id IS NOT NULL;
+
 -- --- Migration tracking ---
 -- wrangler's own table (`wrangler d1 migrations apply`), with the exact DDL
 -- wrangler uses. A database built from this file already contains every
@@ -763,3 +787,4 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0033_device_keys.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0034_pickup_screens.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0035_staff.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0036_shifts.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0037_tables.sql');

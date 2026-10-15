@@ -6,7 +6,7 @@
 //   PUT /organizations/:orgId/locale  (admin)       { locale } → { locale }
 import type { Env } from '../env';
 import { json } from '../http';
-import { extractCaller, requireOrgRole } from './auth';
+import { extractCaller, requireOrgRole, SERVICE_ROLES } from './auth';
 
 export const LOCALES = ['nl', 'fr', 'en'] as const;
 export type Locale = (typeof LOCALES)[number];
@@ -25,7 +25,7 @@ export async function getOrgLocale(request: Request, env: Env, orgId: string): P
   const caller = extractCaller(request);
   if (!caller) return json({ error: 'Unauthorized' }, 401);
 
-  const membership = await requireOrgRole(env, orgId, caller, ['admin', 'cashier']);
+  const membership = await requireOrgRole(env, orgId, caller, SERVICE_ROLES);
   if (!membership) return json({ error: 'Forbidden' }, 403);
 
   const row = await env.DB.prepare('SELECT locale FROM organizations WHERE id = ?').bind(orgId).first<{ locale: string }>();

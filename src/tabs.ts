@@ -26,7 +26,7 @@ import { staffForSale } from './staff';
 import type { Env } from './env';
 import { json } from './http';
 import { codedError, errorBody, errorJson, type CodedError } from './errors';
-import { extractCaller, requireOrgRole } from './organizations/auth';
+import { extractCaller, requireOrgRole, SERVICE_ROLES } from './organizations/auth';
 import { displayName } from './catalog';
 import { jsonRowsStatement } from './sql-json';
 import { notifyTabChanged } from './devicehub-client';
@@ -215,7 +215,7 @@ function rowToLine(row: LineRow) {
 async function authorize(request: Request, env: Env, orgId: string): Promise<Response | null> {
   const caller = extractCaller(request);
   if (!caller) return json({ error: 'Unauthorized' }, 401);
-  const membership = await requireOrgRole(env, orgId, caller, ['admin', 'cashier']);
+  const membership = await requireOrgRole(env, orgId, caller, SERVICE_ROLES);
   if (!membership) return json({ error: 'Forbidden' }, 403);
   return null;
 }
@@ -628,11 +628,13 @@ export async function openTab(
     slotId: string | null;
     eventId: string | null;
     who: Who;
-    source: 'kassa' | 'self_order';
+    source: 'kassa' | 'self_order' | 'table';
     lines: LineInput[];
     catalogId: string | null;
     // A self-order tab paid when the guest leaves (self-order.ts).
     payLater?: boolean;
+    // The table it's on (tables.ts, release C) — one open tab per table.
+    tableId?: string | null;
     // The event's ordering mode it comes in by.
     orderMode?: { id: string; name: string } | null;
   }
@@ -662,11 +664,11 @@ export async function openTab(
   statements.push(
     env.DB.prepare(
       `INSERT INTO tabs (id, org_id, number, label, status, slot_id, event_id, opened_device_id, opened_device_name, opened_by_name, opened_by_email, opened_at,
-         event_number, source, order_token, pay_later, order_mode_id, order_mode_name, staff_id, staff_name)
-       SELECT ?, ?, value, ?, 'open', ?, ?, ?, ?, ?, ?, ?, (SELECT order_counter FROM events WHERE id = ?), ?, ?, ?, ?, ?, ?, ? FROM org_counters WHERE org_id = ? AND name = 'tab'`
+         event_number, source, order_token, pay_later, order_mode_id, order_mode_name, staff_id, staff_name, table_id)
+       SELECT ?, ?, value, ?, 'open', ?, ?, ?, ?, ?, ?, ?, (SELECT order_counter FROM events WHERE id = ?), ?, ?, ?, ?, ?, ?, ?, ? FROM org_counters WHERE org_id = ? AND name = 'tab'`
     ).bind(
       tabId, orgId, o.label, o.slotId, eventId, who.deviceId, who.deviceName, who.userName, who.userEmail, now, eventId, o.source, newOrderToken(), o.payLater ? 1 : 0,
-      o.orderMode?.id ?? null, o.orderMode?.name ?? null, who.staffId ?? null, who.staffName ?? null, orgId
+      o.orderMode?.id ?? null, o.orderMode?.name ?? null, who.staffId ?? null, who.staffName ?? null, o.tableId ?? null, orgId
     )
   );
 

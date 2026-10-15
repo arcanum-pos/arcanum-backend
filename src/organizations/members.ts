@@ -6,7 +6,7 @@ import { toLocale } from './locale';
 import { sendOrgEmail } from './mail';
 import type { MembershipRow, OrgRole } from './types';
 
-const VALID_ROLES = new Set<OrgRole>(['admin', 'cashier']);
+const VALID_ROLES = new Set<OrgRole>(['admin', 'cashier', 'waiter']);
 
 function rowToMember(row: MembershipRow) {
   return {

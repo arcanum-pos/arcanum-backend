@@ -18,6 +18,7 @@
 // catalogs aren't coupled to payment processing in a way that tolerates
 // network failure, and don't justify the operational cost of separate
 // deployments yet.
+import { dispatchTablesRoute } from './tables';
 import { dispatchShiftsRoute } from './shifts';
 import type { Env } from './env';
 export type { Env };
@@ -124,6 +125,9 @@ export default {
         if (pairResponse) return pairResponse;
         const publicResponse = await dispatchSelfOrderRoute(request, env, url.pathname);
         if (publicResponse) return publicResponse;
+        // A guest who scanned a table's QR (release C).
+        const tableResponse = await dispatchTablesRoute(request, env, url.pathname);
+        if (tableResponse) return tableResponse;
       }
 
       if (url.pathname.startsWith('/organizations')) {
@@ -140,6 +144,8 @@ export default {
         if (staffResponse) return staffResponse;
         const shiftsResponse = await dispatchShiftsRoute(request, env, url.pathname);
         if (shiftsResponse) return shiftsResponse;
+        const tablesResponse = await dispatchTablesRoute(request, env, url.pathname);
+        if (tablesResponse) return tablesResponse;
         // Before the generic catalog routes, which would read 'import' as a catalog id.
         const importResponse = await dispatchCatalogImportRoute(request, env, url.pathname);
         if (importResponse) return importResponse;
