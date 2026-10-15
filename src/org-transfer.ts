@@ -162,6 +162,7 @@ export const EXPORT_TABLES: TableSpec[] = [
       'order_mode_id', 'order_mode_name', 'staff_id', 'staff_name', 'table_id',
     ],
     excluded: { ...ORG, order_token: "a follow-your-order page of this installation", notify_phone: "a guest's number, kept only until their order is ready",
+      push_subscription: "a guest's browser, kept only until their order is ready",
       contact_phone: "a guest's contact, kept only while the tab is open",
       contact_email: "a guest's contact, kept only while the tab is open",
     },
@@ -189,7 +190,7 @@ export const EXPORT_TABLES: TableSpec[] = [
   {
     table: 'prep_tickets',
     columns: [
-      'id', 'tab_id', 'order_id', 'station_id', 'station_name', 'status', 'created_at', 'updated_at', 'updated_by', 'sms_status',
+      'id', 'tab_id', 'order_id', 'station_id', 'station_name', 'status', 'created_at', 'updated_at', 'updated_by', 'sms_status', 'push_status',
       'claimed_by_staff_id', 'claimed_by_name', 'claimed_at',
     ],
     excluded: ORG,

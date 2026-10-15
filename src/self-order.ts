@@ -36,6 +36,7 @@ import { addOrderToTab, openAmount, openTab, prepareOrderLines, prepareTabCharge
 import { getDecryptedPaymentCredential } from './organizations/payment-credentials';
 import { startBancontactPayment } from './payments/bancontact';
 import { maskPhone, normalizePhone, smsConfig } from './messaging';
+import { parseSubscription, webPushPublicKey } from './web-push';
 
 const MAX_LINES = 30;
 const MAX_QUANTITY = 20;
@@ -211,6 +212,7 @@ interface FollowTab {
   pay_bancontact: number | null;
   notify_sms: number | null;
   notify_phone: string | null;
+  push_on: number;
   pay_later: number;
   org_name: string;
   org_locale: string | null;
@@ -220,7 +222,7 @@ async function follow(env: Env, token: string): Promise<Response> {
   if (!/^[A-Za-z0-9_-]{20,64}$/.test(token)) return errorJson('order_not_found', 404);
   const tab = await env.DB.prepare(
     `SELECT t.id, t.org_id, t.number, t.event_number, t.status, t.source, t.opened_at, t.pay_later, t.order_mode_id, ${MODE_LABEL_SQL('t')} AS mode_label,
-       e.name AS event_name, e.self_order_code, e.self_order_slug, e.self_order_enabled, m.pay_counter, m.pay_bancontact, m.notify_sms, t.notify_phone,
+       e.name AS event_name, e.self_order_code, e.self_order_slug, e.self_order_enabled, m.pay_counter, m.pay_bancontact, m.notify_sms, t.notify_phone, t.push_subscription IS NOT NULL AS push_on,
        o.name AS org_name, o.locale AS org_locale
      FROM tabs t JOIN organizations o ON o.id = t.org_id LEFT JOIN events e ON e.id = t.event_id
        LEFT JOIN event_order_modes m ON m.id = t.order_mode_id WHERE t.order_token = ?`
@@ -260,6 +262,10 @@ async function follow(env: Env, token: string): Promise<Response> {
     smsByStation.set(t.station_name, t.sms_status === 'capped' ? 'failed' : t.sms_status);
   }
   const smsOn = !!tab.notify_sms && !!smsConfig(env);
+  // Web Push (release G'): whenever the installation has its key — free, so
+  // no setting per mode; not for a waiter's table (the waiter brings it).
+  const pushKey = tab.source === 'table' ? null : await webPushPublicKey(env);
+  const stillToMake = state !== 'cancelled' && (tabOpen || !(state === 'delivered' || state === 'nothing_to_prepare'));
 
   return json({
     number: tab.event_number ?? tab.number,
@@ -289,11 +295,14 @@ async function follow(env: Env, token: string): Promise<Response> {
     // something left to make ready; the number only ever shown masked.
     sms: smsOn || smsByStation.size
       ? {
-          available: smsOn && state !== 'cancelled' && (tabOpen || !(state === 'delivered' || state === 'nothing_to_prepare')),
+          available: smsOn && stillToMake,
           phone: tab.notify_phone ? maskPhone(tab.notify_phone) : null,
           stations: [...smsByStation].map(([name, status]) => ({ name, status })),
         }
       : null,
+    // A notification on this phone when a station's part is ready (Web Push):
+    // the key to subscribe with; `subscribed` — this order has a browser.
+    push: pushKey ? { publicKey: pushKey, available: stillToMake, subscribed: !!tab.push_on } : null,
     // Back to step 1 of this event's self-order page once it's all delivered.
     selfOrderCode: tab.self_order_enabled ? (tab.self_order_slug ?? tab.self_order_code) : null,
     // Live updates: devicehub's order hub, this tab only (null: no live updates).
@@ -407,6 +416,25 @@ async function setNotifyPhone(request: Request, env: Env, token: string, remove:
   return json({ ok: true, phone: maskPhone(phone) });
 }
 
+// A guest's browser for "ready" notifications (Web Push), or none after
+// all: whenever the installation has Web Push, not on a cancelled order.
+// Kept on the tab until no longer needed (messaging.ts), like the number.
+async function setPushSubscription(request: Request, env: Env, token: string, remove: boolean): Promise<Response> {
+  if (!/^[A-Za-z0-9_-]{20,64}$/.test(token)) return errorJson('order_not_found', 404);
+  const tab = await env.DB.prepare('SELECT id, status, source FROM tabs WHERE order_token = ?').bind(token).first<{ id: string; status: string; source: string }>();
+  if (!tab) return errorJson('order_not_found', 404);
+  if (remove) {
+    await env.DB.prepare('UPDATE tabs SET push_subscription = NULL WHERE id = ?').bind(tab.id).run();
+    return json({ ok: true });
+  }
+  if (!(await webPushPublicKey(env)) || tab.status === 'cancelled' || tab.source === 'table') return errorJson('push_unavailable', 409);
+  const body = (await request.json().catch(() => ({}))) as { subscription?: unknown };
+  const subscription = parseSubscription(body.subscription);
+  if (!subscription) return errorJson('push_subscription_invalid', 400);
+  await env.DB.prepare('UPDATE tabs SET push_subscription = ? WHERE id = ?').bind(JSON.stringify(subscription), tab.id).run();
+  return json({ ok: true });
+}
+
 // Handles /public/*. Returns null for anything it doesn't recognize.
 export async function dispatchSelfOrderRoute(request: Request, env: Env, pathname: string): Promise<Response | null> {
   const menuMatch = pathname.match(/^\/public\/self-order\/([^/]+)$/);
@@ -419,6 +447,8 @@ export async function dispatchSelfOrderRoute(request: Request, env: Env, pathnam
   if (roundMatch && request.method === 'POST') return addRound(request, env, roundMatch[1]);
   const notifyMatch = pathname.match(/^\/public\/orders\/([^/]+)\/notify$/);
   if (notifyMatch && (request.method === 'POST' || request.method === 'DELETE')) return setNotifyPhone(request, env, notifyMatch[1], request.method === 'DELETE');
+  const pushMatch = pathname.match(/^\/public\/orders\/([^/]+)\/push$/);
+  if (pushMatch && (request.method === 'POST' || request.method === 'DELETE')) return setPushSubscription(request, env, pushMatch[1], request.method === 'DELETE');
   const payMatch = pathname.match(/^\/public\/orders\/([^/]+)\/bancontact$/);
   if (payMatch && request.method === 'POST') return payBancontact(env, payMatch[1]);
   return null;

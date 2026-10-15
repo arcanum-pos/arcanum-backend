@@ -173,6 +173,8 @@ export const ERROR_TEXTS = {
   // `error` is SumUp's own message when it gave one — then also in params.detail.
   sumup_readers_failed: 'Kon SumUp readers niet ophalen',
   sumup_not_configured: 'SumUp is niet ingesteld voor deze organisatie',
+  push_unavailable: 'Meldingen zijn niet mogelijk voor deze bestelling',
+  push_subscription_invalid: 'Deze browser gaf geen bruikbaar meldingsadres',
   sumup_app_not_configured: 'Tap to Pay is niet ingesteld: vul in de console de affiliate key van SumUp in',
   sumup_affiliate_key_invalid: 'Dat lijkt geen affiliate key of app-id van SumUp — kijk ze na',
   sumup_pairing_code_invalid: 'Een koppelcode bestaat uit 8 of 9 letters en cijfers',

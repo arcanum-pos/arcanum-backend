@@ -14,9 +14,16 @@
 //   - only to the countries the installation allows.
 // The number is cleared once it's no longer needed (clearPhoneIfDone), and
 // after a day at most (sweepPhones).
+//
+// Web Push (web-push.ts, release G'): a guest who turned on notifications on
+// the order page gets one per station instead — and then no SMS (free, and
+// one message is enough). Claimed per ticket too (push_status). A browser
+// that unsubscribed (the push service says gone) is forgotten, and the SMS
+// goes after all when there's a number.
 import { waitUntil } from 'cloudflare:workers';
 import type { Env } from './env';
 import { notifyTabsChanged } from './devicehub-client';
+import { sendPush, type PushSubscriptionJson } from './web-push';
 
 export interface SmsConfig {
   provider: 'twilio';
@@ -107,13 +114,60 @@ const DAY_MS = 24 * 3600_000;
 // station's tap doesn't wait for Twilio).
 export function notifyTicketReady(env: Env, orgId: string, ticketId: string): void {
   const config = smsConfig(env);
-  if (!config) return;
-  const work = sendForTicket(env, config, orgId, ticketId).catch((err) => console.error('Sms voor bon mislukt', err));
+  if (!config && !env.WEB_PUSH_KEY) return;
+  const work = (async () => {
+    const pushed = env.WEB_PUSH_KEY ? await pushForTicket(env, orgId, ticketId).catch((err) => (console.error('Push voor bon mislukt', err), false)) : false;
+    if (config && !pushed) await sendForTicket(env, config, orgId, ticketId);
+  })().catch((err) => console.error('Sms voor bon mislukt', err));
   try {
     waitUntil(work);
   } catch {
     // Outside a request context: it still runs, just unguarded.
   }
+}
+
+// True when the guest's browser got it (then no SMS).
+async function pushForTicket(env: Env, orgId: string, ticketId: string): Promise<boolean> {
+  const claimed = await env.DB.prepare(
+    `UPDATE prep_tickets SET push_status = 'sending'
+     WHERE id = ? AND org_id = ? AND push_status IS NULL
+       AND EXISTS (SELECT 1 FROM tabs t WHERE t.id = prep_tickets.tab_id AND t.push_subscription IS NOT NULL)
+     RETURNING tab_id, station_name`
+  )
+    .bind(ticketId, orgId)
+    .first<{ tab_id: string; station_name: string }>();
+  if (!claimed) return false;
+  const tab = await env.DB.prepare(
+    `SELECT t.push_subscription, t.order_token, COALESCE(t.event_number, t.number) AS number, o.name AS org_name, o.locale
+     FROM tabs t JOIN organizations o ON o.id = t.org_id WHERE t.id = ?`
+  )
+    .bind(claimed.tab_id)
+    .first<{ push_subscription: string | null; order_token: string | null; number: number; org_name: string; locale: string | null }>();
+  let result: Awaited<ReturnType<typeof sendPush>> = { ok: false, gone: false, error: 'no subscription' };
+  if (tab?.push_subscription) {
+    const subscription = JSON.parse(tab.push_subscription) as PushSubscriptionJson;
+    result = await sendPush(env, subscription, {
+      title: tab.org_name,
+      body: pushText(tab.locale || 'nl', { number: tab.number, station: claimed.station_name }),
+      url: tab.order_token ? `/volg/${tab.order_token}` : '/',
+      tag: ticketId,
+    }).catch((err) => ({ ok: false as const, gone: false, error: String(err) }));
+  }
+  if (!result.ok) console.error(`Push voor bon ${ticketId} mislukt: ${result.error}`);
+  await env.DB.batch([
+    env.DB.prepare(`UPDATE prep_tickets SET push_status = ? WHERE id = ?`).bind(result.ok ? 'sent' : 'failed', ticketId),
+    ...(!result.ok && result.gone ? [env.DB.prepare('UPDATE tabs SET push_subscription = NULL WHERE id = ?').bind(claimed.tab_id)] : []),
+    clearPhoneIfDone(env, claimed.tab_id),
+  ]);
+  notifyTabsChanged(env, orgId, [claimed.tab_id]);
+  return result.ok;
+}
+
+// A notification's text: the organisation is its title already.
+export function pushText(locale: string, o: { number: number; station: string }): string {
+  if (locale === 'fr') return `Votre commande n°${o.number} est prête - ${o.station}.`;
+  if (locale === 'en') return `Your order #${o.number} is ready - ${o.station}.`;
+  return `Je bestelling #${o.number} is klaar - ${o.station}.`;
 }
 
 async function sendForTicket(env: Env, config: SmsConfig, orgId: string, ticketId: string): Promise<void> {
@@ -172,10 +226,11 @@ async function sendForTicket(env: Env, config: SmsConfig, orgId: string, ticketI
 
 // The number goes once nothing more can need it: the tab isn't open any
 // more (no more rounds) and no ticket still waits to be made ready.
+// The browser's push subscription likewise.
 export function clearPhoneIfDone(env: Env, tabId: string): D1PreparedStatement {
   return env.DB.prepare(
-    `UPDATE tabs SET notify_phone = NULL WHERE id = ? AND notify_phone IS NOT NULL AND status <> 'open'
-       AND NOT EXISTS (SELECT 1 FROM prep_tickets p WHERE p.tab_id = tabs.id AND p.sms_status IS NULL AND p.status IN ('ordered', 'in_progress'))`
+    `UPDATE tabs SET notify_phone = NULL, push_subscription = NULL WHERE id = ? AND (notify_phone IS NOT NULL OR push_subscription IS NOT NULL) AND status <> 'open'
+       AND NOT EXISTS (SELECT 1 FROM prep_tickets p WHERE p.tab_id = tabs.id AND p.sms_status IS NULL AND p.push_status IS NULL AND p.status IN ('ordered', 'in_progress'))`
   ).bind(tabId);
 }
 
@@ -183,8 +238,8 @@ export function clearPhoneIfDone(env: Env, tabId: string): D1PreparedStatement {
 // need it any more (run whenever a station screen looks — no timer needed).
 export function sweepPhones(env: Env, orgId: string): D1PreparedStatement {
   return env.DB.prepare(
-    `UPDATE tabs SET notify_phone = NULL WHERE org_id = ? AND notify_phone IS NOT NULL AND (
+    `UPDATE tabs SET notify_phone = NULL, push_subscription = NULL WHERE org_id = ? AND (notify_phone IS NOT NULL OR push_subscription IS NOT NULL) AND (
        status = 'cancelled' OR opened_at < ?
-       OR (status = 'closed' AND NOT EXISTS (SELECT 1 FROM prep_tickets p WHERE p.tab_id = tabs.id AND p.sms_status IS NULL AND p.status IN ('ordered', 'in_progress'))))`
+       OR (status = 'closed' AND NOT EXISTS (SELECT 1 FROM prep_tickets p WHERE p.tab_id = tabs.id AND p.sms_status IS NULL AND p.push_status IS NULL AND p.status IN ('ordered', 'in_progress'))))`
   ).bind(orgId, new Date(Date.now() - DAY_MS).toISOString());
 }

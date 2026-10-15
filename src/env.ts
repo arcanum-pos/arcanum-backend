@@ -61,4 +61,7 @@ export interface Env {
   // "authToken","sender","countries":["+32"],"dailyCap":300}. Without it,
   // nobody is offered an SMS.
   MESSAGING_CONFIG?: string;
+  // Web Push (web-push.ts): the installation's P-256 private key, PKCS#8 in
+  // base64, generated once by the installer. Without it, no Web Push.
+  WEB_PUSH_KEY?: string;
 }

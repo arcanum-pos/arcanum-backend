@@ -375,6 +375,8 @@ CREATE TABLE IF NOT EXISTS tabs (
   order_mode_name TEXT,
   -- The guest's number for "ready" SMS (migration 0029), kept only while needed.
   notify_phone TEXT,
+  -- A guest's browser push subscription, until the order is ready (migration 0039).
+  push_subscription TEXT,
   -- Who's behind a guest's tab (migration 0031), kept only while it's open.
   contact_phone TEXT,
   contact_email TEXT,
@@ -598,6 +600,8 @@ CREATE TABLE IF NOT EXISTS prep_tickets (
   updated_by TEXT,
   -- Its "ready" SMS (migration 0029): sending | sent | failed | capped.
   sms_status TEXT,
+  -- Its Web Push notification: sending | sent | failed (migration 0039).
+  push_status TEXT,
   -- Who's making it, since when (migration 0035).
   claimed_by_staff_id TEXT,
   claimed_by_name TEXT,
@@ -793,3 +797,4 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0035_staff.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0036_shifts.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0037_tables.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0038_table_management.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0039_web_push.sql');
