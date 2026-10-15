@@ -29,14 +29,14 @@ interface InviteCopy {
 
 const COPY: Record<Locale, InviteCopy> = {
   nl: {
-    roles: { admin: 'beheerder', cashier: 'kassier' },
+    roles: { admin: 'beheerder', cashier: 'kassier', waiter: 'bediening' },
     subject: (org) => `Uitnodiging voor ${org}`,
     invited: (org, role) => `Je bent uitgenodigd om lid te worden van ${org} op Arcanum, als ${role}.`,
     login: 'Meld je aan om je uitnodiging te activeren',
     sameAddress: 'Gebruik hetzelfde e-mailadres waarop je deze uitnodiging ontvangen hebt.',
   },
   fr: {
-    roles: { admin: 'administrateur', cashier: 'caissier' },
+    roles: { admin: 'administrateur', cashier: 'caissier', waiter: 'serveur' },
     subject: (org) => `Invitation à rejoindre ${org}`,
     // "en tant qu’administrateur" — elided before a vowel.
     invited: (org, role) => `Vous êtes invité(e) à rejoindre ${org} sur Arcanum, en tant ${/^[aeiouyéèh]/i.test(role) ? 'qu’' : 'que '}${role}.`,
@@ -44,7 +44,7 @@ const COPY: Record<Locale, InviteCopy> = {
     sameAddress: 'Utilisez l’adresse e-mail à laquelle vous avez reçu cette invitation.',
   },
   en: {
-    roles: { admin: 'an administrator', cashier: 'a cashier' },
+    roles: { admin: 'an administrator', cashier: 'a cashier', waiter: 'a waiter' },
     subject: (org) => `Invitation to join ${org}`,
     invited: (org, role) => `You have been invited to join ${org} on Arcanum, as ${role}.`,
     login: 'Log in to activate your invitation',
