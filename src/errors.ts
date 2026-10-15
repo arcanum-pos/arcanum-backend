@@ -129,6 +129,9 @@ export const ERROR_TEXTS = {
   table_occupied: 'Aan deze tafel zitten al gasten',
   table_not_cleared: 'Deze tafel moet eerst opgeruimd worden',
   no_table_mode: 'Dit evenement heeft geen bestelwijze "aan tafel" met een menukaart — stel er een in bij het evenement',
+  table_not_occupied: 'Aan deze tafel zit niemand',
+  table_merge_paid: 'Er is al (een deel) betaald op een van deze tafels — samenvoegen kan dan niet',
+  table_free: 'Deze tafel is vrij — plaats de gasten meteen',
 
   // --- Self-ordering and station screens (DOMAIN_MODEL.md) ---
   ticket_not_found: 'Bon niet gevonden',

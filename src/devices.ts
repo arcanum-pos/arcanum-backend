@@ -73,8 +73,10 @@ interface PairingRow {
 
 // A station screen shows the station's tickets to work on, or — a pickup
 // screen — only their numbers, to guests (read-only, prep-tickets.ts).
-export type StationView = 'pickup';
-const viewOf = (value: unknown): StationView | null => (value === 'pickup' ? 'pickup' : null);
+// 'tables': the entrance screen (release D) — the tables promised to waiting
+// guests, for the whole organisation, no station.
+export type StationView = 'pickup' | 'tables';
+const viewOf = (value: unknown): StationView | null => (value === 'pickup' || value === 'tables' ? value : null);
 
 interface DeviceRow {
   terminal_id: string;
@@ -175,7 +177,7 @@ async function createPairing(request: Request, env: Env, orgId: string): Promise
 
   // A station screen shows one prep station of this org.
   let stationId: string | null = null;
-  if (role === 'station') {
+  if (role === 'station' && viewOf(body?.view) !== 'tables') {
     stationId = typeof body?.stationId === 'string' && (await orgStation(env, orgId, body.stationId)) ? body.stationId : null;
     if (!stationId) return errorJson('station_not_found', 400);
   }
@@ -317,9 +319,9 @@ async function completeClaim(env: Env, row: PairingRow, claimedBy: string, withK
     return errorJson('devicehub_failed', 502);
   }
   // A station screen: which station it shows.
-  if (row.role === 'station' && row.station_id) {
+  if (row.role === 'station' && (row.station_id || row.view === 'tables')) {
     await env.DB.prepare('INSERT OR REPLACE INTO station_devices (terminal_id, org_id, station_id, updated_at, view) VALUES (?, ?, ?, ?, ?)')
-      .bind(terminalId, row.org_id, row.station_id, now.toISOString(), row.view)
+      .bind(terminalId, row.org_id, row.station_id ?? '', now.toISOString(), row.view)
       .run();
   }
   // A customer display meant for a kassa: linked now — if that kassa is still there.

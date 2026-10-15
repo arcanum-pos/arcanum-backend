@@ -50,7 +50,7 @@ export async function broadcastOrgEvent(
   orgId: string,
   event: string,
   payload: Record<string, unknown>,
-  role: 'pos' | 'cfd' = 'pos'
+  role: 'pos' | 'cfd' | 'station' = 'pos'
 ): Promise<void> {
   try {
     const res = await callDeviceHub(env, '/devices/broadcast-org', {

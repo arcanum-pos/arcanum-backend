@@ -240,6 +240,24 @@ describe('a pickup screen (ROADMAP.md §5): order numbers for guests, read-only'
   });
 });
 
+describe('an entrance screen (release D): the promised tables, nothing else', () => {
+  it("paired without a station; reads the promised tables — not a station's tickets", async () => {
+    const org = await seedOrg();
+    const v = await venue(org);
+    const pairing = await api('POST', `/organizations/${org.orgId}/device-pairings`, { user: org.admin, body: { role: 'station', name: 'Ingang', view: 'tables' } });
+    expect(pairing.status).toBe(201);
+    const paired = (await asDevice(null, 'POST', '/public/pair', { code: pairing.body.code })).body;
+    expect(paired).toMatchObject({ role: 'station', view: 'tables' });
+    const o = `/organizations/${org.orgId}`;
+    expect((await asDevice(paired.deviceKey, 'GET', `${o}/promised-tables`)).body).toEqual([]);
+    expect((await asDevice(paired.deviceKey, 'GET', `${o}/stations/${v.kitchen.id}/tickets`)).status).toBe(403);
+    expect((await asDevice(paired.deviceKey, 'GET', `${o}/tables`)).status).toBe(401);
+    // A station screen's key isn't an entrance screen's.
+    const station = (await asDevice(null, 'POST', '/public/pair', { code: await code(org, { role: 'station', name: 'Keuken', stationId: v.kitchen.id }) })).body;
+    expect((await asDevice(station.deviceKey, 'GET', `${o}/promised-tables`)).status).toBe(403);
+  });
+});
+
 describe("a customer display's key: its kassa's payments, nothing else", () => {
   it("follows a payment of the kassa it's linked to — not another kassa's", async () => {
     const org = await seedOrg();

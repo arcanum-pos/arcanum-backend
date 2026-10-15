@@ -126,7 +126,12 @@ export const EXPORT_TABLES: TableSpec[] = [
   {
     table: 'tables',
     columns: ['id', 'name', 'zone', 'position', 'cleared_at', 'created_at', 'archived_at'],
-    excluded: { ...ORG, qr_token: "this installation's QR address — a new one is made when the tables are listed" },
+    excluded: {
+      ...ORG,
+      qr_token: "this installation's QR address — a new one is made when the tables are listed",
+      needs_clearing_at: 'the state of the room right now, not data',
+      promised_at: 'the state of the room right now, not data',
+    },
     remap: ['id'],
     orderBy: 'position, rowid',
   },

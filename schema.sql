@@ -732,7 +732,11 @@ CREATE TABLE IF NOT EXISTS tables (
   -- The last "Opgeruimd": a table is Vrij when its last tab closed before this.
   cleared_at TEXT,
   created_at TEXT NOT NULL,
-  archived_at TEXT
+  archived_at TEXT,
+  -- Guests moved away or joined another table: Af te ruimen (migration 0038).
+  needs_clearing_at TEXT,
+  -- Promised to guests waiting at the entrance (migration 0038).
+  promised_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_tables_org ON tables(org_id, position);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tables_qr ON tables(qr_token) WHERE qr_token IS NOT NULL;
@@ -788,3 +792,4 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0034_pickup_screens.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0035_staff.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0036_shifts.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0037_tables.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0038_table_management.sql');

@@ -15,6 +15,10 @@
 //   POST   /organizations/:org/tables/:id/clear             admin, Kassa, Bediening: "Opgeruimd" — Vrij again
 //   GET    /organizations/:org/tables/by-qr/:token          admin, Kassa, Bediening: the table a scanned QR is (the waiter screen)
 //   GET    /organizations/:org/live-token                   admin, Kassa, Bediening: the waiter screen's live channel
+//   POST   /organizations/:org/tables/:id/move              { toTableId } — Verplaatsen (D1): to a free table, this one Af te ruimen
+//   POST   /organizations/:org/tables/:id/merge             { intoTableId } — Samenvoegen (D2): its orders onto that table's tab (not once paid)
+//   POST   /organizations/:org/tables/:id/promise           { promised } — Beloven to waiting guests (a table that will come free)
+//   GET    /organizations/:org/promised-tables              members, or an entrance screen's key: the promised tables, ready or not
 //   GET    /public/tables/:token                            a guest who scanned it: the table, and — while it's
 //                                                           Bezet and its mode lets guests order with the QR — the
 //                                                           tab's follow token (they order on it, T3)
@@ -25,7 +29,8 @@ import type { Env } from './env';
 import { errorJson } from './errors';
 import { json } from './http';
 import { extractCaller, requireOrgRole, SERVICE_ROLES } from './organizations/auth';
-import { broadcastOrgEvent, callDeviceHub } from './devicehub-client';
+import { broadcastOrgEvent, callDeviceHub, notifyTabChanged, notifyTabsChanged } from './devicehub-client';
+import { deviceCaller } from './device-keys';
 import { openTab, type Who } from './tabs';
 import { staffOf } from './staff';
 
@@ -41,6 +46,8 @@ interface TableRow {
   cleared_at: string | null;
   created_at: string;
   archived_at: string | null;
+  needs_clearing_at?: string | null;
+  promised_at?: string | null;
 }
 
 type TableState = 'free' | 'occupied' | 'clearing';
@@ -64,16 +71,20 @@ const TABLES_SQL = `
   SELECT t.*,
     o.id AS tab_id, o.number AS tab_number, o.label AS tab_label, o.opened_at AS tab_opened_at, o.order_token AS tab_token,
     (SELECT COALESCE(SUM(l.unit_price_cents * l.quantity), 0) FROM order_lines l WHERE l.tab_id = o.id) AS tab_total,
-    (SELECT MAX(COALESCE(x.closed_at, x.opened_at)) FROM tabs x WHERE x.table_id = t.id AND x.status <> 'open') AS last_closed
+    (SELECT MAX(COALESCE(x.closed_at, x.opened_at)) FROM tabs x WHERE x.table_id = t.id AND x.status <> 'open') AS last_closed,
+    (SELECT COUNT(*) FROM prep_tickets p WHERE p.tab_id = o.id AND p.status IN ('ordered', 'in_progress')) AS preparing
   FROM tables t
   LEFT JOIN tabs o ON o.table_id = t.id AND o.status = 'open'
   WHERE t.org_id = ?`;
 
-type Joined = TableRow & { tab_id: string | null; tab_number: number | null; tab_label: string | null; tab_opened_at: string | null; tab_token: string | null; tab_total: number; last_closed: string | null };
+type Joined = TableRow & { tab_id: string | null; tab_number: number | null; tab_label: string | null; tab_opened_at: string | null; tab_token: string | null; tab_total: number; last_closed: string | null; preparing: number };
 
+// Af te ruimen: its last tab ended (paid, cancelled, merged away) or its
+// guests moved, after the last "Opgeruimd".
 function stateOf(r: Joined): TableState {
   if (r.tab_id) return 'occupied';
-  if (r.last_closed && (!r.cleared_at || r.last_closed > r.cleared_at)) return 'clearing';
+  const after = (at: string | null | undefined) => !!at && (!r.cleared_at || at > r.cleared_at);
+  if (after(r.last_closed) || after(r.needs_clearing_at)) return 'clearing';
   return 'free';
 }
 
@@ -84,7 +95,9 @@ const tableJson = (r: Joined, _admin: boolean) => ({
   position: r.position,
   archived: !!r.archived_at,
   state: stateOf(r),
-  tab: r.tab_id ? { id: r.tab_id, number: r.tab_number, label: r.tab_label, openedAt: r.tab_opened_at, totalCents: r.tab_total } : null,
+  tab: r.tab_id ? { id: r.tab_id, number: r.tab_number, label: r.tab_label, openedAt: r.tab_opened_at, totalCents: r.tab_total, preparing: r.preparing > 0 } : null,
+  // Promised to guests waiting at the entrance (release D).
+  promised: !!r.promised_at,
   // The QR's token: for admins (printing it) and whoever seats guests.
   qrToken: r.qr_token,
 });
@@ -200,6 +213,11 @@ async function seat(request: Request, env: Env, orgId: string, tableId: string):
       orderMode: { id: mode.id, name: mode.name },
       tableId,
     });
+    // The guests it was promised to are seated (D5).
+    if (row.promised_at) {
+      await env.DB.prepare('UPDATE tables SET promised_at = NULL WHERE id = ?').bind(tableId).run();
+      await tablesChanged(env, orgId);
+    }
     const [after] = await loadTables(env, orgId, 'AND t.id = ?', tableId);
     void tabId; // openTab already told the kassas and waiter screens
     return json(tableJson(after, caller.admin), 201);
@@ -218,9 +236,105 @@ async function clear(request: Request, env: Env, orgId: string, tableId: string)
   if (row.tab_id) return errorJson('table_occupied', 409);
   await env.DB.prepare('UPDATE tables SET cleared_at = ? WHERE id = ?').bind(new Date().toISOString(), tableId).run();
   const [after] = await loadTables(env, orgId, 'AND t.id = ?', tableId);
-  // No tab changed: the waiter screens hear it from their own push.
-  await broadcastOrgEvent(env, orgId, 'tables_changed', { table_id: tableId });
+  // No tab changed: the waiter screens and the entrance screen hear it from their own push.
+  await tablesChanged(env, orgId);
   return json(tableJson(after, caller.admin));
+}
+
+// The waiter screens (the kassa channel) and the entrance screens (station
+// screens with view 'tables') — something about the tables changed.
+async function tablesChanged(env: Env, orgId: string): Promise<void> {
+  await Promise.all([broadcastOrgEvent(env, orgId, 'tables_changed', {}), broadcastOrgEvent(env, orgId, 'tables_changed', {}, 'station')]);
+}
+
+// Verplaatsen (D1): the guests and their tab to a free table; the one they
+// leave is Af te ruimen.
+async function move(request: Request, env: Env, orgId: string, tableId: string): Promise<Response> {
+  const caller = await member(request, env, orgId);
+  if (caller instanceof Response) return caller;
+  const body = (await request.json().catch(() => ({}))) as { toTableId?: unknown };
+  const [from] = await loadTables(env, orgId, 'AND t.id = ?', tableId);
+  const [to] = typeof body.toTableId === 'string' ? await loadTables(env, orgId, 'AND t.id = ? AND t.archived_at IS NULL', body.toTableId) : [];
+  if (!from || !to) return errorJson('table_not_found', 404);
+  if (!from.tab_id) return errorJson('table_not_occupied', 409);
+  if (stateOf(to) !== 'free') return errorJson(stateOf(to) === 'occupied' ? 'table_occupied' : 'table_not_cleared', 409);
+  const now = new Date().toISOString();
+  try {
+    await env.DB.batch([
+      env.DB.prepare("UPDATE tabs SET table_id = ?, label = ? WHERE id = ? AND status = 'open'").bind(to.id, `Tafel ${to.name}`, from.tab_id),
+      env.DB.prepare('UPDATE tables SET needs_clearing_at = ? WHERE id = ?').bind(now, from.id),
+      // A promise for the table they move to: theirs now (D5).
+      env.DB.prepare('UPDATE tables SET promised_at = NULL WHERE id = ?').bind(to.id),
+    ]);
+  } catch (err) {
+    if (/UNIQUE/i.test(String(err))) return errorJson('table_occupied', 409);
+    throw err;
+  }
+  notifyTabChanged(env, orgId, from.tab_id);
+  await tablesChanged(env, orgId);
+  const [after] = await loadTables(env, orgId, 'AND t.id = ?', to.id);
+  return json(tableJson(after, caller.admin));
+}
+
+// Samenvoegen (D2): this table's orders onto another table's tab; this one
+// is then Af te ruimen. Refused once this tab has (part of) a payment.
+async function merge(request: Request, env: Env, orgId: string, tableId: string): Promise<Response> {
+  const caller = await member(request, env, orgId);
+  if (caller instanceof Response) return caller;
+  const body = (await request.json().catch(() => ({}))) as { intoTableId?: unknown };
+  const [from] = await loadTables(env, orgId, 'AND t.id = ?', tableId);
+  const [into] = typeof body.intoTableId === 'string' ? await loadTables(env, orgId, 'AND t.id = ?', body.intoTableId) : [];
+  if (!from || !into || from.id === into.id) return errorJson('table_not_found', 404);
+  if (!from.tab_id || !into.tab_id) return errorJson('table_not_occupied', 409);
+  const paid = await env.DB.prepare("SELECT 1 FROM charges WHERE tab_id IN (?, ?) AND status IN ('pending', 'succeeded') LIMIT 1").bind(from.tab_id, into.tab_id).first();
+  if (paid) return errorJson('table_merge_paid', 409);
+  const now = new Date().toISOString();
+  await env.DB.batch([
+    env.DB.prepare('UPDATE order_lines SET tab_id = ? WHERE tab_id = ?').bind(into.tab_id, from.tab_id),
+    env.DB.prepare('UPDATE orders SET tab_id = ? WHERE tab_id = ?').bind(into.tab_id, from.tab_id),
+    env.DB.prepare('UPDATE prep_tickets SET tab_id = ? WHERE tab_id = ?').bind(into.tab_id, from.tab_id),
+    env.DB.prepare("UPDATE tabs SET status = 'cancelled', closed_at = ?, cancel_reason = ? WHERE id = ? AND status = 'open'").bind(now, `Samengevoegd met Tafel ${into.name}`, from.tab_id),
+    env.DB.prepare('UPDATE tables SET needs_clearing_at = ? WHERE id = ?').bind(now, from.id),
+  ]);
+  notifyTabsChanged(env, orgId, [from.tab_id, into.tab_id]);
+  await tablesChanged(env, orgId);
+  const [after] = await loadTables(env, orgId, 'AND t.id = ?', into.id);
+  return json(tableJson(after, caller.admin));
+}
+
+// Beloven: the table is promised to guests waiting at the entrance (only
+// one that will come free: Bezet or Af te ruimen); { promised: false } takes it back.
+async function promise(request: Request, env: Env, orgId: string, tableId: string): Promise<Response> {
+  const caller = await member(request, env, orgId);
+  if (caller instanceof Response) return caller;
+  const [row] = await loadTables(env, orgId, 'AND t.id = ?', tableId);
+  if (!row) return errorJson('table_not_found', 404);
+  const body = (await request.json().catch(() => ({}))) as { promised?: unknown };
+  const on = body.promised !== false;
+  if (on && stateOf(row) === 'free') return errorJson('table_free', 409);
+  await env.DB.prepare('UPDATE tables SET promised_at = ? WHERE id = ?').bind(on ? new Date().toISOString() : null, tableId).run();
+  await tablesChanged(env, orgId);
+  const [after] = await loadTables(env, orgId, 'AND t.id = ?', tableId);
+  return json(tableJson(after, caller.admin));
+}
+
+// The entrance screen: the promised tables, oldest promise first — ready
+// once cleaned (Vrij). A member, or an entrance screen's own key.
+async function promised(request: Request, env: Env, orgId: string): Promise<Response> {
+  if (!extractCaller(request)) {
+    const device = await deviceCaller(request, env);
+    if (!device) return json({ error: 'Unauthorized' }, 401);
+    const own = device.orgId === orgId && device.role === 'station'
+      ? await env.DB.prepare('SELECT view FROM station_devices WHERE terminal_id = ? AND org_id = ?').bind(device.terminalId, orgId).first<{ view: string | null }>()
+      : null;
+    if (own?.view !== 'tables') return json({ error: 'Forbidden' }, 403);
+  } else {
+    const caller = await member(request, env, orgId);
+    if (caller instanceof Response) return caller;
+  }
+  const rows = await loadTables(env, orgId, 'AND t.promised_at IS NOT NULL AND t.archived_at IS NULL');
+  rows.sort((a, b) => String(a.promised_at).localeCompare(String(b.promised_at)));
+  return json(rows.map((r) => ({ name: r.name, zone: r.zone, ready: stateOf(r) === 'free', promisedAt: r.promised_at })));
 }
 
 // The waiter screen's live channel (a waiter's own phone is no device): a
@@ -270,12 +384,18 @@ export async function dispatchTablesRoute(request: Request, env: Env, pathname: 
   if (r && m === 'GET') return byQr(request, env, r[1], decodeURIComponent(r[2]));
   r = pathname.match(/^\/organizations\/([^/]+)\/tables\/([^/]+)$/);
   if (r && m === 'PATCH') return updateTable(request, env, r[1], decodeURIComponent(r[2]));
-  r = pathname.match(/^\/organizations\/([^/]+)\/tables\/([^/]+)\/(new-qr|seat|clear)$/);
+  r = pathname.match(/^\/organizations\/([^/]+)\/promised-tables$/);
+  if (r && m === 'GET') return promised(request, env, r[1]);
+  r = pathname.match(/^\/organizations\/([^/]+)\/tables\/([^/]+)\/(new-qr|seat|clear|move|merge|promise)$/);
   if (r && m === 'POST') {
     const [, orgId, id, action] = r;
-    if (action === 'new-qr') return newQr(request, env, orgId, decodeURIComponent(id));
-    if (action === 'seat') return seat(request, env, orgId, decodeURIComponent(id));
-    return clear(request, env, orgId, decodeURIComponent(id));
+    const tableId = decodeURIComponent(id);
+    if (action === 'new-qr') return newQr(request, env, orgId, tableId);
+    if (action === 'seat') return seat(request, env, orgId, tableId);
+    if (action === 'move') return move(request, env, orgId, tableId);
+    if (action === 'merge') return merge(request, env, orgId, tableId);
+    if (action === 'promise') return promise(request, env, orgId, tableId);
+    return clear(request, env, orgId, tableId);
   }
   const pub = pathname.match(/^\/public\/tables\/([^/]+)$/);
   if (pub && m === 'GET') return publicTable(env, decodeURIComponent(pub[1]));
