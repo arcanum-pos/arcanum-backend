@@ -71,3 +71,16 @@ hosting or support — but if you run a modified version for users over a
 network, you must offer those users its source code (AGPL §13). The app's
 "Broncode" link (the `SOURCE_URL` setting of arcanum-bff) is how an
 installation points its users to that source.
+
+## Self-hosted (SELF_HOSTING.md)
+
+The same Worker code runs on Node (`src/node.ts`): `npm run build:node`,
+then `node dist/node.mjs migrate` (brings the database up to date, like the
+installer's `schema:` step: schema.sql on a fresh database, otherwise only
+the missing migrations) and `node dist/node.mjs` to serve. Environment: the
+Worker's vars and secrets by their own names, plus `DEVICEHUB_URL`,
+`MAILER_URL`, `BACKEND_DB` (its SQLite file) and `PORT`. The stand-ins are in
+`src/node/`: D1 on SQLite (`node:sqlite`), the ChargePoller's alarm in the
+process (one replica), service bindings as HTTP, `cloudflare:workers`'
+`waitUntil`. `npm test` runs the Worker suite in the Workers runtime and
+`test/node/` on Node (a real flow through the API on SQLite).

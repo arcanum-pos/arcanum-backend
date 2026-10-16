@@ -2,8 +2,12 @@
   "compilerOptions": {
     "target": "ES2022",
     "module": "ES2022",
-    "lib": ["ES2022"],
-    "types": ["@cloudflare/workers-types"],
+    "lib": [
+      "ES2022"
+    ],
+    "types": [
+      "@cloudflare/workers-types"
+    ],
     "moduleResolution": "bundler",
     "strict": true,
     "noImplicitReturns": true,
@@ -12,6 +16,13 @@
     "noEmit": true,
     "skipLibCheck": true
   },
-  "include": ["src/**/*.ts"],
-  "exclude": ["node_modules"]
+  "include": [
+    "src/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "src/node-main.ts",
+    "src/node.ts",
+    "src/node/**"
+  ]
 }

@@ -1,4 +1,5 @@
 import { readdirSync, readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { cloudflareTest } from '@cloudflare/vitest-pool-workers';
 import { defineConfig } from 'vitest/config';
 
@@ -35,56 +36,70 @@ function recordingService(name: string) {
   };
 }
 
+// Two projects (SELF_HOSTING.md): the Worker in the Workers runtime as on
+// Cloudflare, and the self-hosted server (src/node.ts) on Node.
 export default defineConfig({
-  plugins: [
-    cloudflareTest({
-      wrangler: { configPath: './wrangler.jsonc' },
-      miniflare: {
-        bindings: {
-          // The Workers Free plan's D1 limit per invocation — see src/query-budget.ts.
-          D1_QUERY_LIMIT: '50',
-          TEST_SCHEMA: JSON.stringify(sqlStatements('./schema.sql')),
-          // Its seed is org-specific — test/catalog-seed.test.ts runs it.
-          TEST_MIGRATION_0013: JSON.stringify(sqlStatements('./migrations/0013_catalog.sql')),
-          // Every migration file, in order — see test/installation.test.ts.
-          TEST_MIGRATIONS: JSON.stringify(
-            readdirSync(new URL('./migrations/', import.meta.url))
-              .filter((f) => f.endsWith('.sql'))
-              .sort()
-              .map((name) => ({ name, sql: readFileSync(new URL(`./migrations/${name}`, import.meta.url), 'utf8') }))
-          ),
-          // A self-hosted installation's allowlist (see instance-admins.ts): test users are *@test.
-          INSTANCE_ADMIN_EMAILS: '*@test, boss@example.test',
-          // The installation's login provider's issuer — the test users' (helpers.ts).
-          DEFAULT_IDP_ISSUER_URL: 'https://issuer.test/',
-          // wrangler.jsonc is the demo instance's (internal); the suite runs
-          // as the default kind — tests of the other modes pass their own env.
-          ORG_CREATION: 'admins',
-          DEMO_INSTALL_URL: 'https://start.test',
-          BOOTSTRAP_API_KEY: 'test-bootstrap-key',
-          // Test-only values — never real secrets. ENCRYPTION_KEY must be
-          // base64 of 32 bytes (see CLAUDE.md: hex silently breaks crypto).
-          ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64'),
-          INTERNAL_API_KEY: 'test-internal-key',
-          BFF_INTERNAL_KEY: 'test-bff-key',
-          MAILER_INTERNAL_KEY: 'test-mailer-key',
-          PUBLIC_BASE_URL: 'https://arcanum.test',
-          // A developer's own .dev.vars may point these at local Workers;
-          // blank them so tests always go through the stub bindings below.
-          DEVICEHUB_LOCAL_URL: '',
-          MAILER_LOCAL_URL: '',
-        },
-        serviceBindings: {
-          ARCANUM_DEVICEHUB_SERVICE: recordingService('devicehub'),
-          ARCANUM_MAILER_SERVICE: recordingService('mailer'),
+  test: {
+    projects: [
+      {
+        plugins: [
+          cloudflareTest({
+            wrangler: { configPath: './wrangler.jsonc' },
+            miniflare: {
+              bindings: {
+                // The Workers Free plan's D1 limit per invocation — see src/query-budget.ts.
+                D1_QUERY_LIMIT: '50',
+                TEST_SCHEMA: JSON.stringify(sqlStatements('./schema.sql')),
+                // Its seed is org-specific — test/catalog-seed.test.ts runs it.
+                TEST_MIGRATION_0013: JSON.stringify(sqlStatements('./migrations/0013_catalog.sql')),
+                // Every migration file, in order — see test/installation.test.ts.
+                TEST_MIGRATIONS: JSON.stringify(
+                  readdirSync(new URL('./migrations/', import.meta.url))
+                    .filter((f) => f.endsWith('.sql'))
+                    .sort()
+                    .map((name) => ({ name, sql: readFileSync(new URL(`./migrations/${name}`, import.meta.url), 'utf8') }))
+                ),
+                // A self-hosted installation's allowlist (see instance-admins.ts): test users are *@test.
+                INSTANCE_ADMIN_EMAILS: '*@test, boss@example.test',
+                // The installation's login provider's issuer — the test users' (helpers.ts).
+                DEFAULT_IDP_ISSUER_URL: 'https://issuer.test/',
+                // wrangler.jsonc is the demo instance's (internal); the suite runs
+                // as the default kind — tests of the other modes pass their own env.
+                ORG_CREATION: 'admins',
+                DEMO_INSTALL_URL: 'https://start.test',
+                BOOTSTRAP_API_KEY: 'test-bootstrap-key',
+                // Test-only values — never real secrets. ENCRYPTION_KEY must be
+                // base64 of 32 bytes (see CLAUDE.md: hex silently breaks crypto).
+                ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64'),
+                INTERNAL_API_KEY: 'test-internal-key',
+                BFF_INTERNAL_KEY: 'test-bff-key',
+                MAILER_INTERNAL_KEY: 'test-mailer-key',
+                PUBLIC_BASE_URL: 'https://arcanum.test',
+                // A developer's own .dev.vars may point these at local Workers;
+                // blank them so tests always go through the stub bindings below.
+                DEVICEHUB_LOCAL_URL: '',
+                MAILER_LOCAL_URL: '',
+              },
+              serviceBindings: {
+                ARCANUM_DEVICEHUB_SERVICE: recordingService('devicehub'),
+                ARCANUM_MAILER_SERVICE: recordingService('mailer'),
+              },
+            },
+          }),
+        ],
+        test: {
+          name: 'cloudflare',
+          include: ['test/*.test.ts'],
+          setupFiles: ['./test/setup.ts'],
+          // The org export/import tests run hundreds of statements; on the release
+          // workflow's shared runners they've gone past the 5 s default.
+          testTimeout: 30_000,
         },
       },
-    }),
-  ],
-  test: {
-    setupFiles: ['./test/setup.ts'],
-    // The org export/import tests run hundreds of statements; on the release
-    // workflow's shared runners they've gone past the 5 s default.
-    testTimeout: 30_000,
+      {
+        resolve: { alias: { 'cloudflare:workers': fileURLToPath(new URL('./src/node/workers.ts', import.meta.url)) } },
+        test: { name: 'node', environment: 'node', include: ['test/node/*.test.ts'] },
+      },
+    ],
   },
 });

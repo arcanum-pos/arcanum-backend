@@ -6,15 +6,20 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "typecheck": "tsc && tsc -p test",
+    "typecheck": "tsc && tsc -p tsconfig.node.json && tsc -p test && tsc -p test/node",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "build:node": "esbuild src/node-main.ts --bundle --platform=node --format=esm --target=node22 --alias:cloudflare:workers=./src/node/workers.ts --outfile=dist/node.mjs --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\"",
+    "start:node": "node dist/node.mjs",
+    "migrate:node": "node dist/node.mjs migrate"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.22.0",
     "@cloudflare/workers-types": "^5.20260911.1",
+    "@types/node": "^26.6.5",
     "@vitest/runner": "^4.1.11",
     "@vitest/snapshot": "^4.1.11",
+    "esbuild": "^0.28.2",
     "typescript": "^5.9.3",
     "vitest": "^4.1.11",
     "wrangler": "^4.131.1"
@@ -22,5 +27,8 @@
   "overrides": {
     "miniflare": "5.20260911.0-alpha",
     "wrangler": "$wrangler"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.5"
   }
 }
