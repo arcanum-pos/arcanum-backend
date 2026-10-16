@@ -29,6 +29,7 @@ import { createSumupReaderCheckout, findSumupTransaction, SumupCloudApiError, li
 import { createCharge, getCharge, parseTipCents, setChargeProviderRef, resolveCharge, type ChargeRecord } from './charges';
 import { ensureChargePolling } from './charge-poller-client';
 import { customerOrder, isPendingTabChargeConflict, prepareTabCharge } from '../tabs';
+import { newTapToken, notifyTapPhone } from '../tap-to-pay';
 
 // Called by the settings page to populate the "SumUp Solo-readers" panel
 // with the org's actual paired readers, fetched live from SumUp — nothing is
@@ -218,7 +219,11 @@ export async function createSumupCharge(request: Request, env: Env): Promise<Res
   const resolved = method === 'sumup' && body.readerId && !app ? await dispatchToReader(env, charge, String(body.readerId)) : false;
   // The charge's own id is the payment's foreign id at SumUp: the poller
   // looks it up there (provider_ref set: it's polled).
-  if (app) await setChargeProviderRef(env, charge.id, charge.id, { app: true });
+  // Its token: the kassa's QR for it, and its Tap to Pay phone's link (tap-to-pay.ts).
+  const tapToken = app ? newTapToken() : null;
+  if (app) await setChargeProviderRef(env, charge.id, charge.id, { app: true, tapToken });
+  // At a kassa: a notification on its Tap to Pay phone.
+  if (app && posTerminalId) notifyTapPhone(env, charge);
   if (tabId && !resolved) notifyTabChanged(env, orgId, tabId);
 
   // Unconditional — not just on a successful reader dispatch. This is what
@@ -236,7 +241,7 @@ export async function createSumupCharge(request: Request, env: Env): Promise<Res
     await broadcastPaymentEvent(env, posTerminalId, 'payment_updated', { payment_id: charge.id, method });
   }
 
-  return json({ chargeId: charge.id, ...(sumupApp ? { sumupApp } : {}) }, 201);
+  return json({ chargeId: charge.id, ...(sumupApp ? { sumupApp, tapToken } : {}) }, 201);
 }
 
 const APP_CHARGE_TTL_MS = 10 * 60 * 1000;
@@ -368,6 +373,22 @@ export async function confirmChargeFromPos(request: Request, env: Env): Promise<
   if (!charge) return json({ error: 'Unknown chargeId' }, 404);
   const refused = await refuseUnlessOrgMember(request, env, charge.orgId);
   if (refused) return refused;
+
+  // Tap to Pay: only SumUp says it's paid — never a tap on the kassa. A
+  // cancel asks SumUp first: the guest may just have paid on the phone.
+  if (charge.method === 'sumup' && (charge.providerData as { app?: boolean }).app) {
+    if (body.success !== false) return errorJson('tap_payment_not_manual', 409);
+    if (charge.status === 'pending') {
+      try {
+        await checkSumupAppCharge(env, charge, true);
+      } catch (err) {
+        console.error(`Kon SumUp-transactie niet opvragen voor ${charge.id}`, err);
+      }
+      await resolveCharge(env, charge.id, { success: false, providerStatus: 'cancelled', errorMessage: 'Geannuleerd aan de kassa' });
+    }
+    const current = await getCharge(env, charge.id);
+    return json({ ok: true, chargeId: charge.id, status: current?.status ?? charge.status });
+  }
 
   await resolveCharge(env, body.chargeId, { success: body.success !== false });
   return json({ ok: true, chargeId: body.chargeId });

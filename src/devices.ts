@@ -47,9 +47,11 @@ const MAX_FAILURES = 10;
 const FAILURE_WINDOW_MINUTES = 10;
 const KEEP_DAYS = 30;
 const MAX_NAME = 60;
-const ROLES = new Set(['pos', 'cfd', 'station']);
+const ROLES = new Set(['pos', 'cfd', 'station', 'tap']);
 
-type Role = 'pos' | 'cfd' | 'station';
+// 'tap': a kassa's Tap to Pay phone (tap-to-pay.ts) — paired for one kassa,
+// like a customer display.
+type Role = 'pos' | 'cfd' | 'station' | 'tap';
 
 interface PairingRow {
   id: string;
@@ -165,15 +167,17 @@ async function createPairing(request: Request, env: Env, orgId: string): Promise
   if (caller instanceof Response) return caller;
   const body = (await request.json().catch(() => null)) as { role?: unknown; name?: unknown; linkTo?: unknown; stationId?: unknown; view?: unknown } | null;
   const role = String(body?.role ?? '');
-  if (!ROLES.has(role)) return json({ error: "role must be 'pos', 'cfd' or 'station'" }, 400);
+  if (!ROLES.has(role)) return json({ error: "role must be 'pos', 'cfd', 'station' or 'tap'" }, 400);
   const name = (typeof body?.name === 'string' ? body.name.trim() : '').slice(0, MAX_NAME);
   if (!name) return errorJson('device_name_required', 400);
-  // A customer display can be meant for one kassa of this org right away.
-  const linkTo = role === 'cfd' && typeof body?.linkTo === 'string' && body.linkTo ? body.linkTo : null;
+  // A customer display can be meant for one kassa of this org right away;
+  // a Tap to Pay phone always is.
+  const linkTo = (role === 'cfd' || role === 'tap') && typeof body?.linkTo === 'string' && body.linkTo ? body.linkTo : null;
   if (linkTo) {
     const pos = await orgDevice(env, orgId, linkTo);
     if (!pos || pos.role !== 'pos') return errorJson('device_not_found', 404);
   }
+  if (role === 'tap' && !linkTo) return errorJson('tap_needs_kassa', 400);
 
   // A station screen shows one prep station of this org.
   let stationId: string | null = null;
@@ -324,17 +328,18 @@ async function completeClaim(env: Env, row: PairingRow, claimedBy: string, withK
       .bind(terminalId, row.org_id, row.station_id ?? '', now.toISOString(), row.view)
       .run();
   }
-  // A customer display meant for a kassa: linked now — if that kassa is still there.
+  // A customer display or Tap to Pay phone meant for a kassa: linked now —
+  // if that kassa is still there. It replaces the kassa's previous one.
   let linkedTo: string | null = null;
-  if (row.role === 'cfd' && row.link_to && (await orgDevice(env, row.org_id, row.link_to))) {
-    const previous = await devicehub(env, `/devices/${encodeURIComponent(row.link_to)}/linked?role=cfd`);
+  if ((row.role === 'cfd' || row.role === 'tap') && row.link_to && (await orgDevice(env, row.org_id, row.link_to))) {
+    const previous = await devicehub(env, `/devices/${encodeURIComponent(row.link_to)}/linked?role=${row.role}`);
     if (previous.status === 200 && previous.body?.terminal_id) {
       await devicehub(env, '/devices/unlink', { method: 'POST', body: JSON.stringify({ terminal_id: previous.body.terminal_id }) });
     }
     const linked = await devicehub(env, '/devices/link', { method: 'POST', body: JSON.stringify({ pos_terminal_id: row.link_to, terminal_id: terminalId }) });
     if (linked.status === 200) linkedTo = row.link_to;
   }
-  const deviceKey = withKey && (row.role === 'station' || row.role === 'cfd') ? await createDeviceKey(env, { terminalId, orgId: row.org_id, role: row.role }) : null;
+  const deviceKey = withKey && row.role !== 'pos' ? await createDeviceKey(env, { terminalId, orgId: row.org_id, role: row.role }) : null;
   // The org's language too: a new device starts in it (unless one was picked on the device).
   const org = await env.DB.prepare('SELECT name, locale FROM organizations WHERE id = ?').bind(row.org_id).first<{ name: string; locale: string | null }>();
   return json(
@@ -438,7 +443,11 @@ async function removeDevice(request: Request, env: Env, orgId: string, terminalI
   const { status } = await devicehub(env, '/devices/remove', { method: 'POST', body: JSON.stringify({ terminal_id: terminalId }) });
   if (status !== 200) return errorJson('devicehub_failed', 502);
   // Its own key stops working at once.
-  await env.DB.batch([env.DB.prepare('DELETE FROM station_devices WHERE terminal_id = ? AND org_id = ?').bind(terminalId, orgId), revokeDeviceKeys(env, terminalId)]);
+  await env.DB.batch([
+    env.DB.prepare('DELETE FROM station_devices WHERE terminal_id = ? AND org_id = ?').bind(terminalId, orgId),
+    env.DB.prepare('DELETE FROM device_push_subscriptions WHERE terminal_id = ? AND org_id = ?').bind(terminalId, orgId),
+    revokeDeviceKeys(env, terminalId),
+  ]);
   return json({ ok: true });
 }
 

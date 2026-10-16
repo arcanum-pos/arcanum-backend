@@ -12,12 +12,15 @@
 //            POST /organizations/:org/tickets/:id   (a ticket of its station)
 //   cfd      GET  /organizations/:org/devices/:self
 //            GET  /sumup/status/:charge             (a charge of its linked kassa)
-//   both     GET  /organizations/device-ws-token?terminal_id=:self
+//   tap      GET  /organizations/:org/devices/:self
+//            GET  /organizations/:org/devices/:self/tap     (its kassa's Tap to Pay payment)
+//            POST/DELETE /organizations/:org/devices/:self/push
+//   all      GET  /organizations/device-ws-token?terminal_id=:self
 // Everywhere else it's as if nobody were signed in. Valid until the device
 // is removed in the console (revokeDeviceKeys). Only its SHA-256 is stored.
 import type { Env } from './env';
 
-export type DeviceRole = 'station' | 'cfd';
+export type DeviceRole = 'station' | 'cfd' | 'tap';
 
 export interface DeviceCaller {
   terminalId: string;

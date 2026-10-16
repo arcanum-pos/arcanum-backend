@@ -39,6 +39,7 @@ import { dispatchSelfOrderRoute } from './self-order';
 import { dispatchPrepTicketsRoute } from './prep-tickets';
 import { dispatchStaffRoute } from './staff';
 import { dispatchPublicDeviceRoute } from './devices';
+import { dispatchPublicTapRoute } from './tap-to-pay';
 import { QueryBudgetExceeded, withQueryBudget } from './query-budget';
 
 // Durable Object classes must be a named export of the Worker's main entry
@@ -126,6 +127,9 @@ export default {
         // A station screen or customer display paired with its code alone.
         const pairResponse = await dispatchPublicDeviceRoute(request, env, url.pathname);
         if (pairResponse) return pairResponse;
+        // A kassa's Tap to Pay payment, by its QR (tap-to-pay.ts).
+        const tapResponse = await dispatchPublicTapRoute(request, env, url.pathname);
+        if (tapResponse) return tapResponse;
         const publicResponse = await dispatchSelfOrderRoute(request, env, url.pathname);
         if (publicResponse) return publicResponse;
         // A guest who scanned a table's QR (release C).
