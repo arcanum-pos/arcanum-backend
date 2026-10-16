@@ -128,6 +128,24 @@ async function liveTotals(env: Env, shiftId: string): Promise<Totals> {
 
 const expectedOf = (row: ShiftRow, t: Totals) => row.opening_float_cents + (t.methods.cash?.cents || 0) + t.cashIn - t.cashOut;
 
+// Who worked on a shift: everyone who took a payment on it (the person on
+// the kassa — staff member, else the signed-in name — with how many), and
+// who opened it, closed it or moved cash, most payments first. Not a report
+// per person (B3), just who was there.
+export interface ShiftPerson {
+  name: string;
+  payments: number;
+}
+
+const PEOPLE_SQL = `SELECT shift_id, COALESCE(staff_name, user_name) AS name, COUNT(*) AS n FROM charges
+  WHERE status = 'succeeded' AND COALESCE(staff_name, user_name) IS NOT NULL AND shift_id`;
+
+function peopleOf(rows: { name: string; n: number }[], others: (string | null | undefined)[]): ShiftPerson[] {
+  const people = new Map<string, number>(rows.map((r) => [r.name, r.n]));
+  for (const name of others) if (name && !people.has(name)) people.set(name, 0);
+  return [...people].map(([name, payments]) => ({ name, payments })).sort((a, b) => b.payments - a.payments || a.name.localeCompare(b.name));
+}
+
 async function shiftJson(env: Env, row: ShiftRow, opts: { hideExpected: boolean }) {
   const open = row.status === 'open';
   const totals = open ? await liveTotals(env, row.id) : (JSON.parse(row.totals || 'null') as Totals | null) ?? { methods: {}, cashIn: 0, cashOut: 0 };
@@ -136,9 +154,19 @@ async function shiftJson(env: Env, row: ShiftRow, opts: { hideExpected: boolean 
         env.DB.prepare("SELECT COUNT(*) AS n FROM charges WHERE shift_id = ? AND status = 'pending'").bind(row.id),
         env.DB.prepare("SELECT COUNT(*) AS n FROM tabs WHERE org_id = ? AND status = 'open' AND source = 'kassa'").bind(row.org_id),
         env.DB.prepare('SELECT direction, amount_cents, reason, staff_name, user_name, created_at FROM cash_movements WHERE shift_id = ? ORDER BY created_at').bind(row.id),
+        env.DB.prepare(`${PEOPLE_SQL} = ? GROUP BY name`).bind(row.id),
       ])
-    : await env.DB.batch([env.DB.prepare('SELECT direction, amount_cents, reason, staff_name, user_name, created_at FROM cash_movements WHERE shift_id = ? ORDER BY created_at').bind(row.id)]);
+    : await env.DB.batch([
+        env.DB.prepare('SELECT direction, amount_cents, reason, staff_name, user_name, created_at FROM cash_movements WHERE shift_id = ? ORDER BY created_at').bind(row.id),
+        env.DB.prepare(`${PEOPLE_SQL} = ? GROUP BY name`).bind(row.id),
+      ]);
   const movements = ((open ? extra[2] : extra[0]).results || []) as { direction: string; amount_cents: number; reason: string; staff_name: string | null; user_name: string | null; created_at: string }[];
+  const sellers = ((open ? extra[3] : extra[1]).results || []) as { name: string; n: number }[];
+  const people = peopleOf(sellers, [
+    row.opened_by_staff_name || row.opened_by_name,
+    row.closed_by_staff_name || row.closed_by_name,
+    ...movements.map((m) => m.staff_name || m.user_name),
+  ]);
   const expected = open ? expectedOf(row, totals) : row.expected_cents;
   return {
     id: row.id,
@@ -150,6 +178,7 @@ async function shiftJson(env: Env, row: ShiftRow, opts: { hideExpected: boolean 
     openingFloatCents: row.opening_float_cents,
     totals,
     movements: movements.map((m) => ({ direction: m.direction, amountCents: m.amount_cents, reason: m.reason, by: m.staff_name || m.user_name, at: m.created_at })),
+    people,
     // Blind count: not before the count is in.
     expectedCents: open && opts.hideExpected ? null : expected,
     ...(open
@@ -354,6 +383,11 @@ async function listShifts(request: Request, env: Env, orgId: string): Promise<Re
   )
     .bind(...(register ? [orgId, register] : [orgId]))
     .all<ShiftRow & { register_name: string }>();
+  // Who worked on them: one query for all (never one per shift).
+  const ids = (results || []).map((r) => r.id);
+  const { results: sold } = ids.length
+    ? await env.DB.prepare(`${PEOPLE_SQL} IN (SELECT value FROM json_each(?)) GROUP BY shift_id, name`).bind(JSON.stringify(ids)).all<{ shift_id: string; name: string; n: number }>()
+    : { results: [] };
   return json(
     (results || []).map((r) => ({
       id: r.id,
@@ -371,6 +405,10 @@ async function listShifts(request: Request, env: Env, orgId: string): Promise<Re
       differenceCents: r.difference_cents,
       note: r.note,
       totals: r.totals ? JSON.parse(r.totals) : null,
+      people: peopleOf(
+        (sold || []).filter((p) => p.shift_id === r.id),
+        [r.opened_by_staff_name || r.opened_by_name, r.closed_by_staff_name || r.closed_by_name]
+      ),
     }))
   );
 }

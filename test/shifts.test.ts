@@ -111,6 +111,30 @@ describe('a shift, from Kassa openen to kasopmaak', () => {
     spy.mockRestore();
   });
 
+  it('who worked on it: everyone who took a payment (with how many), who opened and closed it — on the kassa and in the list', async () => {
+    const org = await seedOrg();
+    const toog = await register(org);
+    const opened = await openShift(org, toog, { floatCents: 5000 });
+    const pay = async (user: TestOrg['admin'], cents: number) => {
+      const tab = await createTab(org, { lines: [line('pils', 'Pils', cents, 1)], registerId: toog });
+      const charge = await api('POST', '/sumup/charge', { user, body: { orgId: org.orgId, method: 'cash', tabId: tab.id, amount: cents, registerId: toog } });
+      await api('POST', '/sumup/confirm', { user, body: { chargeId: charge.body.chargeId } });
+    };
+    await pay(org.admin, 300);
+    await pay(org.admin, 300);
+    await pay(org.cashier, 300);
+    expect((await current(org, toog)).shift.people).toEqual([
+      { name: org.admin.name, payments: 2 },
+      { name: org.cashier.name, payments: 1 },
+    ]);
+    const done = await api('POST', o(org, `/shifts/${opened.body.id}/close`), { user: org.admin, body: { countedCents: 5900, leftInDrawerCents: 5000 } });
+    expect(done.body.people).toEqual([
+      { name: org.admin.name, payments: 2 },
+      { name: org.cashier.name, payments: 1 },
+    ]);
+    expect((await api('GET', o(org, '/shifts'), { user: org.cashier })).body[0].people).toEqual(done.body.people);
+  });
+
   it('not closed while a payment on it is under way', async () => {
     const org = await seedOrg();
     const toog = await register(org);
