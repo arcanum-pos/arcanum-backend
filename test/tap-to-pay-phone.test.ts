@@ -131,7 +131,12 @@ describe("a kassa's Tap to Pay phone", () => {
     const state = await asPhone(key, 'GET', `${path}/tap`);
     expect(state.body).toMatchObject({ name: 'Telefoon toog', kassa: { terminalId: kassa, name: 'Kassa toog' }, charge: null, push: { subscribed: false } });
     expect((await asPhone(null, 'GET', `${path}/tap`)).status).toBe(401);
-    expect((await apiWith(ENV, 'GET', `${path}/tap`, { user: org.admin })).status).toBe(401);
+    // A member signed in on the phone (the bff then sends the person, not the key): allowed too.
+    expect((await apiWith(ENV, 'GET', `${path}/tap`, { user: org.cashier })).body).toMatchObject({ kassa: { terminalId: kassa } });
+    // …but not for another kind of device, nor by someone outside the org.
+    expect((await apiWith(ENV, 'GET', `/organizations/${org.orgId}/devices/${kassa}/tap`, { user: org.cashier })).body.code).toBe('device_not_found');
+    const stranger = await seedOrg();
+    expect((await apiWith(ENV, 'GET', `${path}/tap`, { user: stranger.admin })).status).toBe(403);
     expect((await asPhone(key, 'POST', `${path}/push`, { subscription: { endpoint: 'https://evil.example/x', keys: {} } })).body.code).toBe('push_subscription_invalid');
     expect((await asPhone(key, 'POST', `${path}/push`, { subscription: await subscription() })).status).toBe(200);
     expect((await asPhone(key, 'GET', `${path}/tap`)).body.push.subscribed).toBe(true);

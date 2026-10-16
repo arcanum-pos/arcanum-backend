@@ -10,15 +10,16 @@
 // The kassa also shows the payment as a QR code (any phone with the SumUp
 // app scans it — no pairing): it carries the charge's own random token.
 //
-//   GET    /organizations/:org/devices/:self/tap    the phone's key   { kassa, charge, push }
-//   POST   /organizations/:org/devices/:self/push   the phone's key   { subscription }
-//   DELETE /organizations/:org/devices/:self/push   the phone's key
+//   GET    /organizations/:org/devices/:self/tap    the phone's key, or a member signed in on it   { kassa, charge, push }
+//   POST   /organizations/:org/devices/:self/push   the same   { subscription }
+//   DELETE /organizations/:org/devices/:self/push   the same
 //   GET    /public/tap/:charge/:token               the QR's link     the charge (amount, the SumUp app's link details)
 //   POST   /public/tap/:charge/:token/return        { status }        back from the SumUp app: check it now
 import { waitUntil } from 'cloudflare:workers';
 import type { Env } from './env';
 import { callDeviceHub } from './devicehub-client';
-import { deviceCaller, type DeviceCaller } from './device-keys';
+import { deviceCaller } from './device-keys';
+import { extractCaller, requireOrgRole } from './organizations/auth';
 import { errorJson } from './errors';
 import { json } from './http';
 import { getDecryptedPaymentCredential } from './organizations/payment-credentials';
@@ -62,16 +63,26 @@ async function tapCharge(env: Env, charge: ChargeRecord, token: string) {
 
 // --- The paired phone ---
 
-async function phoneOf(request: Request, env: Env, orgId: string, terminalId: string): Promise<DeviceCaller | Response> {
+// The phone itself (its key) — or a member of the org signed in on it: then
+// arcanum-bff sends the person, never the key (a phone someone also uses
+// for the console, say). Either way only a Tap to Pay phone of this org.
+async function phoneOf(request: Request, env: Env, orgId: string, terminalId: string): Promise<true | Response> {
+  const caller = extractCaller(request);
+  if (caller) {
+    if (!(await requireOrgRole(env, orgId, caller, ['admin', 'cashier']))) return json({ error: 'Forbidden' }, 403);
+    const device = await deviceRow(env, terminalId);
+    if (!device || device.org_id !== orgId || device.role !== 'tap') return errorJson('device_not_found', 404);
+    return true;
+  }
   const device = await deviceCaller(request, env);
   if (!device) return json({ error: 'Unauthorized' }, 401);
   if (device.role !== 'tap' || device.orgId !== orgId || device.terminalId !== terminalId) return json({ error: 'Forbidden' }, 403);
-  return device;
+  return true;
 }
 
-async function deviceRow(env: Env, terminalId: string): Promise<{ org_id: string | null; linked_to: string | null; name: string | null } | null> {
+async function deviceRow(env: Env, terminalId: string): Promise<{ org_id: string | null; role: string; linked_to: string | null; name: string | null } | null> {
   const res = await callDeviceHub(env, `/devices/${encodeURIComponent(terminalId)}`, {});
-  return res.ok ? ((await res.json()) as { org_id: string | null; linked_to: string | null; name: string | null } | null) : null;
+  return res.ok ? ((await res.json()) as { org_id: string | null; role: string; linked_to: string | null; name: string | null } | null) : null;
 }
 
 // Its kassa, the payment waiting there (if any) and its notifications.
