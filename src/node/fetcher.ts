@@ -10,13 +10,16 @@ export function httpFetcher(baseUrl: string) {
       const url = new URL(request.url);
       const target = new URL(url.pathname + url.search, base);
       const hasBody = request.method !== 'GET' && request.method !== 'HEAD';
-      return fetch(target, {
+      const response = await fetch(target, {
         method: request.method,
         headers: request.headers,
         body: hasBody ? request.body : undefined,
         // A streamed body (Node's fetch needs it said).
         ...(hasBody ? { duplex: 'half' } : {}),
       } as RequestInit);
+      // Changeable headers, as a service binding's answer has (the caller
+      // adds its own; Node's fetch hands them out read-only).
+      return new Response(response.body, response);
     },
   };
 }
