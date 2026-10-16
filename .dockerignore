@@ -1,0 +1,13 @@
+# Never into an image: local secrets, dependencies and build output (the
+# image builds its own), test leftovers.
+.dev.vars
+.dev.vars.*
+.env
+.env.*
+node_modules
+.wrangler
+dist
+dist-node
+test-results
+playwright-report
+.git
