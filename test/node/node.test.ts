@@ -10,7 +10,7 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { migrateDatabase, nodeEnv, openDatabase, start } from '../../src/node';
+import { migrateDatabase, nodeEnv, openDatabase, resetDefaultLogin, start } from '../../src/node';
 import worker from '../../src/index';
 import { AlarmNamespace } from '../../src/node/alarms';
 import { NodeD1Database } from '../../src/node/d1';
@@ -37,6 +37,18 @@ describe('migrations, like the installer', () => {
     migrate(db, schema, [m1]);
     expect(() => migrate(db, schema, [m1, { name: '0002_bad.sql', sql: 'ALTER TABLE t ADD COLUMN c TEXT; SELECT nope FROM nowhere;' }])).toThrow(/0002_bad\.sql/);
     expect(db.raw.prepare("SELECT COUNT(*) AS n FROM pragma_table_info('t') WHERE name = 'c'").get()).toEqual({ n: 0 });
+  });
+
+  it('--reset-login clears the seeded default login provider (it re-seeds from the settings)', () => {
+    const env = { BACKEND_DB: path.join(dir, 'reset.db') };
+    const db = openDatabase(env);
+    migrateDatabase(env, db);
+    expect(resetDefaultLogin(db)).toBe(false);
+    // The default login provider belongs to the 'default' organisation (seeded with it).
+    db.raw.prepare("INSERT OR IGNORE INTO organizations (id, name, dek_ciphertext, dek_iv, created_at, created_by_sub) VALUES ('default', 'Default', 'x', 'y', '2026-10-16', 'seed')").run();
+    db.raw.prepare("INSERT INTO identity_providers (org_id, issuer_url, client_id, client_secret_ciphertext, client_secret_iv, updated_at) VALUES ('default', 'https://old.test/', 'c', 'x', 'y', '2026-10-16')").run();
+    expect(resetDefaultLogin(db)).toBe(true);
+    expect(db.raw.prepare("SELECT COUNT(*) AS n FROM identity_providers WHERE org_id = 'default'").get()).toEqual({ n: 0 });
   });
 
   it("the real schema.sql and migrations: fresh, then up to date", () => {

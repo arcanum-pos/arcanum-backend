@@ -39,6 +39,13 @@ export function migrateDatabase(environment: NodeJS.ProcessEnv, db = openDatabas
   return migrate(db, schema, migrations);
 }
 
+// The seeded default login provider cleared, so it re-seeds from the
+// current DEFAULT_IDP_* settings at the next sign-in — what the installer's
+// login:reset step does on Cloudflare. True when there was one.
+export function resetDefaultLogin(db: NodeD1Database): boolean {
+  return Number(db.raw.prepare("DELETE FROM identity_providers WHERE org_id = 'default'").run().changes) > 0;
+}
+
 export function nodeEnv(environment: NodeJS.ProcessEnv, db = openDatabase(environment)): { env: Env; poller: AlarmNamespace<ChargePoller> } {
   const strings = Object.fromEntries(Object.entries(environment).filter(([, v]) => typeof v === 'string')) as Record<string, string>;
   let env: Env;
