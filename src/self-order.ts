@@ -97,7 +97,8 @@ async function selfOrderModes(env: Env, eventId: string): Promise<SelfOrderMode[
 async function menu(env: Env, code: string): Promise<Response> {
   const event = await eventByCode(env, code);
   if (!event) return errorJson('self_order_closed', 404);
-  const base = { eventName: event.name, orgName: event.org_name, locale: event.org_locale || 'nl' };
+  // orgId: the page shows the organisation's own app icon (org-icons.ts).
+  const base = { eventName: event.name, orgName: event.org_name, orgId: event.org_id, locale: event.org_locale || 'nl' };
   const closed = json({ ...base, open: false, modes: [] });
   if (!event.self_order_enabled) return closed;
   const modes = [];
@@ -271,6 +272,7 @@ async function follow(env: Env, token: string): Promise<Response> {
     number: tab.event_number ?? tab.number,
     eventName: tab.event_name,
     orgName: tab.org_name,
+    orgId: tab.org_id,
     locale: tab.org_locale || 'nl',
     selfOrder: tab.source === 'self_order',
     // The ordering mode it came in by (its menu for another round), and its

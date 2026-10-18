@@ -658,6 +658,18 @@ CREATE TABLE IF NOT EXISTS device_claims (
   claimed_at TEXT NOT NULL
 );
 
+-- An organisation's own app icons (migration 0042): per slot (kassa,
+-- display, station, pickup, entrance, tap, waiter, selforder, station-<id>)
+-- the PNG (base64) per size. No row: the default icon.
+CREATE TABLE IF NOT EXISTS org_icons (
+  org_id TEXT NOT NULL REFERENCES organizations(id),
+  slot TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  png TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (org_id, slot, size)
+);
+
 CREATE TABLE IF NOT EXISTS station_devices (
   terminal_id TEXT PRIMARY KEY,
   org_id TEXT NOT NULL REFERENCES organizations(id),
@@ -820,3 +832,4 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0038_table_management.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0039_web_push.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0040_tap_devices.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0041_device_repair.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0042_org_icons.sql');

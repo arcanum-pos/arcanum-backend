@@ -39,6 +39,7 @@ import { dispatchSelfOrderRoute } from './self-order';
 import { dispatchPrepTicketsRoute } from './prep-tickets';
 import { dispatchStaffRoute } from './staff';
 import { dispatchPublicDeviceRoute } from './devices';
+import { dispatchOrgIconRoute, dispatchPublicIconRoute } from './org-icons';
 import { dispatchPublicTapRoute } from './tap-to-pay';
 import { QueryBudgetExceeded, withQueryBudget } from './query-budget';
 
@@ -127,6 +128,9 @@ export default {
         // A station screen or customer display paired with its code alone.
         const pairResponse = await dispatchPublicDeviceRoute(request, env, url.pathname);
         if (pairResponse) return pairResponse;
+        // An organisation's own app icons (org-icons.ts), for arcanum-bff's /icons/org/….
+        const iconResponse = await dispatchPublicIconRoute(request, env, url.pathname);
+        if (iconResponse) return iconResponse;
         // A kassa's Tap to Pay payment, by its QR (tap-to-pay.ts).
         const tapResponse = await dispatchPublicTapRoute(request, env, url.pathname);
         if (tapResponse) return tapResponse;
@@ -141,6 +145,8 @@ export default {
         // First: /organizations/import/start would otherwise be read as an org id.
         const transferResponse = await dispatchOrgTransferRoute(request, env, url.pathname);
         if (transferResponse) return transferResponse;
+        const iconsResponse = await dispatchOrgIconRoute(request, env, url.pathname);
+        if (iconsResponse) return iconsResponse;
         // Tabs live under the org path (so they share its BFF route and
         // membership check) but aren't admin-portal code — own module.
         const tabsResponse = await dispatchTabsRoute(request, env, url.pathname);
