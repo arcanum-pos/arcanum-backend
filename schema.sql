@@ -670,6 +670,16 @@ CREATE TABLE IF NOT EXISTS org_icons (
   PRIMARY KEY (org_id, slot, size)
 );
 
+-- What a kassa's customer display shows while the order is being entered
+-- (migration 0043): the kassa's current order (JSON), `seq` its own counter.
+CREATE TABLE IF NOT EXISTS customer_views (
+  terminal_id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES organizations(id),
+  view TEXT,
+  seq INTEGER NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS station_devices (
   terminal_id TEXT PRIMARY KEY,
   org_id TEXT NOT NULL REFERENCES organizations(id),
@@ -833,3 +843,4 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0039_web_push.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0040_tap_devices.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0041_device_repair.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0042_org_icons.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0043_customer_views.sql');

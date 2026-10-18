@@ -12,6 +12,7 @@
 //            POST /organizations/:org/tickets/:id   (a ticket of its station)
 //   cfd      GET  /organizations/:org/devices/:self
 //            GET  /sumup/status/:charge             (a charge of its linked kassa)
+//            GET  /organizations/:org/devices/:self/customer-view  (its linked kassa's order, being entered)
 //   tap      GET  /organizations/:org/devices/:self
 //            GET  /organizations/:org/devices/:self/tap     (its kassa's Tap to Pay payment)
 //            POST/DELETE /organizations/:org/devices/:self/push

@@ -526,6 +526,7 @@ async function removeDevice(request: Request, env: Env, orgId: string, terminalI
     env.DB.prepare('DELETE FROM station_devices WHERE terminal_id = ? AND org_id = ?').bind(terminalId, orgId),
     env.DB.prepare('DELETE FROM device_push_subscriptions WHERE terminal_id = ? AND org_id = ?').bind(terminalId, orgId),
     env.DB.prepare('DELETE FROM device_claims WHERE terminal_id = ? AND org_id = ?').bind(terminalId, orgId),
+    env.DB.prepare('DELETE FROM customer_views WHERE terminal_id = ? AND org_id = ?').bind(terminalId, orgId),
     revokeDeviceKeys(env, terminalId),
   ]);
   return json({ ok: true });

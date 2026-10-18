@@ -7,6 +7,7 @@ import { listEvents, createEvent, createOrderMode, deleteOrderMode, newEventSelf
 import { getOrgLocale, setOrgLocale } from './locale';
 import { getCapabilities } from './org-creation';
 import { dispatchDeviceRoute } from '../devices';
+import { dispatchCustomerViewRoute } from '../customer-view';
 import { dispatchTapDeviceRoute } from '../tap-to-pay';
 
 // Handles every /organizations/* path. Returns null for anything it doesn't
@@ -23,6 +24,8 @@ export async function dispatchOrganizationsRoute(request: Request, env: Env, pat
   // "device-pairings" isn't an organization id.
   const tapResponse = await dispatchTapDeviceRoute(request, env, pathname);
   if (tapResponse) return tapResponse;
+  const customerViewResponse = await dispatchCustomerViewRoute(request, env, pathname);
+  if (customerViewResponse) return customerViewResponse;
   const deviceResponse = await dispatchDeviceRoute(request, env, pathname);
   if (deviceResponse) return deviceResponse;
 
