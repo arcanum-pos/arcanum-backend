@@ -32,10 +32,18 @@ describe('the database copied aside before an update, and put back on a rollback
     writeFileSync(db, 'v2')
     writeFileSync(`${db}-wal`, 'wal2')
     writeFileSync(`${db}-shm`, 'shm2')
+    // A restart of that version: the copy from before it is kept, not overwritten with v2.
+    expect(backupDatabase(db, '0.1.70')).toEqual([])
+    expect(readFileSync(`${db}.before-0.1.70`, 'utf8')).toBe('v1')
     expect(restoreDatabase(db, '0.1.70')).toBe(true)
     expect(readFileSync(db, 'utf8')).toBe('v1')
     expect(readFileSync(`${db}-wal`, 'utf8')).toBe('wal1')
     expect(existsSync(`${db}-shm`)).toBe(false)
+    // Moved back, not copied: a restart of the rollback doesn't put it back again.
+    expect(existsSync(`${db}.before-0.1.70`)).toBe(false)
+    writeFileSync(db, 'v1, used since')
+    expect(restoreDatabase(db, '0.1.70')).toBe(false)
+    expect(readFileSync(db, 'utf8')).toBe('v1, used since')
   });
 
   it('no copy of that version: nothing put back; no database yet: nothing copied; only a version as a name', () => {

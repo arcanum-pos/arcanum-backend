@@ -12,7 +12,7 @@
 // `node dist/node.mjs migrate` brings the database up to date and stops
 // (the installer runs it before rolling out a new version; see node-main.ts).
 import { serve } from '@hono/node-server';
-import { copyFileSync, existsSync, readFileSync, rmSync } from 'node:fs';
+import { copyFileSync, existsSync, readFileSync, renameSync, rmSync } from 'node:fs';
 import worker, { ChargePoller } from './index';
 import type { Env } from './env';
 import { AlarmNamespace } from './node/alarms';
@@ -32,9 +32,13 @@ export function openDatabase(environment: NodeJS.ProcessEnv): NodeD1Database {
 
 // Before a new version's migration, its database files (the file, its -wal
 // and -shm) copied aside as <file>.before-<version> — so a rollback can put
-// them back; rolling back, that earlier copy put back. Before the database is
+// them back; rolling back, that copy moved back. Before the database is
 // opened. What the installer's init container did with a shell, which the
-// distroless image doesn't have (SELF_HOSTING.md).
+// distroless image doesn't have (SELF_HOSTING.md). Both are safe to repeat —
+// a restart (a recreated pod, compose's backend migrating as it starts) runs
+// them again: a copy that's there already is kept (it's from before the
+// migration; the database now isn't), and a copy put back is gone, so it's
+// never put back twice.
 const DB_FILES = ['', '-wal', '-shm'];
 const VERSION = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
@@ -44,6 +48,7 @@ export function databasePath(environment: NodeJS.ProcessEnv): string {
 
 export function backupDatabase(path: string, version: string): string[] {
   if (!VERSION.test(version)) throw new Error(`Not a version: ${version}`);
+  if (existsSync(`${path}.before-${version}`)) return [];
   const copied: string[] = [];
   for (const suffix of DB_FILES) {
     const file = `${path}${suffix}`;
@@ -61,7 +66,7 @@ export function restoreDatabase(path: string, version: string): boolean {
   for (const suffix of DB_FILES) {
     const file = `${path}${suffix}`;
     rmSync(file, { force: true });
-    if (existsSync(`${file}.before-${version}`)) copyFileSync(`${file}.before-${version}`, file);
+    if (existsSync(`${file}.before-${version}`)) renameSync(`${file}.before-${version}`, file);
   }
   return true;
 }
