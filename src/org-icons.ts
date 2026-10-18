@@ -19,8 +19,9 @@ import { extractCaller, requireOrgRole } from './organizations/auth';
 
 export const ICON_SIZES = [96, 180, 192, 512] as const;
 // The pages that can be installed as an app, per organisation. A prep
-// station's: station-<its id>.
-export const ICON_SLOTS = new Set(['kassa', 'display', 'station', 'pickup', 'entrance', 'tap', 'waiter', 'selforder']);
+// station's: station-<its id>. 'console': the console of whoever's working
+// in this organisation (arcanum-bff knows which from a cookie).
+export const ICON_SLOTS = new Set(['kassa', 'display', 'station', 'pickup', 'entrance', 'tap', 'waiter', 'selforder', 'console']);
 const STATION_SLOT = /^station-([A-Za-z0-9_-]{1,64})$/;
 // A 512 px icon, a photo even, stays well under this.
 const MAX_PNG_BYTES = 1_000_000;

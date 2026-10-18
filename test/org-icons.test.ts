@@ -55,7 +55,9 @@ describe("an organisation's app icons", () => {
     expect((await api('PUT', icons(org, '/kassa'), { user: org.cashier, body: set() })).status).toBe(403);
     expect((await api('DELETE', icons(org, '/kassa'), { user: org.cashier })).status).toBe(403);
     expect((await api('PUT', icons(org, '/kassa'), { user: null, body: set() })).status).toBe(401);
-    expect((await api('PUT', icons(org, '/console'), { user: org.admin, body: set() })).body.code).toBe('icon_slot_unknown');
+    expect((await api('PUT', icons(org, '/start'), { user: org.admin, body: set() })).body.code).toBe('icon_slot_unknown');
+    // The console's: per organisation too.
+    expect((await api('PUT', icons(org, '/console'), { user: org.admin, body: set() })).status).toBe(200);
     const wrongSize = { png: { ...set().png, 180: png(200) } };
     expect((await api('PUT', icons(org, '/kassa'), { user: org.admin, body: wrongSize })).body).toMatchObject({ code: 'icon_invalid', params: { size: 180 } });
     const notPng = { png: { ...set().png, 96: btoa('<svg/>') } };
@@ -64,5 +66,6 @@ describe("an organisation's app icons", () => {
     expect((await api('PUT', icons(org, '/kassa'), { user: org.admin, body: missing })).body.code).toBe('icon_invalid');
     // Nothing kept from a refused upload.
     expect((await publicIcon(org, 'kassa', 96)).status).toBe(404);
+    expect((await publicIcon(org, 'console', 96)).status).toBe(200);
   });
 });
