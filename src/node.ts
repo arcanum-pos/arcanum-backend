@@ -10,9 +10,9 @@
 //   every var and secret by its own name (ENCRYPTION_KEY, INTERNAL_API_KEY, …)
 //
 // `node dist/node.mjs migrate` brings the database up to date and stops
-// (the installer runs it as a Job before rolling out a new version).
+// (the installer runs it before rolling out a new version; see node-main.ts).
 import { serve } from '@hono/node-server';
-import { readFileSync } from 'node:fs';
+import { copyFileSync, existsSync, readFileSync, rmSync } from 'node:fs';
 import worker, { ChargePoller } from './index';
 import type { Env } from './env';
 import { AlarmNamespace } from './node/alarms';
@@ -27,7 +27,43 @@ function required(env: NodeJS.ProcessEnv, name: string): string {
 }
 
 export function openDatabase(environment: NodeJS.ProcessEnv): NodeD1Database {
-  return new NodeD1Database(environment.BACKEND_DB || '/data/backend.db');
+  return new NodeD1Database(databasePath(environment));
+}
+
+// Before a new version's migration, its database files (the file, its -wal
+// and -shm) copied aside as <file>.before-<version> — so a rollback can put
+// them back; rolling back, that earlier copy put back. Before the database is
+// opened. What the installer's init container did with a shell, which the
+// distroless image doesn't have (SELF_HOSTING.md).
+const DB_FILES = ['', '-wal', '-shm'];
+const VERSION = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+export function databasePath(environment: NodeJS.ProcessEnv): string {
+  return environment.BACKEND_DB || '/data/backend.db';
+}
+
+export function backupDatabase(path: string, version: string): string[] {
+  if (!VERSION.test(version)) throw new Error(`Not a version: ${version}`);
+  const copied: string[] = [];
+  for (const suffix of DB_FILES) {
+    const file = `${path}${suffix}`;
+    if (!existsSync(file)) continue;
+    copyFileSync(file, `${file}.before-${version}`);
+    copied.push(file);
+  }
+  return copied;
+}
+
+// True when there was a copy to put back (else the database stays as it is).
+export function restoreDatabase(path: string, version: string): boolean {
+  if (!VERSION.test(version)) throw new Error(`Not a version: ${version}`);
+  if (!existsSync(`${path}.before-${version}`)) return false;
+  for (const suffix of DB_FILES) {
+    const file = `${path}${suffix}`;
+    rmSync(file, { force: true });
+    if (existsSync(`${file}.before-${version}`)) copyFileSync(`${file}.before-${version}`, file);
+  }
+  return true;
 }
 
 // The database up to date: schema.sql and migrations/ from next to the

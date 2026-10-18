@@ -4,13 +4,13 @@
 // and a real flow through the API on it: an organisation (its own data
 // key), a menu, a tab, paid in cash, closed.
 import { once } from 'node:events';
-import { mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { migrateDatabase, nodeEnv, openDatabase, resetDefaultLogin, start } from '../../src/node';
+import { backupDatabase, migrateDatabase, nodeEnv, openDatabase, resetDefaultLogin, restoreDatabase, start } from '../../src/node';
 import worker from '../../src/index';
 import { AlarmNamespace } from '../../src/node/alarms';
 import { NodeD1Database } from '../../src/node/d1';
@@ -18,6 +18,36 @@ import { migrate } from '../../src/node/migrate';
 
 const dir = mkdtempSync(path.join(tmpdir(), 'backend-'));
 const KEY32 = Buffer.alloc(32, 7).toString('base64');
+
+// Before an update the database is copied aside; a rollback puts it back —
+// in Node, since the distroless image has no shell (node-main.ts).
+describe('the database copied aside before an update, and put back on a rollback', () => {
+  it('copies every file there is; puts that copy back, the files it had no copy of removed', () => {
+    const db = path.join(mkdtempSync(path.join(tmpdir(), 'backup-')), 'backend.db')
+    writeFileSync(db, 'v1')
+    writeFileSync(`${db}-wal`, 'wal1')
+    expect(backupDatabase(db, '0.1.70')).toEqual([db, `${db}-wal`])
+    expect(readFileSync(`${db}.before-0.1.70`, 'utf8')).toBe('v1')
+    // The new version changed it (and made a -shm).
+    writeFileSync(db, 'v2')
+    writeFileSync(`${db}-wal`, 'wal2')
+    writeFileSync(`${db}-shm`, 'shm2')
+    expect(restoreDatabase(db, '0.1.70')).toBe(true)
+    expect(readFileSync(db, 'utf8')).toBe('v1')
+    expect(readFileSync(`${db}-wal`, 'utf8')).toBe('wal1')
+    expect(existsSync(`${db}-shm`)).toBe(false)
+  });
+
+  it('no copy of that version: nothing put back; no database yet: nothing copied; only a version as a name', () => {
+    const db = path.join(mkdtempSync(path.join(tmpdir(), 'backup-')), 'backend.db')
+    expect(backupDatabase(db, '0.1.70')).toEqual([])
+    writeFileSync(db, 'v1')
+    expect(restoreDatabase(db, '0.1.69')).toBe(false)
+    expect(readFileSync(db, 'utf8')).toBe('v1')
+    expect(() => backupDatabase(db, '../evil')).toThrow(/Not a version/)
+    expect(() => restoreDatabase(db, 'a/b')).toThrow(/Not a version/)
+  });
+});
 
 describe('migrations, like the installer', () => {
   const schema = "CREATE TABLE d1_migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE); CREATE TABLE t (a TEXT); INSERT INTO d1_migrations (name) VALUES ('0001_a.sql');";
