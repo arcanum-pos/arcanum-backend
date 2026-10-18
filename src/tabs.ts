@@ -841,20 +841,54 @@ async function setSplit(request: Request, env: Env, orgId: string, tabId: string
   return json(await loadTabDetail(env, orgId, tabId));
 }
 
-// POST /organizations/:orgId/tabs/:tabId/cancel { reason? } — only for a
-// tab with nothing left on it (net total 0 — never ordered from, or every
-// line voided) and no payment, pending or succeeded.
+// POST /organizations/:orgId/tabs/:tabId/cancel { reason?, voidAll? } — only
+// for a tab with nothing left on it (net total 0 — never ordered from, or
+// every line voided) and no payment, pending or succeeded.
+// `voidAll` ("Ticket annuleren", 2026-10-18): first voids every line still
+// on it, with the reason (required then) — one correction order, as if each
+// line was voided by hand; nothing is deleted (DOMAIN_MODEL.md "Append-only
+// records"). All in one batch: the voids and the cancel together, or neither.
 async function cancelTab(request: Request, env: Env, orgId: string, tabId: string): Promise<Response> {
-  const body = (await request.json().catch(() => ({}))) as { reason?: unknown };
+  const body = (await request.json().catch(() => ({}))) as { reason?: unknown; voidAll?: unknown };
   const reason = typeof body.reason === 'string' ? body.reason.trim().slice(0, 200) : null;
-
-  const result = await env.DB.prepare(
+  const now = new Date().toISOString();
+  const cancel = env.DB.prepare(
     `UPDATE tabs SET status = 'cancelled', closed_at = ?, cancel_reason = ?
      WHERE id = ? AND org_id = ? AND status = 'open' AND ${TOTAL_SQL} = 0
        AND NOT EXISTS (SELECT 1 FROM charges WHERE tab_id = tabs.id AND status IN ('pending', 'succeeded'))`
-  )
-    .bind(new Date().toISOString(), reason || null, tabId, orgId)
-    .run();
+  ).bind(now, reason || null, tabId, orgId);
+
+  let result: D1Result;
+  if (body.voidAll === true) {
+    if (!reason) return json({ error: 'reason is required' }, 400);
+    const who = await attribution(request, env, orgId, body as Record<string, unknown>);
+    if (who instanceof Response) return who;
+    const orderId = crypto.randomUUID();
+    const remaining = (line: string) => `${line}.quantity + COALESCE((SELECT SUM(v.quantity) FROM order_lines v WHERE v.voids_line_id = ${line}.id), 0)`;
+    const results = await env.DB.batch([
+      // The correction order — only for an open tab with nothing paid or being paid, and something left to void.
+      env.DB.prepare(
+        `INSERT INTO orders (id, org_id, tab_id, source, device_id, device_name, user_name, user_email, submitted_at, staff_id, staff_name)
+         SELECT ?, ?, ?, 'kassa', ?, ?, ?, ?, ?, ?, ?
+         WHERE EXISTS (SELECT 1 FROM tabs WHERE id = ? AND org_id = ? AND status = 'open')
+           AND NOT EXISTS (SELECT 1 FROM charges WHERE tab_id = ? AND status IN ('pending', 'succeeded'))
+           AND EXISTS (SELECT 1 FROM order_lines l WHERE l.tab_id = ? AND l.voids_line_id IS NULL AND ${remaining('l')} > 0)`
+      ).bind(orderId, orgId, tabId, who.deviceId, who.deviceName, who.userName, who.userEmail, now, who.staffId ?? null, who.staffName ?? null, tabId, orgId, tabId, tabId),
+      // A void for what's left of every line.
+      env.DB.prepare(
+        `INSERT INTO order_lines (id, org_id, tab_id, order_id, item_code, variant_id, name, unit_price_cents, quantity, category, vat_rate_bp,
+           prep_station_id, prep_station_name, voids_line_id, void_reason, created_at)
+         SELECT lower(hex(randomblob(16))), l.org_id, l.tab_id, ?, l.item_code, l.variant_id, l.name, l.unit_price_cents, -(${remaining('l')}), l.category, l.vat_rate_bp,
+           l.prep_station_id, l.prep_station_name, l.id, ?, ?
+         FROM order_lines l WHERE l.tab_id = ? AND l.voids_line_id IS NULL AND ${remaining('l')} > 0 AND EXISTS (SELECT 1 FROM orders WHERE id = ?)`
+      ).bind(orderId, reason, now, tabId, orderId),
+      // Then, in the same batch, the cancel (its total is 0 now).
+      cancel,
+    ]);
+    result = results[2];
+  } else {
+    result = await cancel.run();
+  }
 
   if ((result.meta.changes || 0) === 0) {
     const tab = await loadTabSummary(env, orgId, tabId);

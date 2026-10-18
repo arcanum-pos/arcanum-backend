@@ -1,7 +1,7 @@
 // Tabs API: auth, numbering, orders, voids, cancel, rename, listing.
 // Payment-related tab rules live in tab-payments.test.ts.
 import { describe, expect, it } from 'vitest';
-import { api, createTab, DEVICE, getTab, line, orderBody, payCash, seedOrg, tabsPath, type TestOrg } from './helpers';
+import { api, chargeCash, confirmCharge, createTab, DEVICE, getTab, line, orderBody, payCash, rows, seedOrg, tabsPath, type TestOrg } from './helpers';
 
 async function tabWithOrder(org: TestOrg) {
   return createTab(org, {
@@ -218,6 +218,56 @@ describe('tabs: cancel', () => {
     const tab = await createTab(org, { lines: [line('bon', 'Bonnen', 100, 3)] });
     await api('POST', tabsPath(org.orgId, `/${tab.id}/lines/${tab.lines[0].id}/void`), { user: org.cashier, body: { reason: 'x' } });
     expect((await cancel(org, tab.id)).status).toBe(200);
+  });
+});
+
+// "Ticket annuleren" (2026-10-18): the whole ticket at once — every line
+// voided with the reason, then cancelled, in one go; nothing deleted.
+describe('tabs: cancel the whole ticket (voidAll)', () => {
+  const cancelAll = (org: TestOrg, tabId: string, reason?: string) =>
+    api('POST', tabsPath(org.orgId, `/${tabId}/cancel`), { user: org.cashier, body: { reason, voidAll: true, ...DEVICE } });
+
+  it('voids what is left of every line with the reason, then cancels — the lines stay, as corrections', async () => {
+    const org = await seedOrg();
+    const tab = await createTab(org, { lines: [line('bon', 'Bonnen', 100, 3), line('pils', 'Pils', 250, 2)] });
+    // One already partly voided by hand.
+    await api('POST', tabsPath(org.orgId, `/${tab.id}/lines/${tab.lines[0].id}/void`), { user: org.cashier, body: { reason: 'een te veel', quantity: 1, ...DEVICE } });
+    const res = await cancelAll(org, tab.id, 'Per vergissing afgerekend');
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ status: 'cancelled', cancelReason: 'Per vergissing afgerekend', receiptNumber: null, totalCents: 0 });
+    const lines = await rows<{ name: string; quantity: number; void_reason: string | null }>('SELECT name, quantity, void_reason FROM order_lines WHERE tab_id = ? ORDER BY created_at, quantity DESC', tab.id);
+    expect(lines).toEqual(
+      expect.arrayContaining([
+        { name: 'Bonnen', quantity: 3, void_reason: null },
+        { name: 'Pils', quantity: 2, void_reason: null },
+        { name: 'Bonnen', quantity: -1, void_reason: 'een te veel' },
+        { name: 'Bonnen', quantity: -2, void_reason: 'Per vergissing afgerekend' },
+        { name: 'Pils', quantity: -2, void_reason: 'Per vergissing afgerekend' },
+      ])
+    );
+    expect(lines).toHaveLength(5);
+  });
+
+  it('a reason is required', async () => {
+    const org = await seedOrg();
+    const tab = await createTab(org, { lines: [line('bon', 'Bonnen', 100, 3)] });
+    expect((await cancelAll(org, tab.id)).status).toBe(400);
+  });
+
+  it('not while a payment runs, nor once something is paid — and then nothing is voided either', async () => {
+    const org = await seedOrg();
+    const tab = await createTab(org, { lines: [line('bon', 'Bonnen', 100, 3)] });
+    const pending = await chargeCash(org, tab.id, 300);
+    expect((await cancelAll(org, tab.id, 'x')).status).toBe(409);
+    // Cancelled payment: then it can.
+    await confirmCharge(org, pending.body.chargeId, false);
+    expect((await cancelAll(org, tab.id, 'x')).status).toBe(200);
+
+    const paid = await createTab(org, { lines: [line('bon', 'Bonnen', 100, 3)] });
+    const part = await chargeCash(org, paid.id, 300);
+    await confirmCharge(org, part.body.chargeId, true);
+    expect((await cancelAll(org, paid.id, 'x')).status).not.toBe(200);
+    expect(await rows('SELECT 1 FROM order_lines WHERE tab_id = ? AND quantity < 0', paid.id)).toEqual([]);
   });
 });
 
