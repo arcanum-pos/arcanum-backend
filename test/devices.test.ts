@@ -317,3 +317,68 @@ describe('devices', () => {
     expect(registry.size).toBe(1);
   });
 });
+
+// Re-pairing (2026-10-18): a browser that lost its storage — or a new tablet,
+// or the same device as an installed app — becomes the existing device again.
+describe('re-pairing a device', () => {
+  const repair = (org: TestOrg, terminalId: string, user = org.admin) => api('POST', devices(org, `/${terminalId}/repair`), { user });
+  const check = (org: TestOrg, terminalId: string, claim: string | null, user = org.cashier) =>
+    api('GET', devices(org, `/${terminalId}${claim === null ? '' : `?claim=${encodeURIComponent(claim)}`}`), { user });
+
+  it('a code for that device: claimed, the browser is the same device — its identity, name and links stay', async () => {
+    const org = await seedOrg();
+    const first = await newCode(org, 'pos', 'Kassa toog');
+    const before = (await claim(org.cashier, first.code)).body;
+    expect(before.claimId).toBe(first.id);
+    await api('PATCH', devices(org, `/${before.terminalId}`), { user: org.admin, body: { name: 'Kassa bar' } });
+    const display = await api('POST', pairings(org), { user: org.admin, body: { role: 'cfd', name: 'Scherm', linkTo: before.terminalId } });
+    await claim(org.cashier, display.body.code);
+
+    const code = await repair(org, before.terminalId);
+    expect(code.status).toBe(201);
+    expect(code.body).toMatchObject({ role: 'pos', name: 'Kassa bar', repairs: before.terminalId, status: 'open' });
+    const registered = registry.size;
+    const after = await claim(org.cashier, code.body.code);
+    expect(after.status).toBe(201);
+    expect(after.body).toMatchObject({ terminalId: before.terminalId, role: 'pos', name: 'Kassa bar', claimId: code.body.id });
+    // Nothing new registered; its customer display still linked to it.
+    expect(registry.size).toBe(registered);
+    expect([...registry.values()].find((d) => d.role === 'cfd')!.linked_to).toBe(before.terminalId);
+  });
+
+  it('the device moves: the browser that was it before is told so when it checks itself — a device from before the re-pair too', async () => {
+    const org = await seedOrg();
+    const old = (await claim(org.cashier, (await newCode(org)).code)).body;
+    expect((await check(org, old.terminalId, old.claimId)).status).toBe(200);
+    const fresh = (await claim(org.cashier, (await repair(org, old.terminalId)).body.code)).body;
+    expect((await check(org, old.terminalId, fresh.claimId)).status).toBe(200);
+    const stale = await check(org, old.terminalId, old.claimId);
+    expect(stale.status).toBe(409);
+    expect(stale.body.code).toBe('device_paired_elsewhere');
+    // A browser paired before claims were kept sends none.
+    expect((await check(org, old.terminalId, '')).status).toBe(409);
+    // The console (no `claim`) isn't a device checking itself.
+    expect((await check(org, old.terminalId, null, org.admin)).status).toBe(200);
+  });
+
+  it('a device paired before any re-pair, with no pairing on record: not checked', async () => {
+    const org = await seedOrg();
+    const kassa = await pairedKassa(org);
+    await env.DB.prepare('DELETE FROM device_claims WHERE terminal_id = ?').bind(kassa).run();
+    expect((await check(org, kassa, '')).status).toBe(200);
+  });
+
+  it('admins only; a device of the org — not another org\'s, not a kassa\'s own second window; removed since: the code is no good', async () => {
+    const org = await seedOrg();
+    const other = await seedOrg();
+    const kassa = await pairedKassa(org);
+    expect((await repair(org, kassa, org.cashier)).status).toBe(403);
+    expect((await api('POST', devices(other, `/${kassa}/repair`), { user: other.admin })).status).toBe(404);
+    const companion = (await api('POST', devices(org, `/${kassa}/display`), { user: org.cashier })).body.terminalId;
+    expect((await repair(org, companion)).status).toBe(404);
+    const code = (await repair(org, kassa)).body.code;
+    await api('DELETE', devices(org, `/${kassa}`), { user: org.admin });
+    expect((await claim(org.cashier, code)).body.code).toBe('pairing_code_invalid');
+    expect(await rows('SELECT * FROM device_claims WHERE terminal_id = ?', kassa)).toEqual([]);
+  });
+});

@@ -188,6 +188,7 @@ export const ERROR_TEXTS = {
   // --- Devices (devices.ts) ---
   device_name_required: 'Geef het toestel een naam',
   device_not_found: 'Dit toestel is niet (meer) gekoppeld aan deze organisatie',
+  device_paired_elsewhere: 'Dit toestel werd elders opnieuw gekoppeld',
   pairing_code_invalid: 'Deze koppelcode klopt niet, is al gebruikt of is verlopen — vraag een beheerder om een nieuwe',
   pairing_too_many_attempts: 'Te veel foute koppelcodes — probeer over 10 minuten opnieuw',
   pairing_needs_login: 'Een kassa koppel je terwijl je aangemeld bent — meld je eerst aan',

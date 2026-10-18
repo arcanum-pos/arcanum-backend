@@ -21,6 +21,7 @@
 //   GET    /organizations/:org/devices/:id              member, or the device's own key — a device checks itself on load
 //   PATCH  /organizations/:org/devices/:id              member  { name? }, admin { stationId? } (a station screen's station)
 //   DELETE /organizations/:org/devices/:id              admin   unpair / remove
+//   POST   /organizations/:org/devices/:id/repair       admin   a re-pair code: a browser becomes this device again → { id, code, … }
 //   POST   /organizations/:org/devices/:pos/display     member  a customer display in a second window of this kassa
 //   GET    /organizations/:org/devices/:pos/linked      member  its linked customer display
 //   GET    /organizations/:org/devices/:pos/linkable    member  customer displays of the org, unlinked and online
@@ -32,6 +33,14 @@
 // shown as XXXX-XXXX; single use, valid 10 minutes, only its SHA-256 is
 // stored. A wrong code gets one answer whatever the reason (unknown,
 // expired, used, revoked); 10 wrong ones in 10 minutes and the person waits.
+//
+// Re-pairing (2026-10-18): a browser that lost its storage — or a new
+// tablet, or the same device as an installed app — becomes an existing
+// device again with a code for it (`repairs`): the same identity, so its
+// name, links, station and history stay. The device moves: whichever
+// browser was it before stops being it (device_claims: a device's current
+// pairing, checked when it checks itself — getDevice's `claim`), and its old
+// key stops working.
 import type { Env } from './env';
 import { callDeviceHub } from './devicehub-client';
 import { errorJson } from './errors';
@@ -71,6 +80,8 @@ interface PairingRow {
   station_id: string | null;
   // A station screen's kind: null = prep, 'pickup' = for guests (migration 0034).
   view: StationView | null;
+  // A re-pair code: the existing device it's for (migration 0041).
+  repairs: string | null;
 }
 
 // A station screen shows the station's tickets to work on, or — a pickup
@@ -131,6 +142,7 @@ function pairingJson(row: PairingRow) {
     linkTo: row.link_to,
     stationId: row.station_id,
     view: row.view,
+    repairs: row.repairs,
   };
 }
 
@@ -200,7 +212,8 @@ export async function issuePairingCode(
   createdBy: string,
   linkTo: string | null = null,
   stationId: string | null = null,
-  view: StationView | null = null
+  view: StationView | null = null,
+  repairs: string | null = null
 ): Promise<{ row: PairingRow; code: string }> {
   const code = newCode();
   const now = new Date();
@@ -219,14 +232,38 @@ export async function issuePairingCode(
     link_to: linkTo,
     station_id: stationId,
     view,
+    repairs,
   };
   await env.DB.batch([
     env.DB.prepare(
-      'INSERT INTO device_pairings (id, org_id, code_hash, role, name, created_by, created_at, expires_at, link_to, station_id, view) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-    ).bind(row.id, orgId, await sha256(code), row.role, name, row.created_by, row.created_at, row.expires_at, linkTo, stationId, view),
+      'INSERT INTO device_pairings (id, org_id, code_hash, role, name, created_by, created_at, expires_at, link_to, station_id, view, repairs) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    ).bind(row.id, orgId, await sha256(code), row.role, name, row.created_by, row.created_at, row.expires_at, linkTo, stationId, view, repairs),
     env.DB.prepare('DELETE FROM device_pairings WHERE created_at < ?').bind(new Date(now.getTime() - KEEP_DAYS * 86_400_000).toISOString()),
   ]);
   return { row, code: shownCode(code) };
+}
+
+// A re-pair code for an existing device: its role and current name; on
+// claim, the browser becomes that device (completeClaim).
+async function createRepair(request: Request, env: Env, orgId: string, terminalId: string): Promise<Response> {
+  const caller = await memberOf(request, env, orgId, ADMIN);
+  if (caller instanceof Response) return caller;
+  const device = await orgDevice(env, orgId, terminalId);
+  // A kassa's own second window has no pairing of its own.
+  if (!device || !ROLES.has(device.role) || terminalId.startsWith(companionDisplayId(''))) return errorJson('device_not_found', 404);
+  const station = device.role === 'station' ? (await stationsOfDevices(env, orgId)).get(terminalId) : undefined;
+  const { row, code } = await issuePairingCode(
+    env,
+    orgId,
+    device.role as Role,
+    device.name || terminalId,
+    who(caller),
+    null,
+    station?.station_id || null,
+    station?.view ?? null,
+    terminalId
+  );
+  return json({ ...pairingJson(row), code }, 201);
 }
 
 async function listPairings(request: Request, env: Env, orgId: string): Promise<Response> {
@@ -306,6 +343,7 @@ async function publicPair(request: Request, env: Env): Promise<Response> {
 // station; for a customer display, its kassa) — with its own key when
 // `withKey` (paired without a person).
 async function completeClaim(env: Env, row: PairingRow, claimedBy: string, withKey = false): Promise<Response> {
+  if (row.repairs) return completeRepair(env, row, claimedBy, withKey);
   const now = new Date();
   const terminalId = crypto.randomUUID();
   const claimed = await env.DB.prepare('UPDATE device_pairings SET claimed_at = ?, claimed_by = ?, terminal_id = ? WHERE id = ? AND claimed_at IS NULL AND revoked_at IS NULL')
@@ -339,7 +377,38 @@ async function completeClaim(env: Env, row: PairingRow, claimedBy: string, withK
     const linked = await devicehub(env, '/devices/link', { method: 'POST', body: JSON.stringify({ pos_terminal_id: row.link_to, terminal_id: terminalId }) });
     if (linked.status === 200) linkedTo = row.link_to;
   }
+  await env.DB.prepare('INSERT OR REPLACE INTO device_claims (terminal_id, org_id, pairing_id, claimed_at) VALUES (?, ?, ?, ?)')
+    .bind(terminalId, row.org_id, row.id, now.toISOString())
+    .run();
   const deviceKey = withKey && row.role !== 'pos' ? await createDeviceKey(env, { terminalId, orgId: row.org_id, role: row.role }) : null;
+  return claimedJson(env, row, terminalId, linkedTo, row.station_id, row.view, deviceKey);
+}
+
+// A re-pair code claimed: this browser is that device again — nothing new
+// registered, its links and station as they are. Whichever browser was it
+// before stops being it: a new current pairing (device_claims), its old key
+// revoked, its old browser's push subscription gone (this one subscribes anew).
+async function completeRepair(env: Env, row: PairingRow, claimedBy: string, withKey: boolean): Promise<Response> {
+  const terminalId = row.repairs!;
+  const device = await orgDevice(env, row.org_id, terminalId);
+  // Removed in the console since: the code is no good any more.
+  if (!device) return errorJson('pairing_code_invalid', 400);
+  const now = new Date().toISOString();
+  const claimed = await env.DB.prepare('UPDATE device_pairings SET claimed_at = ?, claimed_by = ?, terminal_id = ? WHERE id = ? AND claimed_at IS NULL AND revoked_at IS NULL')
+    .bind(now, claimedBy, terminalId, row.id)
+    .run();
+  if (!claimed.meta.changes) return errorJson('pairing_code_invalid', 400);
+  await env.DB.batch([
+    env.DB.prepare('INSERT OR REPLACE INTO device_claims (terminal_id, org_id, pairing_id, claimed_at) VALUES (?, ?, ?, ?)').bind(terminalId, row.org_id, row.id, now),
+    revokeDeviceKeys(env, terminalId),
+    env.DB.prepare('DELETE FROM device_push_subscriptions WHERE terminal_id = ? AND org_id = ?').bind(terminalId, row.org_id),
+  ]);
+  const deviceKey = withKey && row.role !== 'pos' ? await createDeviceKey(env, { terminalId, orgId: row.org_id, role: row.role }) : null;
+  const station = row.role === 'station' ? (await stationsOfDevices(env, row.org_id)).get(terminalId) : undefined;
+  return claimedJson(env, { ...row, name: device.name || row.name }, terminalId, device.linked_to, station?.station_id ?? null, station?.view ?? null, deviceKey);
+}
+
+async function claimedJson(env: Env, row: PairingRow, terminalId: string, linkedTo: string | null, stationId: string | null, view: StationView | null, deviceKey: string | null): Promise<Response> {
   // The org's language too: a new device starts in it (unless one was picked on the device).
   const org = await env.DB.prepare('SELECT name, locale FROM organizations WHERE id = ?').bind(row.org_id).first<{ name: string; locale: string | null }>();
   return json(
@@ -351,8 +420,10 @@ async function completeClaim(env: Env, row: PairingRow, claimedBy: string, withK
       orgLocale: org?.locale ?? null,
       name: row.name,
       linkedTo,
-      stationId: row.station_id,
-      view: row.view,
+      stationId,
+      view,
+      // Which pairing this is: the device sends it when it checks itself — re-paired elsewhere since, it stops.
+      claimId: row.id,
       // The device's own key — arcanum-bff keeps it as a cookie and takes it out of this answer.
       ...(deviceKey ? { deviceKey } : {}),
     },
@@ -401,6 +472,14 @@ async function orgStation(env: Env, orgId: string, stationId: string): Promise<b
 }
 
 async function getDevice(request: Request, env: Env, orgId: string, terminalId: string): Promise<Response> {
+  // A device checking itself sends the pairing it has (`claim`, empty for
+  // one from before): re-paired elsewhere since, it isn't this device any
+  // more — said first, also when its key was revoked with it.
+  const claim = new URL(request.url).searchParams.get('claim');
+  if (claim !== null) {
+    const current = await env.DB.prepare('SELECT pairing_id FROM device_claims WHERE terminal_id = ? AND org_id = ?').bind(terminalId, orgId).first<{ pairing_id: string }>();
+    if (current && current.pairing_id !== claim) return errorJson('device_paired_elsewhere', 409);
+  }
   // A device with its own key: itself only.
   const self = extractCaller(request) ? null : await deviceCaller(request, env);
   if (!self || self.orgId !== orgId || self.terminalId !== terminalId) {
@@ -446,6 +525,7 @@ async function removeDevice(request: Request, env: Env, orgId: string, terminalI
   await env.DB.batch([
     env.DB.prepare('DELETE FROM station_devices WHERE terminal_id = ? AND org_id = ?').bind(terminalId, orgId),
     env.DB.prepare('DELETE FROM device_push_subscriptions WHERE terminal_id = ? AND org_id = ?').bind(terminalId, orgId),
+    env.DB.prepare('DELETE FROM device_claims WHERE terminal_id = ? AND org_id = ?').bind(terminalId, orgId),
     revokeDeviceKeys(env, terminalId),
   ]);
   return json({ ok: true });
@@ -557,10 +637,11 @@ export async function dispatchDeviceRoute(request: Request, env: Env, pathname: 
     return null;
   }
 
-  match = pathname.match(/^\/organizations\/([^/]+)\/devices\/([^/]+)\/(display|linked|linkable|link|unlink|reset)$/);
+  match = pathname.match(/^\/organizations\/([^/]+)\/devices\/([^/]+)\/(display|linked|linkable|link|unlink|reset|repair)$/);
   if (match) {
     const [, orgId, id, action] = match;
     const terminalId = decodeURIComponent(id);
+    if (action === 'repair') return m === 'POST' ? createRepair(request, env, orgId, terminalId) : null;
     if (action === 'linked' || action === 'linkable') {
       if (m !== 'GET') return null;
       return action === 'linked' ? linkedDisplay(request, env, orgId, terminalId) : linkableDisplays(request, env, orgId, terminalId);

@@ -572,7 +572,9 @@ CREATE TABLE IF NOT EXISTS device_pairings (
   -- A station screen's station (migration 0025).
   station_id TEXT,
   -- A station screen's kind (migration 0034): NULL = prep, 'pickup' = for guests.
-  view TEXT
+  view TEXT,
+  -- A re-pair code (migration 0041): the existing device it makes a browser again.
+  repairs TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_device_pairings_code ON device_pairings(code_hash);
 CREATE INDEX IF NOT EXISTS idx_device_pairings_org ON device_pairings(org_id, created_at);
@@ -645,6 +647,15 @@ CREATE TABLE IF NOT EXISTS device_push_subscriptions (
   org_id TEXT NOT NULL REFERENCES organizations(id),
   subscription TEXT NOT NULL,
   updated_at TEXT NOT NULL
+);
+
+-- Which pairing a device is now (migration 0041): after a re-pair, a browser
+-- that was the device before stops being it. No row: not checked.
+CREATE TABLE IF NOT EXISTS device_claims (
+  terminal_id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES organizations(id),
+  pairing_id TEXT NOT NULL,
+  claimed_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS station_devices (
@@ -808,3 +819,4 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0037_tables.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0038_table_management.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0039_web_push.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0040_tap_devices.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0041_device_repair.sql');

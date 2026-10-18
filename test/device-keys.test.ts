@@ -154,6 +154,25 @@ describe("a station screen's key: its own station, nothing else", () => {
     expect((await asDevice(paired.deviceKey, 'GET', `/organizations/device-ws-token?terminal_id=${paired.terminalId}`)).status).toBe(401);
   });
 
+  it('re-paired (a new tablet): the new one gets a key, the old key stops working, the station stays', async () => {
+    const org = await seedOrg();
+    const v = await venue(org);
+    const old = (await asDevice(null, 'POST', '/public/pair', { code: await code(org, { role: 'station', name: 'Scherm keuken', stationId: v.kitchen.id }) })).body;
+    const repair = await api('POST', `/organizations/${org.orgId}/devices/${old.terminalId}/repair`, { user: org.admin });
+    expect(repair.body).toMatchObject({ role: 'station', stationId: v.kitchen.id, repairs: old.terminalId });
+    const fresh = await asDevice(null, 'POST', '/public/pair', { code: repair.body.code });
+    expect(fresh.status).toBe(201);
+    expect(fresh.body).toMatchObject({ terminalId: old.terminalId, role: 'station', stationId: v.kitchen.id, claimId: repair.body.id, deviceKey: expect.any(String) });
+    expect(fresh.body.deviceKey).not.toBe(old.deviceKey);
+    const tickets = `/organizations/${org.orgId}/stations/${v.kitchen.id}/tickets`;
+    expect((await asDevice(fresh.body.deviceKey, 'GET', tickets)).status).toBe(200);
+    expect((await asDevice(old.deviceKey, 'GET', tickets)).status).toBe(401);
+    // The old screen checking itself hears why, though its key is gone.
+    const stale = await asDevice(old.deviceKey, 'GET', `/organizations/${org.orgId}/devices/${old.terminalId}?claim=${old.claimId}`);
+    expect(stale.status).toBe(409);
+    expect((await asDevice(fresh.body.deviceKey, 'GET', `/organizations/${org.orgId}/devices/${old.terminalId}?claim=${fresh.body.claimId}`)).status).toBe(200);
+  });
+
   it('a made-up key, or none: nobody', async () => {
     const org = await seedOrg();
     const v = await venue(org);
