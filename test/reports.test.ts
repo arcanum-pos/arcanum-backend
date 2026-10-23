@@ -136,3 +136,30 @@ describe('retired KV pricing', () => {
     expect((await api('POST', '/verify-password', { user: org.admin, body: { password: 'x' } })).status).toBe(404);
   });
 });
+
+describe('reports: one event', () => {
+  it("with event=: only that event's tabs, sales and open tabs; without: every event's", async () => {
+    const org = await seedOrg();
+    const event = (name: string) => api('POST', `/organizations/${org.orgId}/events`, { user: org.admin, body: { name, date: '2026-10-24' } }).then((r) => r.body.id as string);
+    const fuif = await event('Fuif');
+    const quiz = await event('Quiz');
+    const paid = async (eventId: string | null, count: number) => {
+      const tab = await createTab(org, { eventId, lines: [line('bon', 'Bon', 100, count)] });
+      await payCash(org, tab.id, count * 100);
+    };
+    await paid(fuif, 3);
+    await paid(quiz, 5);
+    await paid(null, 1);
+    await createTab(org, { eventId: fuif, lines: [line('bon', 'Bon', 100, 2)] }); // still open
+
+    const of = (eventId?: string) =>
+      api('GET', `/organizations/${org.orgId}/reports/sales?from=${encodeURIComponent(hourAgo())}&to=${encodeURIComponent(inAnHour())}${eventId ? `&event=${eventId}` : ''}`, { user: org.admin }).then((r) => r.body);
+    const all = await of();
+    expect([all.sales.tabCount, all.sales.revenueCents, all.payments.count, all.payments.amountCents, all.openTabs.count]).toEqual([3, 900, 3, 900, 1]);
+    const one = await of(fuif);
+    expect(one.eventId).toBe(fuif);
+    expect([one.sales.tabCount, one.sales.revenueCents, one.payments.count, one.payments.amountCents, one.openTabs.count, one.openTabs.outstandingCents]).toEqual([1, 300, 1, 300, 1, 200]);
+    const other = await of(quiz);
+    expect([other.sales.revenueCents, other.payments.amountCents, other.openTabs.count]).toEqual([500, 500, 0]);
+  });
+});

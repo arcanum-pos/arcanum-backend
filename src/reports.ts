@@ -1,6 +1,8 @@
-// Sales report (step 3d) — GET /organizations/:orgId/reports/sales?from=&to=
+// Sales report (step 3d) — GET /organizations/:orgId/reports/sales?from=&to=[&event=]
 // (admin only; from inclusive, to exclusive, ISO timestamps — the console
-// computes local-day bounds).
+// computes local-day bounds). `event`: only that event's — its tabs and
+// sales (what the kassa had chosen when the tab was opened); without it,
+// every event's (and none) in the range.
 //
 //   sales     — net order lines (voids subtracted) of tabs *closed* in the
 //               range, per product / category / VAT rate. Revenue never
@@ -31,7 +33,6 @@ function vatIncluded(grossCents: number, rateBp: number | null): number {
   return rateBp ? Math.round((grossCents * rateBp) / (10000 + rateBp)) : 0;
 }
 
-const CLOSED_IN_RANGE = `JOIN tabs t ON t.id = l.tab_id WHERE t.org_id = ? AND t.status = 'closed' AND t.closed_at >= ? AND t.closed_at < ?`;
 
 async function salesReport(request: Request, env: Env, orgId: string): Promise<Response> {
   const params = new URL(request.url).searchParams;
@@ -39,9 +40,13 @@ async function salesReport(request: Request, env: Env, orgId: string): Promise<R
   const to = parseInstant(params.get('to'));
   if (!from || !to || from >= to) return json({ error: 'from and to must be ISO timestamps with from < to' }, 400);
 
-  const range = [orgId, from, to];
+  const eventId = params.get('event') || null;
+  // One event's only, when asked: the same condition on tabs and transactions.
+  const ofEvent = (column: string) => (eventId ? ` AND ${column} = ?` : '');
+  const range = [orgId, from, to, ...(eventId ? [eventId] : [])];
+  const CLOSED_IN_RANGE = `JOIN tabs t ON t.id = l.tab_id WHERE t.org_id = ? AND t.status = 'closed' AND t.closed_at >= ? AND t.closed_at < ?${ofEvent('t.event_id')}`;
   const [tabCount, byProduct, byCategory, byVat, payments, legacy, openTabs] = await env.DB.batch([
-    env.DB.prepare(`SELECT COUNT(*) AS n FROM tabs WHERE org_id = ? AND status = 'closed' AND closed_at >= ? AND closed_at < ?`).bind(...range),
+    env.DB.prepare(`SELECT COUNT(*) AS n FROM tabs WHERE org_id = ? AND status = 'closed' AND closed_at >= ? AND closed_at < ?${ofEvent('event_id')}`).bind(...range),
     env.DB.prepare(
       `SELECT l.name, l.category, SUM(l.quantity) AS quantity, SUM(l.unit_price_cents * l.quantity) AS revenue
        FROM order_lines l ${CLOSED_IN_RANGE}
@@ -62,17 +67,17 @@ async function salesReport(request: Request, env: Env, orgId: string): Promise<R
     ).bind(...range),
     env.DB.prepare(
       `SELECT method, COUNT(*) AS count, SUM(amount_cents) AS amount, SUM(tip_cents) AS tip
-       FROM transactions WHERE org_id = ? AND completed_at >= ? AND completed_at < ?
+       FROM transactions WHERE org_id = ? AND completed_at >= ? AND completed_at < ?${ofEvent('event_id')}
        GROUP BY method ORDER BY amount DESC`
     ).bind(...range),
-    env.DB.prepare(`SELECT amount_cents, items FROM transactions WHERE org_id = ? AND completed_at >= ? AND completed_at < ? AND tab_id IS NULL`).bind(...range),
+    env.DB.prepare(`SELECT amount_cents, items FROM transactions WHERE org_id = ? AND completed_at >= ? AND completed_at < ? AND tab_id IS NULL${ofEvent('event_id')}`).bind(...range),
     env.DB.prepare(
       `SELECT COUNT(*) AS n, COALESCE(SUM(
          (SELECT COALESCE(SUM(unit_price_cents * quantity), 0) FROM order_lines WHERE tab_id = tabs.id)
          - (SELECT COALESCE(SUM(amount_cents - tip_cents), 0) FROM charges WHERE tab_id = tabs.id AND status = 'succeeded')
        ), 0) AS outstanding
-       FROM tabs WHERE org_id = ? AND status = 'open'`
-    ).bind(orgId),
+       FROM tabs WHERE org_id = ? AND status = 'open'${ofEvent('event_id')}`
+    ).bind(orgId, ...(eventId ? [eventId] : [])),
   ]);
 
   type ProductRow = { name: string; category: string | null; quantity: number; revenue: number };
@@ -102,6 +107,7 @@ async function salesReport(request: Request, env: Env, orgId: string): Promise<R
   return json({
     from,
     to,
+    eventId,
     payments: {
       count: methodRows.reduce((s, r) => s + r.count, 0),
       amountCents: methodRows.reduce((s, r) => s + r.amount, 0),
