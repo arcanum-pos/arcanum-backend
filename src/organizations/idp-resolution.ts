@@ -1,6 +1,7 @@
 // The installation's login provider, as far as arcanum-backend needs it:
-// only its issuer (MAIL.md decision 6) — what every member's (issuer, sub)
-// belongs to. The bff signs people in with its own client settings.
+// its issuer (MAIL.md decision 6) — what every member's (issuer, sub)
+// belongs to. The bff signs people in; the client id and secret are only
+// used to assign who may sign in (client-access.ts).
 import type { Env } from '../env';
 
 // The platform's former fallback organisation: it held the copied login

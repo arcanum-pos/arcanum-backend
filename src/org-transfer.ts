@@ -25,6 +25,7 @@
 // tables and organization fields named here are ever read), devices (they re-register
 // with the new installation), and members' identity bindings (members come
 // back as pending invites and reconnect on their first login).
+import { assignAddresses, unassignIfGone } from './organizations/client-access';
 import type { Env } from './env';
 import { json } from './http';
 import { codedError, errorJson } from './errors';
@@ -463,6 +464,8 @@ async function importChunk(request: Request, env: Env, orgId: string): Promise<R
     )
   );
   const [insert] = await env.DB.batch(statements);
+  // The imported members are invited here: let in by the login provider (client-access.ts).
+  if (spec.table === 'memberships') await assignAddresses(env, rows.map((r) => String(r.invited_email)));
   return json({ ok: true, inserted: insert.meta.changes || 0 });
 }
 
@@ -499,11 +502,16 @@ async function abortImport(request: Request, env: Env, orgId: string): Promise<R
   // Reverse foreign-key order; memberships go last (they carry the admin
   // check), then the org itself.
   const tables = EXPORT_TABLES.map((s) => s.table).filter((t) => t !== 'memberships').reverse();
+  const { results: members } = await env.DB.prepare('SELECT invited_email FROM memberships WHERE org_id = ?').bind(orgId).all<{ invited_email: string }>();
   await env.DB.batch([
     ...tables.map((t) => env.DB.prepare(`DELETE FROM ${t} WHERE org_id = ?`).bind(orgId)),
     env.DB.prepare('DELETE FROM memberships WHERE org_id = ?').bind(orgId),
     env.DB.prepare('DELETE FROM organizations WHERE id = ?').bind(orgId),
   ]);
+  // Who only came with this import: no longer let in by the login provider
+  // — never the importer, who is still here (and may try again).
+  const importer = auth.caller!.email.toLowerCase();
+  await unassignIfGone(env, (members || []).map((m) => m.invited_email).filter((e) => e.toLowerCase() !== importer));
   return json({ ok: true });
 }
 

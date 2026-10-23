@@ -47,9 +47,15 @@ export interface Env {
   // endpoint refuses everything.
   BOOTSTRAP_API_KEY?: string;
   // The issuer of the installation's login provider: what every member's
-  // (issuer, sub) belongs to (invites, demo orgs). Only the issuer: the bff
-  // signs people in with its own client id and secret (MAIL.md decision 6).
+  // (issuer, sub) belongs to (invites, demo orgs). The bff signs people in
+  // (MAIL.md decision 6); the client id and secret below are only for
+  // assigning who may sign in.
   DEFAULT_IDP_ISSUER_URL?: string;
+  // The installation's client at that provider (the same the bff signs in
+  // with): only to tell a provider with restricted clients (arcanum-auth)
+  // who may sign in — organizations/client-access.ts. Unset: nothing is told.
+  DEFAULT_IDP_CLIENT_ID?: string;
+  DEFAULT_IDP_CLIENT_SECRET?: string;
   // The installation's mail account (MAIL.md), set by its installer
   // (Geavanceerd → E-mail): {"provider":"smtp"|"gmail_api"|"brevo"|"resend"|…,
   // …that service's settings} — or {"provider", "credentials": {…}}. When

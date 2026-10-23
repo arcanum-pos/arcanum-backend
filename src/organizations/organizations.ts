@@ -1,3 +1,4 @@
+import { syncAllMembers } from './client-access';
 import type { Env } from '../env';
 import { json } from '../http';
 import { extractCaller, requireOrgRole, SERVICE_ROLES } from './auth';
@@ -69,6 +70,8 @@ export async function listMyOrganizations(request: Request, env: Env): Promise<R
   if (!caller) return json({ error: 'Unauthorized' }, 401);
 
   await reconcilePendingInvites(env, caller);
+  // Now and then: every member assigned at the login provider again (client-access.ts).
+  await syncAllMembers(env);
 
   const { results } = await env.DB.prepare(
     `SELECT o.* FROM organizations o

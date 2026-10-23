@@ -2,6 +2,7 @@ import type { Env } from '../env';
 import { json } from '../http';
 import { buildInviteEmail } from '../email-templates/invite';
 import { extractCaller, requireOrgRole } from './auth';
+import { assignAddresses, unassignIfGone } from './client-access';
 import { toLocale } from './locale';
 import { sendOrgEmail } from './mail';
 import type { MembershipRow, OrgRole } from './types';
@@ -58,6 +59,10 @@ export async function inviteMember(request: Request, env: Env, orgId: string): P
     .run();
 
   const row = await env.DB.prepare('SELECT * FROM memberships WHERE id = ?').bind(id).first<MembershipRow>();
+
+  // May sign in at the login provider from now on (a restricted client;
+  // client-access.ts) — before the mail, so its link works.
+  await assignAddresses(env, [email]);
 
   // Best-effort: a broken mail config (this org's own, or the platform
   // default's, whichever transport is active) must never fail invite
@@ -145,5 +150,7 @@ export async function removeMember(request: Request, env: Env, orgId: string, me
   }
 
   await env.DB.prepare('DELETE FROM memberships WHERE id = ?').bind(membershipId).run();
+  // No membership left on this installation: no longer let in by the login provider.
+  await unassignIfGone(env, [target.invited_email]);
   return json({ ok: true });
 }
