@@ -2,7 +2,7 @@ import type { Env } from '../env';
 import { json } from '../http';
 import { buildInviteEmail } from '../email-templates/invite';
 import { extractCaller, requireOrgRole } from './auth';
-import { assignAddresses, unassignIfGone } from './client-access';
+import { syncAddresses } from './client-access';
 import { toLocale } from './locale';
 import { sendOrgEmail } from './mail';
 import type { MembershipRow, OrgRole } from './types';
@@ -62,7 +62,7 @@ export async function inviteMember(request: Request, env: Env, orgId: string): P
 
   // May sign in at the login provider from now on (a restricted client;
   // client-access.ts) — before the mail, so its link works.
-  await assignAddresses(env, [email]);
+  await syncAddresses(env, [email]);
 
   // Best-effort: a broken mail config (this org's own, or the platform
   // default's, whichever transport is active) must never fail invite
@@ -114,6 +114,8 @@ export async function updateMemberRole(request: Request, env: Env, orgId: string
   }
 
   await env.DB.prepare('UPDATE memberships SET role = ? WHERE id = ?').bind(role, membershipId).run();
+  // An admin here manages who may sign in at the login provider too.
+  await syncAddresses(env, [target.invited_email]);
   const row = await env.DB.prepare('SELECT * FROM memberships WHERE id = ?').bind(membershipId).first<MembershipRow>();
   return json(rowToMember(row!));
 }
@@ -150,7 +152,8 @@ export async function removeMember(request: Request, env: Env, orgId: string, me
   }
 
   await env.DB.prepare('DELETE FROM memberships WHERE id = ?').bind(membershipId).run();
-  // No membership left on this installation: no longer let in by the login provider.
-  await unassignIfGone(env, [target.invited_email]);
+  // No membership left on this installation: no longer let in by the login
+  // provider (or no longer an admin there, when it was its last admin role).
+  await syncAddresses(env, [target.invited_email]);
   return json({ ok: true });
 }

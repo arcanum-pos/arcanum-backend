@@ -25,7 +25,7 @@
 // tables and organization fields named here are ever read), devices (they re-register
 // with the new installation), and members' identity bindings (members come
 // back as pending invites and reconnect on their first login).
-import { assignAddresses, unassignIfGone } from './organizations/client-access';
+import { syncAddresses } from './organizations/client-access';
 import type { Env } from './env';
 import { json } from './http';
 import { codedError, errorJson } from './errors';
@@ -385,6 +385,7 @@ async function startImport(request: Request, env: Env): Promise<Response> {
     ).bind(crypto.randomUUID(), orgId, caller.sub, caller.issuer, caller.email.toLowerCase(), now, now, orgId),
   ]);
   if ((inserted.meta.changes || 0) === 0) return errorJson('org_creation_disabled', 403);
+  await syncAddresses(env, [caller.email]);
   return json({ orgId, tables: EXPORT_TABLES.map((s) => s.table), maxChunkRows: MAX_CHUNK_ROWS }, 201);
 }
 
@@ -465,7 +466,7 @@ async function importChunk(request: Request, env: Env, orgId: string): Promise<R
   );
   const [insert] = await env.DB.batch(statements);
   // The imported members are invited here: let in by the login provider (client-access.ts).
-  if (spec.table === 'memberships') await assignAddresses(env, rows.map((r) => String(r.invited_email)));
+  if (spec.table === 'memberships') await syncAddresses(env, rows.map((r) => String(r.invited_email)));
   return json({ ok: true, inserted: insert.meta.changes || 0 });
 }
 
@@ -511,7 +512,7 @@ async function abortImport(request: Request, env: Env, orgId: string): Promise<R
   // Who only came with this import: no longer let in by the login provider
   // — never the importer, who is still here (and may try again).
   const importer = auth.caller!.email.toLowerCase();
-  await unassignIfGone(env, (members || []).map((m) => m.invited_email).filter((e) => e.toLowerCase() !== importer));
+  await syncAddresses(env, (members || []).map((m) => m.invited_email).filter((e) => e.toLowerCase() !== importer));
   return json({ ok: true });
 }
 

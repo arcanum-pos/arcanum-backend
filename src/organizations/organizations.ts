@@ -1,4 +1,4 @@
-import { syncAllMembers } from './client-access';
+import { syncAddresses, syncAllMembers } from './client-access';
 import type { Env } from '../env';
 import { json } from '../http';
 import { extractCaller, requireOrgRole, SERVICE_ROLES } from './auth';
@@ -56,6 +56,8 @@ export async function createOrganization(request: Request, env: Env): Promise<Re
     ).bind(crypto.randomUUID(), orgId, caller.sub, caller.issuer, caller.email, 'admin', 'active', now, now, orgId),
   ]);
   if ((inserted.meta.changes || 0) === 0) return errorJson('org_creation_disabled', 403);
+  // Its admin: an admin of the installation's client at the login provider too.
+  await syncAddresses(env, [caller.email]);
 
   const row = await env.DB.prepare('SELECT * FROM organizations WHERE id = ?').bind(orgId).first<OrganizationRow>();
   return json(rowToOrganization(row!, env), 201);

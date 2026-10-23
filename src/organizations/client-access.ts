@@ -1,8 +1,10 @@
 // Who may sign in to this installation at its login provider — for a
 // provider with restricted clients (arcanum-auth, login.kaboutersoft.be):
 // only people assigned to the installation's client get in. This
-// installation assigns whoever it invites (or imports), and unassigns an
-// address once it has no membership here any more. Only when the provider
+// installation assigns whoever it invites (or imports) — an admin of any of
+// its organisations as an admin of the client, who then decides on access
+// requests too — and unassigns an address once it has no membership here
+// any more. Only when the provider
 // advertises it (`client_users_endpoint` in its discovery document) and the
 // installer gave this Worker the client's id and secret; any other provider
 // is left alone.
@@ -65,48 +67,53 @@ async function bestEffort(what: string, run: () => Promise<void>): Promise<void>
   }
 }
 
-// Invited (or imported): may sign in from now on.
-export async function assignAddresses(env: Env, emails: string[]): Promise<void> {
-  const list = [...new Set(emails.map((e) => e.trim().toLowerCase()).filter(Boolean))];
-  if (!list.length) return;
-  await bestEffort('assign', async () => {
-    const target = await usersEndpoint(env);
-    if (!target) return;
-    if (list.length === 1) return call(target, `/${encodeURIComponent(list[0])}`, { method: 'PUT' });
-    for (let i = 0; i < list.length; i += BULK) await call(target, '', { method: 'POST', body: JSON.stringify({ emails: list.slice(i, i + BULK) }) });
-  });
+interface AccessUser {
+  email: string;
+  role: 'admin' | 'member';
 }
 
-// Removed somewhere: unassigned only when no membership of this
-// installation (any org, pending or active) is left for the address.
-export async function unassignIfGone(env: Env, emails: string[]): Promise<void> {
+async function assignAll(target: Target, users: AccessUser[]): Promise<void> {
+  for (let i = 0; i < users.length; i += BULK) await call(target, '', { method: 'POST', body: JSON.stringify({ users: users.slice(i, i + BULK) }) });
+}
+
+// After any change to these addresses' memberships: each one that still has
+// a membership here is assigned — as an admin of the client when it is an
+// admin of any organisation here (it then decides on access requests too) —
+// and each one without any is unassigned.
+export async function syncAddresses(env: Env, emails: string[]): Promise<void> {
   const list = [...new Set(emails.map((e) => e.trim().toLowerCase()).filter(Boolean))];
   if (!list.length) return;
-  await bestEffort('unassign', async () => {
+  await bestEffort('sync', async () => {
     const target = await usersEndpoint(env);
     if (!target) return;
     const { results } = await env.DB.prepare(
-      'SELECT value AS email FROM json_each(?) WHERE value NOT IN (SELECT lower(invited_email) FROM memberships)'
+      `SELECT value AS email, (SELECT MAX(role = 'admin') FROM memberships WHERE lower(invited_email) = value) AS admin,
+              EXISTS (SELECT 1 FROM memberships WHERE lower(invited_email) = value) AS present
+       FROM json_each(?)`
     )
       .bind(JSON.stringify(list))
-      .all<{ email: string }>();
-    const gone = (results || []).map((r) => r.email);
+      .all<{ email: string; admin: number | null; present: number }>();
+    const rows = results || [];
+    await assignAll(target, rows.filter((r) => r.present).map((r) => ({ email: r.email, role: r.admin ? 'admin' : 'member' })));
+    const gone = rows.filter((r) => !r.present).map((r) => r.email);
     if (gone.length > MAX_UNASSIGN) console.error(`client access: ${gone.length} addresses to unassign, only the first ${MAX_UNASSIGN} now`);
     for (const email of gone.slice(0, MAX_UNASSIGN)) await call(target, `/${encodeURIComponent(email)}`, { method: 'DELETE' });
   });
 }
 
-// Every address with a membership, assigned again (idempotent) — at most
-// every SYNC_EVERY_MS per isolate.
+// Every address with a membership, assigned again with its role
+// (idempotent) — at most every SYNC_EVERY_MS per isolate.
 export async function syncAllMembers(env: Env, now = Date.now()): Promise<void> {
   if (now - lastSync < SYNC_EVERY_MS) return;
   lastSync = now;
-  await bestEffort('sync', async () => {
+  await bestEffort('sync all', async () => {
     const target = await usersEndpoint(env);
     if (!target) return;
-    const { results } = await env.DB.prepare('SELECT DISTINCT lower(invited_email) AS email FROM memberships').all<{ email: string }>();
-    const emails = (results || []).map((r) => r.email).filter(Boolean);
-    for (let i = 0; i < emails.length; i += BULK) await call(target, '', { method: 'POST', body: JSON.stringify({ emails: emails.slice(i, i + BULK) }) });
+    const { results } = await env.DB.prepare("SELECT lower(invited_email) AS email, MAX(role = 'admin') AS admin FROM memberships GROUP BY lower(invited_email)").all<{
+      email: string;
+      admin: number;
+    }>();
+    await assignAll(target, (results || []).filter((r) => r.email).map((r) => ({ email: r.email, role: r.admin ? 'admin' : 'member' })));
   });
 }
 
