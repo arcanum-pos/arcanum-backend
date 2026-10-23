@@ -83,3 +83,28 @@ describe('deleting an event', () => {
     expect((await api('DELETE', `/organizations/${other.orgId}/events/${used.id}`, { user: other.admin })).status).toBe(404);
   });
 });
+
+describe('an event over several days', () => {
+  it('has a last day: the same as its first by default, later on request, never earlier', async () => {
+    const org = await seedOrg();
+    const oneDay = await createEvent(org);
+    expect(oneDay).toMatchObject({ date: '2026-10-04', endDate: '2026-10-04' });
+
+    const made = await api('POST', `/organizations/${org.orgId}/events`, { user: org.admin, body: { name: 'Kamp', date: '2026-09-12', endDate: '2026-09-13' } });
+    expect(made.status).toBe(201);
+    expect(made.body).toMatchObject({ date: '2026-09-12', endDate: '2026-09-13' });
+
+    const reversed = await api('POST', `/organizations/${org.orgId}/events`, { user: org.admin, body: { name: 'X', date: '2026-09-12', endDate: '2026-09-11' } });
+    expect([reversed.status, (reversed.body as { code?: string }).code]).toEqual([400, 'event_end_before_start']);
+
+    const id = (made.body as { id: string }).id;
+    const longer = await api('PATCH', `/organizations/${org.orgId}/events/${id}`, { user: org.admin, body: { endDate: '2026-09-15' } });
+    expect(longer.body).toMatchObject({ date: '2026-09-12', endDate: '2026-09-15' });
+    // Moving the first day past the last one is refused too.
+    const past = await api('PATCH', `/organizations/${org.orgId}/events/${id}`, { user: org.admin, body: { date: '2026-09-16' } });
+    expect(past.status).toBe(400);
+    // Back to one day.
+    const single = await api('PATCH', `/organizations/${org.orgId}/events/${id}`, { user: org.admin, body: { endDate: null } });
+    expect(single.body).toMatchObject({ date: '2026-09-12', endDate: '2026-09-12' });
+  });
+});

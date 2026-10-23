@@ -105,7 +105,7 @@ export const EXPORT_TABLES: TableSpec[] = [
   // on again there.
   {
     table: 'events',
-    columns: ['id', 'name', 'event_date', 'created_at', 'catalog_id', 'order_counter', 'self_order_pay_counter', 'self_order_pay_bancontact', 'self_order_tabs', 'kassa_modes', 'brand_primary', 'brand_accent'],
+    columns: ['id', 'name', 'event_date', 'created_at', 'catalog_id', 'order_counter', 'self_order_pay_counter', 'self_order_pay_bancontact', 'self_order_tabs', 'kassa_modes', 'brand_primary', 'brand_accent', 'end_date'],
     excluded: {
       ...ORG,
       self_order_enabled: 'switched on again on the new installation (new public URL)',

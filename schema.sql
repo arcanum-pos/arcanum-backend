@@ -28,7 +28,9 @@ CREATE TABLE IF NOT EXISTS events (
   -- The customer display's colours for this event (migration 0044); NULL:
   -- the organisation's (org_branding).
   brand_primary TEXT,
-  brand_accent TEXT
+  brand_accent TEXT,
+  -- Its last day, included (migration 0045); NULL: one day, event_date.
+  end_date TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_org ON events(org_id);
@@ -860,3 +862,4 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0041_device_repair.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0042_org_icons.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0043_customer_views.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0044_branding.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0045_event_end_date.sql');

@@ -1,4 +1,5 @@
-// Per-org events: name + date, what tabs (and so sales) are tagged with —
+// Per-org events: name + dates (the first and the last day, included — an
+// event can run over several days), what tabs (and so sales) are tagged with —
 // and since 2026-10-11 (DOMAIN_MODEL.md "Self-ordering and station
 // screens") an event's own short order numbers, its self-ordering (on/off,
 // the code in its public URL/QR, /bestel/<code>) and its ordering modes
@@ -8,8 +9,8 @@
 // one (kassaModes, off by default: one switch for the event).
 //
 //   GET    /organizations/:org/events                          member
-//   POST   /organizations/:org/events { name, date }           admin
-//   PATCH  /organizations/:org/events/:id                      admin  { name?, date?, selfOrderEnabled?,
+//   POST   /organizations/:org/events { name, date, endDate? } admin  (endDate: the last day; absent = date)
+//   PATCH  /organizations/:org/events/:id                      admin  { name?, date?, endDate?, selfOrderEnabled?,
 //                                                                       linkName? (the name in its readable link),
 //                                                                       kassaModes? (the kassa picks an ordering mode),
 //                                                                       brandPrimary?, brandAccent? (the customer display's
@@ -38,6 +39,7 @@ export interface EventRow {
   org_id: string;
   name: string;
   event_date: string;
+  end_date?: string | null;
   created_at: string;
   self_order_enabled: number;
   self_order_code: string | null;
@@ -96,6 +98,8 @@ function rowToEvent(env: Env, row: EventRow, modes: OrderModeRow[]) {
     id: row.id,
     name: row.name,
     date: row.event_date,
+    // The last day, included (the same as date for a one-day event).
+    endDate: row.end_date ?? row.event_date,
     createdAt: row.created_at,
     // code: what goes in the link and QR — the readable one (<name>-<4
     // characters>); linkName: its name part. The long code of before keeps working.
@@ -198,6 +202,7 @@ export async function updateEvent(request: Request, env: Env, orgId: string, eve
   const body = (await request.json().catch(() => ({}))) as {
     name?: unknown;
     date?: unknown;
+    endDate?: unknown;
     selfOrderEnabled?: unknown;
     linkName?: unknown;
     kassaModes?: unknown;
@@ -214,6 +219,14 @@ export async function updateEvent(request: Request, env: Env, orgId: string, eve
     date = typeof body.date === 'string' ? body.date.trim() : '';
     if (!DATE_RE.test(date)) return json({ error: 'date must be in YYYY-MM-DD format' }, 400);
   }
+  // A one-day event keeps NULL; moving its first day moves nothing else.
+  let endDate = event.end_date ?? null;
+  if (body.endDate !== undefined) {
+    endDate = body.endDate === null || body.endDate === '' ? null : typeof body.endDate === 'string' ? body.endDate.trim() : '';
+    if (endDate !== null && !DATE_RE.test(endDate)) return json({ error: 'endDate must be in YYYY-MM-DD format' }, 400);
+  }
+  if (endDate !== null && endDate < date) return errorJson('event_end_before_start', 400);
+  if (endDate === date) endDate = null;
   if (body.selfOrderEnabled !== undefined) enabled = body.selfOrderEnabled === true ? 1 : 0;
   // Switching it on needs a mode guests can order with: made when there's none.
   if (body.selfOrderEnabled === true && !(await loadModes(env, eventId)).some(usable) && !(await makeSelfOrderMode(env, orgId, eventId))) {
@@ -227,8 +240,8 @@ export async function updateEvent(request: Request, env: Env, orgId: string, eve
   const brandPrimary = body.brandPrimary === undefined ? (event.brand_primary ?? null) : readColor(body.brandPrimary);
   const brandAccent = body.brandAccent === undefined ? (event.brand_accent ?? null) : readColor(body.brandAccent);
   if (brandPrimary === undefined || brandAccent === undefined) return errorJson('branding_color_invalid', 400);
-  await env.DB.prepare('UPDATE events SET name = ?, event_date = ?, self_order_enabled = ?, self_order_code = ?, kassa_modes = ?, brand_primary = ?, brand_accent = ? WHERE id = ?')
-    .bind(name, date, enabled, code, kassaModes, brandPrimary, brandAccent, eventId)
+  await env.DB.prepare('UPDATE events SET name = ?, event_date = ?, end_date = ?, self_order_enabled = ?, self_order_code = ?, kassa_modes = ?, brand_primary = ?, brand_accent = ? WHERE id = ?')
+    .bind(name, date, endDate, enabled, code, kassaModes, brandPrimary, brandAccent, eventId)
     .run();
   // Another name in the readable link (a fresh suffix: the old readable link stops working).
   if (typeof body.linkName === 'string') await setSlug(env, eventId, linkNameOf(body.linkName));
@@ -461,18 +474,22 @@ export async function createEvent(request: Request, env: Env, orgId: string): Pr
   const membership = await requireOrgRole(env, orgId, caller, ['admin']);
   if (!membership) return json({ error: 'Forbidden' }, 403);
 
-  const body = (await request.json().catch(() => ({}))) as { name?: string; date?: string };
+  const body = (await request.json().catch(() => ({}))) as { name?: string; date?: string; endDate?: string | null };
   const name = (body.name || '').trim();
   const date = (body.date || '').trim();
+  let endDate = typeof body.endDate === 'string' && body.endDate.trim() ? body.endDate.trim() : null;
 
   if (!name) return json({ error: 'name is required' }, 400);
   if (!DATE_RE.test(date)) return json({ error: 'date must be in YYYY-MM-DD format' }, 400);
+  if (endDate !== null && !DATE_RE.test(endDate)) return json({ error: 'endDate must be in YYYY-MM-DD format' }, 400);
+  if (endDate !== null && endDate < date) return errorJson('event_end_before_start', 400);
+  if (endDate === date) endDate = null;
 
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
 
-  await env.DB.prepare('INSERT INTO events (id, org_id, name, event_date, created_at) VALUES (?, ?, ?, ?, ?)')
-    .bind(id, orgId, name, date, now)
+  await env.DB.prepare('INSERT INTO events (id, org_id, name, event_date, end_date, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .bind(id, orgId, name, date, endDate, now)
     .run();
 
   return eventResponse(env, orgId, id, 201);
