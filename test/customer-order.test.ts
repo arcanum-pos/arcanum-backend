@@ -24,6 +24,7 @@ describe('customer order on the charge status', () => {
       // Nothing to prepare (no prep stations): nothing to follow.
       followUrl: null,
       eventName: null,
+      eventId: null,
       split: null,
       paidCents: 0,
       paying: null,

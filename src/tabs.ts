@@ -498,6 +498,8 @@ export async function customerOrder(env: Env, orgId: string, tabId: string, char
     eventNumber: tab.eventNumber,
     followUrl: follow?.order_token && follow.has_tickets ? `${env.PUBLIC_BASE_URL}/volg/${follow.order_token}` : null,
     eventName: tab.eventName,
+    // Its colours on the customer display (branding.ts).
+    eventId: tab.eventId,
     split: tab.split ? { parts: tab.split.parts, paid: tab.split.paid } : null,
     // Paid on the tab so far (while a part is pending: before it).
     paidCents: tab.paidCents,

@@ -11,7 +11,9 @@
 //   POST   /organizations/:org/events { name, date }           admin
 //   PATCH  /organizations/:org/events/:id                      admin  { name?, date?, selfOrderEnabled?,
 //                                                                       linkName? (the name in its readable link),
-//                                                                       kassaModes? (the kassa picks an ordering mode) }
+//                                                                       kassaModes? (the kassa picks an ordering mode),
+//                                                                       brandPrimary?, brandAccent? (the customer display's
+//                                                                       colours for this event: #rrggbb, null = the org's — branding.ts) }
 //   POST   /organizations/:org/events/:id/modes                admin  { name, catalogId?, selfOrder?,
 //                                                                       payAtCounter?, payBancontact?, tabs?, tabContact?, notifySms?, atTable? }
 //   PATCH  /organizations/:org/events/:id/modes/:mode          admin  { the same, all optional, move?: 'up' | 'down' }
@@ -27,6 +29,7 @@ import { json } from '../http';
 import { extractCaller, requireOrgRole, SERVICE_ROLES } from './auth';
 import { getDecryptedPaymentCredential } from './payment-credentials';
 import { smsConfig } from '../messaging';
+import { readColor } from '../branding';
 
 export interface EventRow {
   id: string;
@@ -39,6 +42,8 @@ export interface EventRow {
   order_counter: number;
   self_order_slug: string | null;
   kassa_modes: number;
+  brand_primary?: string | null;
+  brand_accent?: string | null;
 }
 
 export interface OrderModeRow {
@@ -100,6 +105,8 @@ function rowToEvent(env: Env, row: EventRow, modes: OrderModeRow[]) {
     sms: !!smsConfig(env),
     // The last number given out (0: the next order is #1).
     lastOrderNumber: row.order_counter,
+    // The customer display's colours for this event; null: the organisation's (branding.ts).
+    brand: { primary: row.brand_primary ?? null, accent: row.brand_accent ?? null },
   };
 }
 
@@ -186,7 +193,15 @@ export async function updateEvent(request: Request, env: Env, orgId: string, eve
   if (refused) return refused;
   const event = await loadEvent(env, orgId, eventId);
   if (!event) return errorJson('event_not_found', 404);
-  const body = (await request.json().catch(() => ({}))) as { name?: unknown; date?: unknown; selfOrderEnabled?: unknown; linkName?: unknown; kassaModes?: unknown };
+  const body = (await request.json().catch(() => ({}))) as {
+    name?: unknown;
+    date?: unknown;
+    selfOrderEnabled?: unknown;
+    linkName?: unknown;
+    kassaModes?: unknown;
+    brandPrimary?: unknown;
+    brandAccent?: unknown;
+  };
 
   let { name, event_date: date, self_order_enabled: enabled, self_order_code: code } = event;
   if (body.name !== undefined) {
@@ -207,8 +222,11 @@ export async function updateEvent(request: Request, env: Env, orgId: string, eve
   if (body.linkName !== undefined && (typeof body.linkName !== 'string' || !body.linkName.trim())) return errorJson('self_order_link_name', 400);
 
   const kassaModes = body.kassaModes === undefined ? event.kassa_modes : body.kassaModes === true ? 1 : 0;
-  await env.DB.prepare('UPDATE events SET name = ?, event_date = ?, self_order_enabled = ?, self_order_code = ?, kassa_modes = ? WHERE id = ?')
-    .bind(name, date, enabled, code, kassaModes, eventId)
+  const brandPrimary = body.brandPrimary === undefined ? (event.brand_primary ?? null) : readColor(body.brandPrimary);
+  const brandAccent = body.brandAccent === undefined ? (event.brand_accent ?? null) : readColor(body.brandAccent);
+  if (brandPrimary === undefined || brandAccent === undefined) return errorJson('branding_color_invalid', 400);
+  await env.DB.prepare('UPDATE events SET name = ?, event_date = ?, self_order_enabled = ?, self_order_code = ?, kassa_modes = ?, brand_primary = ?, brand_accent = ? WHERE id = ?')
+    .bind(name, date, enabled, code, kassaModes, brandPrimary, brandAccent, eventId)
     .run();
   // Another name in the readable link (a fresh suffix: the old readable link stops working).
   if (typeof body.linkName === 'string') await setSlug(env, eventId, linkNameOf(body.linkName));

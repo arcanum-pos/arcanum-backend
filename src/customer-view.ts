@@ -30,6 +30,8 @@ export interface CustomerViewOrder {
   label: string;
   number: number | null;
   eventName: string | null;
+  // The event's colours on the display (branding.ts).
+  eventId: string | null;
   paidCents: number;
   lines: Line[];
 }
@@ -51,6 +53,7 @@ export function readOrder(value: unknown): CustomerViewOrder | null {
     label: text(o.label, 80),
     number: int(o.number, 0, 1_000_000),
     eventName: text(o.eventName, 120) || null,
+    eventId: text(o.eventId, 64) || null,
     paidCents: int(o.paidCents, 0, 100_000_000) ?? 0,
     lines,
   };

@@ -191,6 +191,8 @@ export const ERROR_TEXTS = {
   device_paired_elsewhere: 'Dit toestel werd elders opnieuw gekoppeld',
   icon_slot_unknown: 'Voor deze pagina kan je geen icoon instellen',
   icon_invalid: 'Dit icoon kon niet bewaard worden ({size} px): kies een andere afbeelding',
+  branding_color_invalid: 'Kies een kleur als #rrggbb',
+  branding_logo_invalid: 'Dit logo kon niet bewaard worden: kies een andere afbeelding',
   pairing_code_invalid: 'Deze koppelcode klopt niet, is al gebruikt of is verlopen — vraag een beheerder om een nieuwe',
   pairing_too_many_attempts: 'Te veel foute koppelcodes — probeer over 10 minuten opnieuw',
   pairing_needs_login: 'Een kassa koppel je terwijl je aangemeld bent — meld je eerst aan',

@@ -24,7 +24,11 @@ CREATE TABLE IF NOT EXISTS events (
   -- The readable self-order link, <name>-<4 characters> (migration 0030).
   self_order_slug TEXT,
   -- The kassa labels new orders with one of the ordering modes (migration 0032).
-  kassa_modes INTEGER NOT NULL DEFAULT 0
+  kassa_modes INTEGER NOT NULL DEFAULT 0,
+  -- The customer display's colours for this event (migration 0044); NULL:
+  -- the organisation's (org_branding).
+  brand_primary TEXT,
+  brand_accent TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_org ON events(org_id);
@@ -670,6 +674,17 @@ CREATE TABLE IF NOT EXISTS org_icons (
   PRIMARY KEY (org_id, slot, size)
 );
 
+-- The customer display's branding (migration 0044): the organisation's
+-- logo (PNG, base64) and its main and accent colour (#rrggbb).
+CREATE TABLE IF NOT EXISTS org_branding (
+  org_id TEXT PRIMARY KEY REFERENCES organizations(id),
+  primary_color TEXT,
+  accent_color TEXT,
+  logo_png TEXT,
+  logo_updated_at TEXT,
+  updated_at TEXT NOT NULL
+);
+
 -- What a kassa's customer display shows while the order is being entered
 -- (migration 0043): the kassa's current order (JSON), `seq` its own counter.
 CREATE TABLE IF NOT EXISTS customer_views (
@@ -844,3 +859,4 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0040_tap_devices.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0041_device_repair.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0042_org_icons.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0043_customer_views.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0044_branding.sql');
