@@ -26,7 +26,7 @@ describe('korting (a negative price)', () => {
     expect(sales.sales.revenueCents).toBe(500);
   });
 
-  it('below zero: nothing to pay and not cancellable — until the discount is voided; at zero: cancellable', async () => {
+  it('below zero: nothing to pay and not cancellable - until the discount is voided; at zero: cancellable', async () => {
     const org = await seedOrg();
     const tab = await createTab(org, { label: 'Fout', lines: [line('korting', 'Korting', -100, 1)] });
     expect(tab.totalCents).toBe(-100);

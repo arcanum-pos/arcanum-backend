@@ -41,7 +41,7 @@ describe('admins (the default)', () => {
     });
   });
 
-  it("instanceAdmin: only an address on the installation's admin list, not marked unverified — also on the demo, and never for everyone", async () => {
+  it("instanceAdmin: only an address on the installation's admin list, not marked unverified - also on the demo, and never for everyone", async () => {
     const caps = async (overrides: Record<string, string | undefined>, who: TestUser, verified?: 'true' | 'false') =>
       (await apiWith(overrides, 'GET', '/organizations/capabilities', { user: who, headers: verified ? { 'X-User-Email-Verified': verified } : {} })).body.instanceAdmin;
     expect(await caps({ ORG_CREATION: 'internal' }, instanceAdmin(), 'true')).toBe(true);
@@ -93,7 +93,7 @@ describe('demo info on the organization JSON', () => {
     return org;
   }
 
-  it('is null for an ordinary org — in the list, the detail and a create response', async () => {
+  it('is null for an ordinary org - in the list, the detail and a create response', async () => {
     const org = await seedOrg();
     const list = await api('GET', '/organizations', { user: org.admin });
     expect(list.body.find((o: any) => o.id === org.orgId).demo).toBeNull();

@@ -44,7 +44,7 @@ describe('selling on a register', () => {
     expect((await chargeCash(org, tab.id, 300, { registerId: 'nope' })).body.code).toBe('register_not_found');
   });
 
-  it('money belongs to the shift it was paid in — a tab opened in shift 1, paid in shift 2', async () => {
+  it('money belongs to the shift it was paid in - a tab opened in shift 1, paid in shift 2', async () => {
     const org = await seedOrg();
     const toog = await register(org);
     const first = (await openShift(org, toog, { floatCents: 5000 })).body;
@@ -111,7 +111,7 @@ describe('a shift, from Kassa openen to kasopmaak', () => {
     spy.mockRestore();
   });
 
-  it('who worked on it: everyone who took a payment (with how many), who opened and closed it — on the kassa and in the list', async () => {
+  it('who worked on it: everyone who took a payment (with how many), who opened and closed it - on the kassa and in the list', async () => {
     const org = await seedOrg();
     const toog = await register(org);
     const opened = await openShift(org, toog, { floatCents: 5000 });
@@ -149,7 +149,7 @@ describe('a shift, from Kassa openen to kasopmaak', () => {
     expect((await current(org, toog)).shift).toBeNull();
   });
 
-  it('blind count (an admin setting): the expected cash only after the count — no note needed', async () => {
+  it('blind count (an admin setting): the expected cash only after the count - no note needed', async () => {
     const org = await seedOrg();
     const toog = await register(org);
     expect((await api('PUT', o(org, '/shift-settings'), { user: org.cashier, body: { blindCount: true } })).status).toBe(403);

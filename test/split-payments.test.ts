@@ -142,7 +142,7 @@ describe('split part bookkeeping', () => {
     expect((await chargeCash(org, tab.id, 1000, { splitPart: true })).status).toBe(201);
   });
 
-  it('without an intent it must still be exactly what is open — a stale kassa gets a 409, not a partial payment', async () => {
+  it('without an intent it must still be exactly what is open - a stale kassa gets a 409, not a partial payment', async () => {
     const org = await seedOrg();
     const tab = await createTab(org, { label: 'Tafel 2', lines: [line('bon', 'Bonnen', 100, 30)] });
     expect((await chargeCash(org, tab.id, 2000)).status).toBe(409);
@@ -221,7 +221,7 @@ describe('per item', () => {
       api('POST', tabsPath(org.orgId, `/${tab.id}/lines/${lineId}/void`), { user: org.cashier, body: { ...DEVICE, reason: 'fout', quantity } });
     const refused = await voidLine(id('pintje'), 2);
     expect(refused.status).toBe(409);
-    expect(refused.body.error).toMatch(/al betaald — ze kunnen niet meer geannuleerd/);
+    expect(refused.body.error).toMatch(/al betaald - ze kunnen niet meer geannuleerd/);
     expect((await voidLine(id('pintje'), 1)).status).toBe(201); // the third, unpaid one
   });
 
@@ -244,8 +244,8 @@ describe('per item', () => {
     const res = await payItems(org, tab.id, 3650, [{ lineId: id('steak'), quantity: 1 }, { lineId: id('pintje'), quantity: 1 }]);
     const status = await api('GET', `/sumup/status/${res.body.chargeId}`, { user: org.cashier });
     expect(status.body.order.paying).toEqual([
-      { name: 'Pintje', quantity: 1, unitPriceCents: 250 },
-      { name: 'Steak', quantity: 1, unitPriceCents: 3400 },
+      { name: 'Pintje', quantity: 1, unitPriceCents: 250, category: null },
+      { name: 'Steak', quantity: 1, unitPriceCents: 3400, category: null },
     ]);
   });
 

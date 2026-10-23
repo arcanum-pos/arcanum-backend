@@ -193,7 +193,7 @@ function parsePrice(raw: unknown): Parsed<number> {
 function parseQuickQuantities(raw: unknown): Parsed<number[] | null> {
   if (raw === undefined || raw === null) return { ok: true, value: null };
   if (!Array.isArray(raw) || raw.length === 0 || raw.length > 10 || !raw.every((n) => Number.isInteger(n) && n >= 1 && n <= 999)) {
-    return { ok: false, error: 'quickQuantities must be 1–10 integers between 1 and 999, or null' };
+    return { ok: false, error: 'quickQuantities must be 1-10 integers between 1 and 999, or null' };
   }
   return { ok: true, value: raw as number[] };
 }
@@ -591,11 +591,15 @@ async function loadCatalogDetail(env: Env, orgId: string, catalogId: string) {
   };
 }
 
-async function listCatalogs(env: Env, orgId: string) {
+// ?includeArchived: the archived ones too, after the others (the console's
+// "Toon gearchiveerd", to put one back).
+async function listCatalogs(request: Request, env: Env, orgId: string) {
+  const includeArchived = new URL(request.url).searchParams.has('includeArchived');
   const { results } = await env.DB.prepare(
     `SELECT c.id, c.name, c.is_default, c.archived_at, c.created_at, c.updated_at,
        (SELECT COUNT(*) FROM catalog_entries e WHERE e.catalog_id = c.id) AS entry_count
-     FROM catalogs c WHERE c.org_id = ? AND c.archived_at IS NULL ORDER BY c.is_default DESC, c.name`
+     FROM catalogs c WHERE c.org_id = ? ${includeArchived ? '' : 'AND c.archived_at IS NULL'}
+     ORDER BY c.archived_at IS NOT NULL, c.is_default DESC, c.name`
   )
     .bind(orgId)
     .all<CatalogRow & { entry_count: number }>();
@@ -645,6 +649,15 @@ async function archiveCatalog(env: Env, orgId: string, catalogId: string) {
   const row = await loadCatalogRow(env, orgId, catalogId);
   if (!row || row.archived_at) return errorJson('catalog_not_found', 404);
   return errorJson('default_catalog_not_archivable', 409);
+}
+
+// Archiving is never for good: an archived menukaart can be put back.
+async function restoreCatalog(env: Env, orgId: string, catalogId: string) {
+  const result = await env.DB.prepare('UPDATE catalogs SET archived_at = NULL, updated_at = ? WHERE id = ? AND org_id = ? AND archived_at IS NOT NULL')
+    .bind(now(), catalogId, orgId)
+    .run();
+  if ((result.meta.changes || 0) === 0 && !(await loadCatalogRow(env, orgId, catalogId))) return errorJson('catalog_not_found', 404);
+  return json(await loadCatalogDetail(env, orgId, catalogId));
 }
 
 async function duplicateCatalog(request: Request, env: Env, orgId: string, catalogId: string) {
@@ -984,7 +997,7 @@ export async function dispatchCatalogRoute(request: Request, env: Env, pathname:
 
   const [catalogId, action, childId] = parts;
   if (!catalogId) {
-    if (method === 'GET') return listCatalogs(env, orgId);
+    if (method === 'GET') return listCatalogs(request, env, orgId);
     if (method === 'POST') return createCatalog(request, env, orgId);
     return null;
   }
@@ -1002,6 +1015,7 @@ export async function dispatchCatalogRoute(request: Request, env: Env, pathname:
   if (!childId) {
     if (action === 'default' && method === 'POST') return setDefaultCatalog(env, orgId, catalogId);
     if (action === 'archive' && method === 'POST') return archiveCatalog(env, orgId, catalogId);
+    if (action === 'restore' && method === 'POST') return restoreCatalog(env, orgId, catalogId);
     if (action === 'duplicate' && method === 'POST') return duplicateCatalog(request, env, orgId, catalogId);
     if (action === 'layout' && method === 'PUT') return setLayout(request, env, orgId, catalogId);
     if (action === 'sections' && method === 'POST') return createSection(request, env, orgId, catalogId);

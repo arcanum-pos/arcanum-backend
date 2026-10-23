@@ -55,7 +55,7 @@ describe('tabs_changed push', () => {
     };
 
     const detail = await call('POST', '/orders', await orderBody(org, { ...DEVICE, lines: [line('pils', 'Pils', 250, 2)] }));
-    await call('PATCH', '', { label: 'Tafel 1 — Jan' });
+    await call('PATCH', '', { label: 'Tafel 1 - Jan' });
     await call('POST', '/split', { parts: 2 });
     await call('POST', '/split', { parts: null });
     await call('POST', `/lines/${detail.lines[0].id}/void`, { ...DEVICE, reason: 'fout' });

@@ -108,7 +108,7 @@ describe('tabs: lines priced from the catalog', () => {
     expect(JSON.parse(row!.items)).toEqual({ fietstochtMember: 2, fietstocht: 1 });
   });
 
-  it('refuses a free line (no variant) even next to catalog lines — fooi is a tip on the payment now (400)', async () => {
+  it('refuses a free line (no variant) even next to catalog lines - fooi is a tip on the payment now (400)', async () => {
     const org = await seedOrg();
     const c = await seedCatalog(org);
     const res = await api('POST', tabsPath(org.orgId), {

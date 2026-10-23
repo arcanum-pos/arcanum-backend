@@ -47,7 +47,7 @@ describe('reconcilePendingInvites', () => {
     expect((await membershipStatus(org.orgId, user.email)).status).toBe('active');
   });
 
-  it('never activates it on an e-mail marked unverified — the invite waits for a verified login', async () => {
+  it('never activates it on an e-mail marked unverified - the invite waits for a verified login', async () => {
     const user = invitee();
     const org = await invite(user);
     expect((await login(user, 'false')).body).toEqual([]);
@@ -65,7 +65,7 @@ describe('reconcilePendingInvites', () => {
     expect((await membershipStatus(org.orgId, user.email)).status).toBe('pending');
   });
 
-  it('the issuer is DEFAULT_IDP_ISSUER_URL, as the installer sets it — another one in it, another check', async () => {
+  it('the issuer is DEFAULT_IDP_ISSUER_URL, as the installer sets it - another one in it, another check', async () => {
     const other = { DEFAULT_IDP_ISSUER_URL: 'https://someone-elses-idp.test/' };
     const member = invitee();
     const org = await invite(member);

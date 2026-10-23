@@ -83,7 +83,7 @@ describe('tabs: order validation', () => {
     expect(res.status).toBe(400);
   });
 
-  it('rejects a free line without a variant — prices only come from the menukaart (400)', async () => {
+  it('rejects a free line without a variant - prices only come from the menukaart (400)', async () => {
     const org = await seedOrg();
     const tab = await createTab(org);
     const res = await api('POST', tabsPath(org.orgId, `/${tab.id}/orders`), {
@@ -227,7 +227,7 @@ describe('tabs: cancel the whole ticket (voidAll)', () => {
   const cancelAll = (org: TestOrg, tabId: string, reason?: string) =>
     api('POST', tabsPath(org.orgId, `/${tabId}/cancel`), { user: org.cashier, body: { reason, voidAll: true, ...DEVICE } });
 
-  it('voids what is left of every line with the reason, then cancels — the lines stay, as corrections', async () => {
+  it('voids what is left of every line with the reason, then cancels - the lines stay, as corrections', async () => {
     const org = await seedOrg();
     const tab = await createTab(org, { lines: [line('bon', 'Bonnen', 100, 3), line('pils', 'Pils', 250, 2)] });
     // One already partly voided by hand.
@@ -254,7 +254,7 @@ describe('tabs: cancel the whole ticket (voidAll)', () => {
     expect((await cancelAll(org, tab.id)).status).toBe(400);
   });
 
-  it('not while a payment runs, nor once something is paid — and then nothing is voided either', async () => {
+  it('not while a payment runs, nor once something is paid - and then nothing is voided either', async () => {
     const org = await seedOrg();
     const tab = await createTab(org, { lines: [line('bon', 'Bonnen', 100, 3)] });
     const pending = await chargeCash(org, tab.id, 300);

@@ -135,9 +135,9 @@ function euros(cents: number): string {
 
 export function tapPushText(locale: string, o: { amountCents: number; kassa: string }): string {
   const amount = euros(o.amountCents);
-  if (locale === 'fr') return `${amount} à payer à ${o.kassa} — touchez pour Tap to Pay.`;
-  if (locale === 'en') return `${amount} to pay at ${o.kassa} — tap for Tap to Pay.`;
-  return `${amount} te betalen aan ${o.kassa} — tik voor Tap to Pay.`;
+  if (locale === 'fr') return `${amount} à payer à ${o.kassa} - touchez pour Tap to Pay.`;
+  if (locale === 'en') return `${amount} to pay at ${o.kassa} - tap for Tap to Pay.`;
+  return `${amount} te betalen aan ${o.kassa} - tik voor Tap to Pay.`;
 }
 
 // A Tap to Pay payment just started at a kassa: a notification on its

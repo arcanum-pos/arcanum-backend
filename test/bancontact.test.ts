@@ -172,7 +172,7 @@ describe('bancontact tab payments', () => {
 });
 
 describe('which account a Bancontact key pays out to', () => {
-  it('saving a key: a test payment of a cent, cancelled, its account shown to confirm — kept only once confirmed', async () => {
+  it('saving a key: a test payment of a cent, cancelled, its account shown to confirm - kept only once confirmed', async () => {
     const org = await seedOrg();
     const save = (body: Record<string, unknown>) => api('PUT', `/organizations/${org.orgId}/payment-credentials/bancontact`, { user: org.admin, body: { apiKey: 'test-api-key', environment: 'preprod', ...body } });
     const first = await save({});
@@ -228,7 +228,7 @@ describe('cancelled at the kassa (Bancontact)', () => {
     expect((await getTab(org, tab.id)).status).toBe('open');
   });
 
-  it('just paid after all: it stays paid — never failed on our side while Bancontact took it', async () => {
+  it('just paid after all: it stays paid - never failed on our side while Bancontact took it', async () => {
     const org = await orgWithBancontact();
     const tab = await openTab(org);
     const res = await payBancontact(org, tab.id, 1150);

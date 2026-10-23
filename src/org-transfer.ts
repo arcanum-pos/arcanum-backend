@@ -69,7 +69,7 @@ export const EXPORT_TABLES: TableSpec[] = [
     columns: ['id', 'name', 'member_id', 'created_at', 'archived_at'],
     excluded: {
       ...ORG,
-      pin_hash: 'salted with the staff id, which is new on import — PINs are set again',
+      pin_hash: 'salted with the staff id, which is new on import - PINs are set again',
       pin_changed_at: 'goes with the PIN',
     },
     remap: ['id', 'member_id'],
@@ -129,7 +129,7 @@ export const EXPORT_TABLES: TableSpec[] = [
     columns: ['id', 'name', 'zone', 'position', 'cleared_at', 'created_at', 'archived_at'],
     excluded: {
       ...ORG,
-      qr_token: "this installation's QR address — a new one is made when the tables are listed",
+      qr_token: "this installation's QR address - a new one is made when the tables are listed",
       needs_clearing_at: 'the state of the room right now, not data',
       promised_at: 'the state of the room right now, not data',
     },
@@ -207,7 +207,7 @@ export const EXPORT_TABLES: TableSpec[] = [
     ],
     excluded: {
       ...ORG,
-      pos_terminal_id: "a devicehub terminal of this installation — devices re-register",
+      pos_terminal_id: "a devicehub terminal of this installation - devices re-register",
       provider_data: 'callback token / QR link, only meaningful while a payment is in progress',
     },
     remap: ['id', 'tab_id', 'staff_id', 'shift_id'],

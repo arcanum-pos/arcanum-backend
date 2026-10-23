@@ -61,7 +61,7 @@ describe('pairing a SumUp reader', () => {
     ]);
   });
 
-  it("a virtual reader's code from SumUp's dashboard: dashes and other lengths are fine — SumUp decides", async () => {
+  it("a virtual reader's code from SumUp's dashboard: dashes and other lengths are fine - SumUp decides", async () => {
     const org = await orgWithSumup();
     expect((await pair(org, org.admin, { pairingCode: 'ab12-cd34-ef', name: 'Virtueel' })).status).toBe(201);
     expect(sumupRequests[0].body).toEqual({ pairing_code: 'AB12CD34EF', name: 'Virtueel' });
@@ -118,7 +118,7 @@ describe('unpairing a SumUp reader', () => {
 });
 
 describe('only for an admin of the org', () => {
-  it('refuses a signed-out caller, a cashier and an admin of another org — SumUp is never asked', async () => {
+  it('refuses a signed-out caller, a cashier and an admin of another org - SumUp is never asked', async () => {
     const org = await orgWithSumup();
     const other = await seedOrg();
     for (const [user, status] of [[null, 401], [org.cashier, 403], [other.admin, 403]] as const) {
@@ -130,7 +130,7 @@ describe('only for an admin of the org', () => {
 });
 
 describe('which SumUp account a merchant code and key are', () => {
-  it("the key must work for the merchant code; the account's name shown to confirm — kept only once confirmed", async () => {
+  it("the key must work for the merchant code; the account's name shown to confirm - kept only once confirmed", async () => {
     const org = await seedOrg();
     const save = (body: Record<string, unknown>) => api('PUT', `/organizations/${org.orgId}/payment-credentials/sumup`, { user: org.admin, body: { merchantId: 'msandbox1', apiKey: 'sup_sk_test', ...body } });
     const first = await save({});

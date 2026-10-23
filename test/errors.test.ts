@@ -39,20 +39,20 @@ describe('the error table', () => {
     expect(errorText('import_too_long', { field: 'Groep', max: 60 })).toBe(`${'Groep'} is te lang (max ${60} tekens)`);
     expect(errorText('import_price_invalid', { value: 'acht' })).toBe(`Prijs "${'acht'}" is geen geldig bedrag`);
     expect(errorText('import_vat_not_a_number', { value: 'x' })).toBe(`BTW "${'x'}" is geen getal`);
-    expect(errorText('import_vat_unknown', { value: n, allowed: [0, 6, 12, 21].join(', ') })).toBe(`BTW ${n}% bestaat niet — gebruik ${[0, 6, 12, 21].join(', ')}`);
-    expect(errorText('import_quick_invalid', { value: 'veel' })).toBe(`Snelknoppen "${'veel'}" — gebruik hele getallen tussen 1 en 999, bv. 5, 10, 20 (max 10)`);
-    expect(errorText('import_visible_invalid', { value: 'misschien' })).toBe(`Zichtbaar "${'misschien'}" — gebruik ja of nee`);
+    expect(errorText('import_vat_unknown', { value: n, allowed: [0, 6, 12, 21].join(', ') })).toBe(`BTW ${n}% bestaat niet - gebruik ${[0, 6, 12, 21].join(', ')}`);
+    expect(errorText('import_quick_invalid', { value: 'veel' })).toBe(`Snelknoppen "${'veel'}" - gebruik hele getallen tussen 1 en 999, bv. 5, 10, 20 (max 10)`);
+    expect(errorText('import_visible_invalid', { value: 'misschien' })).toBe(`Zichtbaar "${'misschien'}" - gebruik ja of nee`);
     const fp = { name: 'Steak', categorie: { row: 2, value: 'Eten' } };
     const r = { categorie: 'Kinderen' };
     const row = 3;
     expect(errorText('import_category_conflict', { product: fp.name, value: r.categorie, otherRow: fp.categorie.row, otherValue: fp.categorie.value, row })).toBe(
-      `${fp.name}: andere categorie ("${r.categorie}") dan op rij ${fp.categorie.row} ("${fp.categorie.value}") — rijen ${fp.categorie.row} en ${row}`
+      `${fp.name}: andere categorie ("${r.categorie}") dan op rij ${fp.categorie.row} ("${fp.categorie.value}") - rijen ${fp.categorie.row} en ${row}`
     );
     expect(errorText('import_station_conflict', { product: fp.name, value: 'Bar', otherRow: 2, otherValue: 'Keuken', row })).toBe(
-      `${fp.name}: ander station ("${'Bar'}") dan op rij ${2} ("${'Keuken'}") — rijen ${2} en ${row}`
+      `${fp.name}: ander station ("${'Bar'}") dan op rij ${2} ("${'Keuken'}") - rijen ${2} en ${row}`
     );
     expect(errorText('import_vat_conflict', { product: fp.name, value: '21%', otherRow: 2, otherValue: '(geen)', row })).toBe(
-      `${fp.name}: ander BTW-tarief (${'21%'}) dan op rij ${2} (${'(geen)'}) — rijen ${2} en ${row}`
+      `${fp.name}: ander BTW-tarief (${'21%'}) dan op rij ${2} (${'(geen)'}) - rijen ${2} en ${row}`
     );
     expect(errorText('import_duplicate_variant', { name: 'Pils', otherRow: 2 })).toBe(`${'Pils'} staat al op rij ${2}`);
     expect(errorText('import_duplicate_code', { code: 'c', otherRow: 4 })).toBe(`Code "${'c'}" staat al op rij ${4}`);
@@ -79,7 +79,7 @@ describe('coded error responses', () => {
 
     const badEvent = await api('POST', tabsPath(org.orgId), { user: org.cashier, body: { ...DEVICE, eventId: 'bestaat-niet' } });
     expect(badEvent.status).toBe(400);
-    expect(badEvent.body).toEqual({ error: 'Onbekend evenement — kies het opnieuw in de instellingen van de kassa', code: 'unknown_event' });
+    expect(badEvent.body).toEqual({ error: 'Onbekend evenement - kies het opnieuw in de instellingen van de kassa', code: 'unknown_event' });
 
     const tab = await createTab(org, { lines: [line('pils', 'Pils', 250, 2)] });
     const stale = await chargeCash(org, tab.id, 999);
@@ -92,7 +92,7 @@ describe('coded error responses', () => {
       body: { ...DEVICE, catalogId: menu.catalogId, lines: [{ variantId: 'weg', quantity: 1 }] },
     });
     expect(unknownLine.status).toBe(400);
-    expect(unknownLine.body).toEqual({ error: 'Dit product staat niet (meer) op de menukaart — herlaad de kassa', code: 'product_not_on_catalog' });
+    expect(unknownLine.body).toEqual({ error: 'Dit product staat niet (meer) op de menukaart - herlaad de kassa', code: 'product_not_on_catalog' });
 
     // A developer-facing error stays plain.
     const malformed = await api('POST', tabsPath(org.orgId, `/${tab.id}/orders`), { user: org.cashier, body: { lines: [] } });
@@ -148,7 +148,7 @@ describe('coded error responses', () => {
     expect(byCode.import_vat_unknown.params).toEqual({ value: 19, allowed: '0, 6, 12, 21' });
     expect(byCode.import_category_conflict).toMatchObject({
       row: 6,
-      message: 'D: andere categorie ("Drank") dan op rij 5 ("Eten") — rijen 5 en 6',
+      message: 'D: andere categorie ("Drank") dan op rij 5 ("Eten") - rijen 5 en 6',
       params: { product: 'D', value: 'Drank', otherRow: 5, otherValue: 'Eten', row: 6 },
     });
     for (const e of res.body.errors) expect(errorText(e.code, e.params)).toBe(e.message);

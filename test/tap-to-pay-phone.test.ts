@@ -166,7 +166,7 @@ describe("a kassa's Tap to Pay phone", () => {
     expect((await asPhone(key, 'GET', `${path}/tap`)).body.charge).toBeNull();
   });
 
-  it("the kassa's QR: the charge by its token alone — a wrong token finds nothing", async () => {
+  it("the kassa's QR: the charge by its token alone - a wrong token finds nothing", async () => {
     const { org, kassa } = await setup();
     const { chargeId, token } = await kassaCharge(org, kassa);
     const viaQr = await asPhone(null, 'GET', `/public/tap/${chargeId}/${token}`);

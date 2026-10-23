@@ -62,7 +62,7 @@ async function kassaWithDisplay(org: TestOrg) {
   return { kassa, display: display.terminalId as string, key: display.deviceKey as string };
 }
 
-const ORDER = { label: 'Tafel 4', number: 12, eventName: 'Fuif', eventId: 'ev-1', paidCents: 0, lines: [{ name: 'Pils', quantity: 2, unitPriceCents: 250 }, { name: 'Frieten', quantity: 1, unitPriceCents: 400 }] };
+const ORDER = { label: 'Tafel 4', number: 12, eventName: 'Fuif', eventId: 'ev-1', paidCents: 0, lines: [{ name: 'Pils', quantity: 2, unitPriceCents: 250, category: 'Drank' }, { name: 'Frieten', quantity: 1, unitPriceCents: 400, category: 'Eten' }] };
 const put = (org: TestOrg, kassa: string, order: unknown, seq: number, user = org.cashier) =>
   api('PUT', `/organizations/${org.orgId}/devices/${kassa}/customer-view`, { user, body: { order, seq } });
 
@@ -104,9 +104,9 @@ describe('the customer display while the order is entered', () => {
   it('only what an order is: names cut short, odd lines left out', async () => {
     const org = await seedOrg();
     const { kassa, display, key } = await kassaWithDisplay(org);
-    await put(org, kassa, { label: 'x'.repeat(200), number: 'zeven', lines: [{ name: 'Pils', quantity: 1, unitPriceCents: 250, secret: 'no' }, { name: 'Raar', quantity: 0.5, unitPriceCents: 1 }, 'junk'], extra: true }, 1);
+    await put(org, kassa, { label: 'x'.repeat(200), number: 'zeven', lines: [{ name: 'Pils', quantity: 1, unitPriceCents: 250, category: 'g'.repeat(100), secret: 'no' }, { name: 'Raar', quantity: 0.5, unitPriceCents: 1 }, 'junk'], extra: true }, 1);
     const { order } = (await asDevice(key, `/organizations/${org.orgId}/devices/${display}/customer-view`)).body;
-    expect(order).toEqual({ label: 'x'.repeat(80), number: null, eventName: null, eventId: null, paidCents: 0, lines: [{ name: 'Pils', quantity: 1, unitPriceCents: 250 }] });
+    expect(order).toEqual({ label: 'x'.repeat(80), number: null, eventName: null, eventId: null, paidCents: 0, lines: [{ name: 'Pils', quantity: 1, unitPriceCents: 250, category: 'g'.repeat(60) }] });
   });
 
   it("a display reads only its own kassa's; a kassa of another org, another display, or nobody: refused", async () => {

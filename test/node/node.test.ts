@@ -165,7 +165,7 @@ describe('the backend on Node', () => {
     return { status: res.status, body: text ? JSON.parse(text) : null };
   };
 
-  it('an organisation, a menu, a tab paid in cash — closed; devicehub told', async () => {
+  it('an organisation, a menu, a tab paid in cash - closed; devicehub told', async () => {
     const org = await api('POST', '/organizations', { name: 'Scouts' });
     expect(org.status).toBe(201);
     const o = `/organizations/${org.body.id}`;

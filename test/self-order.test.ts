@@ -150,7 +150,7 @@ describe('prep tickets and station screens', () => {
 });
 
 describe('self-ordering (public, no sign-in)', () => {
-  it("shows the event's menu — or that it's closed", async () => {
+  it("shows the event's menu - or that it's closed", async () => {
     const org = await seedOrg();
     const v = await venue(org);
     const code = await enableSelfOrder(org, v);
@@ -406,7 +406,7 @@ describe('self-ordering on a tab (pay when leaving)', () => {
 });
 
 describe('ordering modes (bestelwijzen)', () => {
-  it('self-ordering switched on without a mode to order with: one made ready — never a reason to refuse', async () => {
+  it('self-ordering switched on without a mode to order with: one made ready - never a reason to refuse', async () => {
     // No modes: "Ter plaatse" with the org's menu.
     const org = await seedOrg();
     const v = await venue(org);
@@ -500,7 +500,7 @@ describe('ordering modes (bestelwijzen)', () => {
     expect((await call('POST', `/public/orders/${placed.token}/orders`, { lines: [{ variantId: v.pils, quantity: 1 }] })).body.code).toBe('self_order_closed');
   });
 
-  it('at the kassa: only when the event says so (off by default) — then the only mode by itself, else the one chosen; never another event\'s', async () => {
+  it('at the kassa: only when the event says so (off by default) - then the only mode by itself, else the one chosen; never another event\'s', async () => {
     const org = await seedOrg();
     const v = await venue(org);
     const kassaOnly = (await api('POST', modesPath(org, v), { user: org.admin, body: { name: 'Alleen aan de kassa' } })).body.modes[0];

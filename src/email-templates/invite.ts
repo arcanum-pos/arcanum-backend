@@ -101,7 +101,7 @@ export function buildTestInviteEmail(params: { orgName: string; role: string; lo
   const invite = buildInviteEmail(params);
   const test = TEST[params.locale];
   return {
-    subject: `${test.subject} — ${invite.subject}`,
+    subject: `${test.subject} - ${invite.subject}`,
     text: `${test.note}\n\n${invite.text}`,
     html: `<p><em>${test.note}</em></p>\n${invite.html}`,
   };

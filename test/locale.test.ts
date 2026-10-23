@@ -142,9 +142,9 @@ describe('the invite mail', () => {
 
   it('as the installer\'s test mail: the same invitation, marked as a test in every language', () => {
     for (const [locale, subject, note] of [
-      ['nl', 'Testmail — Uitnodiging voor Scouts <Sint-Jan>', 'Dit is een testmail'],
-      ['fr', 'E-mail de test — Invitation à rejoindre Scouts <Sint-Jan>', 'Ceci est un e-mail de test'],
-      ['en', 'Test mail — Invitation to join Scouts <Sint-Jan>', 'This is a test mail'],
+      ['nl', 'Testmail - Uitnodiging voor Scouts <Sint-Jan>', 'Dit is een testmail'],
+      ['fr', 'E-mail de test - Invitation à rejoindre Scouts <Sint-Jan>', 'Ceci est un e-mail de test'],
+      ['en', 'Test mail - Invitation to join Scouts <Sint-Jan>', 'This is a test mail'],
     ] as const) {
       const real = buildInviteEmail({ ...params, locale });
       const test = buildTestInviteEmail({ ...params, locale });

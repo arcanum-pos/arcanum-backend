@@ -218,6 +218,22 @@ describe('catalogs', () => {
     expect(list.map((c: any) => c.name)).toEqual(['Standaard']);
   });
 
+  it('lists archived catalogs on request (last) and puts one back', async () => {
+    const org = await seedOrg();
+    await catalog(org, 'Standaard');
+    const oud = await catalog(org, 'Oud');
+    await catalog(org, 'Zomer');
+    await ok(api('POST', catalogs(org.orgId, `/${oud.id}/archive`), { user: org.admin }));
+    const all = await ok(api('GET', catalogs(org.orgId, '?includeArchived=1'), { user: org.admin }));
+    expect(all.map((c: any) => [c.name, c.archived])).toEqual([['Standaard', false], ['Zomer', false], ['Oud', true]]);
+    // Cashiers can't; admins can.
+    expect((await api('POST', catalogs(org.orgId, `/${oud.id}/restore`), { user: org.cashier })).status).toBe(403);
+    const restored = await ok(api('POST', catalogs(org.orgId, `/${oud.id}/restore`), { user: org.admin }));
+    expect(restored.archived).toBe(false);
+    expect((await ok(api('GET', catalogs(org.orgId), { user: org.admin }))).map((c: any) => c.name)).toEqual(['Standaard', 'Oud', 'Zomer']);
+    expect((await api('POST', catalogs(org.orgId, '/nope/restore'), { user: org.admin })).status).toBe(404);
+  });
+
   it('returns sections with their entries, prices and display names', async () => {
     const org = await seedOrg();
     const s = await sampleCatalog(org);

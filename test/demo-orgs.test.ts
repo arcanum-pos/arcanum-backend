@@ -24,7 +24,7 @@ const demoFor = (p: TestUser, extra: Record<string, unknown> = {}, overrides?: R
   demo({ sub: p.sub, email: p.email, name: p.name, ...extra }, { overrides });
 
 
-describe('POST /internal/demo-orgs — access', () => {
+describe('POST /internal/demo-orgs - access', () => {
   it('answers 503 while the login provider is not configured (its issuer is what `sub` belongs to)', async () => {
     const res = await demoFor(person(), {}, { DEFAULT_IDP_ISSUER_URL: undefined });
     expect(res.status).toBe(503);
@@ -64,7 +64,7 @@ describe('POST /internal/demo-orgs — access', () => {
   });
 });
 
-describe('POST /internal/demo-orgs — the demo org', () => {
+describe('POST /internal/demo-orgs - the demo org', () => {
   it('creates a demo org with its person as active admin, seen in their org list with its demo info', async () => {
     const p = person('Bert');
     const before = Date.now();
@@ -161,7 +161,7 @@ describe('POST /internal/demo-orgs — the demo org', () => {
     expect(fresh.body.orgId).not.toBe(first.body.orgId);
   });
 
-  it('refuses a new demo with demo_limit_reached (429) once DEMO_MAX_LIVE are live — but still reopens your own', async () => {
+  it('refuses a new demo with demo_limit_reached (429) once DEMO_MAX_LIVE are live - but still reopens your own', async () => {
     const mine = person();
     await demoFor(mine);
     const [{ n }] = await rows<{ n: number }>("SELECT COUNT(*) AS n FROM organizations WHERE is_locked = 'N'");

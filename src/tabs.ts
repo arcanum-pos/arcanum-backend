@@ -475,15 +475,15 @@ export async function customerOrder(env: Env, orgId: string, tabId: string, char
   const paying = chargeId
     ? ((
         await env.DB.prepare(
-          `SELECT l.name, cl.quantity, l.unit_price_cents FROM charge_lines cl JOIN order_lines l ON l.id = cl.line_id WHERE cl.charge_id = ? ORDER BY l.created_at, l.rowid`
+          `SELECT l.name, cl.quantity, l.unit_price_cents, l.category FROM charge_lines cl JOIN order_lines l ON l.id = cl.line_id WHERE cl.charge_id = ? ORDER BY l.created_at, l.rowid`
         )
           .bind(chargeId)
-          .all<{ name: string; quantity: number; unit_price_cents: number }>()
-      ).results || []).map((r) => ({ name: r.name, quantity: r.quantity, unitPriceCents: r.unit_price_cents }))
+          .all<{ name: string; quantity: number; unit_price_cents: number; category: string | null }>()
+      ).results || []).map((r) => ({ name: r.name, quantity: r.quantity, unitPriceCents: r.unit_price_cents, category: r.category }))
     : [];
-  const { results } = await env.DB.prepare('SELECT id, name, unit_price_cents, quantity, voids_line_id FROM order_lines WHERE tab_id = ? ORDER BY created_at, rowid')
+  const { results } = await env.DB.prepare('SELECT id, name, unit_price_cents, quantity, category, voids_line_id FROM order_lines WHERE tab_id = ? ORDER BY created_at, rowid')
     .bind(tabId)
-    .all<Pick<LineRow, 'id' | 'name' | 'unit_price_cents' | 'quantity' | 'voids_line_id'>>();
+    .all<Pick<LineRow, 'id' | 'name' | 'unit_price_cents' | 'quantity' | 'category' | 'voids_line_id'>>();
   const rows = results || [];
   const voided = new Map<string, number>();
   for (const l of rows) if (l.voids_line_id) voided.set(l.voids_line_id, (voided.get(l.voids_line_id) || 0) - l.quantity);
@@ -506,7 +506,8 @@ export async function customerOrder(env: Env, orgId: string, tabId: string, char
     paying: paying.length ? paying : null,
     lines: rows
       .filter((l) => !l.voids_line_id)
-      .map((l) => ({ name: l.name, quantity: l.quantity - (voided.get(l.id) || 0), unitPriceCents: l.unit_price_cents }))
+      // The category: the customer display counts the items per category.
+      .map((l) => ({ name: l.name, quantity: l.quantity - (voided.get(l.id) || 0), unitPriceCents: l.unit_price_cents, category: l.category }))
       .filter((l) => l.quantity > 0),
   };
 }
@@ -826,7 +827,7 @@ async function voidLine(request: Request, env: Env, orgId: string, tabId: string
 async function setSplit(request: Request, env: Env, orgId: string, tabId: string): Promise<Response> {
   const body = (await request.json().catch(() => ({}))) as { parts?: unknown };
   const parts = body.parts === null ? null : Number(body.parts);
-  if (parts !== null && (!Number.isInteger(parts) || parts < 2 || parts > 50)) return json({ error: 'parts must be an integer 2–50, or null' }, 400);
+  if (parts !== null && (!Number.isInteger(parts) || parts < 2 || parts > 50)) return json({ error: 'parts must be an integer 2-50, or null' }, 400);
 
   const result = await env.DB.prepare(
     `UPDATE tabs SET split_parts = ?, split_paid = 0

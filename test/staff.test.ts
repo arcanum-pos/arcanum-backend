@@ -23,7 +23,7 @@ const asPerson = (org: TestOrg, token: string | null, method: string, path: stri
   apiWith({}, method, path, { user: org.cashier, body, headers: token ? { 'X-Staff': token } : {} });
 
 describe('the staff list', () => {
-  it('admins manage it; the kassa role reads it (names, whether there is a PIN — never the PIN)', async () => {
+  it('admins manage it; the kassa role reads it (names, whether there is a PIN - never the PIN)', async () => {
     const org = await seedOrg();
     expect((await api('POST', staffPath(org), { user: org.cashier, body: { name: 'Jan' } })).status).toBe(403);
     const jan = await addStaff(org, 'Jan', '1234');
@@ -46,7 +46,7 @@ describe('the staff list', () => {
 });
 
 describe('choosing a person on a device', () => {
-  it('without a PIN: a tap; with one: only the right PIN — 5 wrong a minute, then wait', async () => {
+  it('without a PIN: a tap; with one: only the right PIN - 5 wrong a minute, then wait', async () => {
     const org = await seedOrg();
     const an = await addStaff(org, 'An');
     const jan = await addStaff(org, 'Jan', '4321');
@@ -58,7 +58,7 @@ describe('choosing a person on a device', () => {
     expect((await tokenFor(org, jan.id, '4321')).body.code).toBe('staff_pin_too_many');
   });
 
-  it('what a device does is recorded with its person — taken from the token, never from what a browser says', async () => {
+  it('what a device does is recorded with its person - taken from the token, never from what a browser says', async () => {
     const org = await seedOrg();
     const an = await addStaff(org, 'An');
     const token = (await tokenFor(org, an.id)).body.token as string;
@@ -102,7 +102,7 @@ describe('choosing a person on a device', () => {
 });
 
 describe('an organisation that requires a person (S2)', () => {
-  it('refuses selling and payments without one — admins switch it on', async () => {
+  it('refuses selling and payments without one - admins switch it on', async () => {
     const org = await seedOrg();
     expect((await api('PUT', `/organizations/${org.orgId}/staff-settings`, { user: org.cashier, body: { required: true } })).status).toBe(403);
     expect((await api('PUT', `/organizations/${org.orgId}/staff-settings`, { user: org.admin, body: { required: true } })).body).toEqual({ required: true });

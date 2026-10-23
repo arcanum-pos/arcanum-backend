@@ -145,7 +145,7 @@ describe('pairing codes', () => {
     expect((await claim(org.cashier, code)).status).toBe(201);
   });
 
-  it('10 wrong codes in 10 minutes and the person has to wait — even with a good one', async () => {
+  it('10 wrong codes in 10 minutes and the person has to wait - even with a good one', async () => {
     const org = await seedOrg();
     const { code } = await newCode(org);
     for (let i = 0; i < 10; i++) expect((await claim(org.cashier, 'WRNG-CODE')).status).toBe(400);
@@ -227,7 +227,7 @@ describe('devices', () => {
     expect((await api('PATCH', devices(org, `/${kassa}`), { user: org.cashier, body: { name: '' } })).body.code).toBe('device_name_required');
   });
 
-  it('unpairing is for admins only — also the device a cashier is on', async () => {
+  it('unpairing is for admins only - also the device a cashier is on', async () => {
     const org = await seedOrg();
     const kassa = await pairedKassa(org);
     expect((await api('DELETE', devices(org, `/${kassa}`), { user: org.cashier })).status).toBe(403);
@@ -236,7 +236,7 @@ describe('devices', () => {
     expect(registry.has(kassa)).toBe(false);
   });
 
-  it('"Klantscherm openen": its own customer display, registered and linked at once — the same one every time', async () => {
+  it('"Klantscherm openen": its own customer display, registered and linked at once - the same one every time', async () => {
     const org = await seedOrg();
     const kassa = await pairedKassa(org);
     const res = await api('POST', devices(org, `/${kassa}/display`), { user: org.cashier });
@@ -325,7 +325,7 @@ describe('re-pairing a device', () => {
   const check = (org: TestOrg, terminalId: string, claim: string | null, user = org.cashier) =>
     api('GET', devices(org, `/${terminalId}${claim === null ? '' : `?claim=${encodeURIComponent(claim)}`}`), { user });
 
-  it('a code for that device: claimed, the browser is the same device — its identity, name and links stay', async () => {
+  it('a code for that device: claimed, the browser is the same device - its identity, name and links stay', async () => {
     const org = await seedOrg();
     const first = await newCode(org, 'pos', 'Kassa toog');
     const before = (await claim(org.cashier, first.code)).body;
@@ -346,7 +346,7 @@ describe('re-pairing a device', () => {
     expect([...registry.values()].find((d) => d.role === 'cfd')!.linked_to).toBe(before.terminalId);
   });
 
-  it('the device moves: the browser that was it before is told so when it checks itself — a device from before the re-pair too', async () => {
+  it('the device moves: the browser that was it before is told so when it checks itself - a device from before the re-pair too', async () => {
     const org = await seedOrg();
     const old = (await claim(org.cashier, (await newCode(org)).code)).body;
     expect((await check(org, old.terminalId, old.claimId)).status).toBe(200);
@@ -368,7 +368,7 @@ describe('re-pairing a device', () => {
     expect((await check(org, kassa, '')).status).toBe(200);
   });
 
-  it('admins only; a device of the org — not another org\'s, not a kassa\'s own second window; removed since: the code is no good', async () => {
+  it('admins only; a device of the org - not another org\'s, not a kassa\'s own second window; removed since: the code is no good', async () => {
     const org = await seedOrg();
     const other = await seedOrg();
     const kassa = await pairedKassa(org);

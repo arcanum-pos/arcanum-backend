@@ -88,7 +88,7 @@ describe('SMS when a station is ready', () => {
     expect((await apiWith({}, 'GET', `/organizations/${org.orgId}/events`, { user: org.cashier })).body.find((e: any) => e.id === v.event.id).sms).toBe(false);
   });
 
-  it('a number on the order page; one SMS per station as it turns ready — never twice; the number gone afterwards', async () => {
+  it('a number on the order page; one SMS per station as it turns ready - never twice; the number gone afterwards', async () => {
     stubTwilio();
     const env = withSms();
     const org = await seedOrg();
@@ -157,7 +157,7 @@ describe('SMS when a station is ready', () => {
     expect((await rows<any>('SELECT status, notify_phone FROM tabs WHERE id = ?', order.tabId))[0]).toEqual({ status: 'cancelled', notify_phone: null });
   });
 
-  it('the daily maximum: beyond it, no SMS — the page says it failed', async () => {
+  it('the daily maximum: beyond it, no SMS - the page says it failed', async () => {
     stubTwilio();
     const env = withSms({ dailyCap: 1 });
     const org = await seedOrg();

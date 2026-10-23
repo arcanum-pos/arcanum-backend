@@ -24,6 +24,8 @@ interface Line {
   name: string;
   quantity: number;
   unitPriceCents: number;
+  // The product's category (the display counts items per category).
+  category: string | null;
 }
 
 export interface CustomerViewOrder {
@@ -47,7 +49,7 @@ export function readOrder(value: unknown): CustomerViewOrder | null {
     const line = (l ?? {}) as Record<string, unknown>;
     const quantity = int(line.quantity, 1, 100_000);
     const unitPriceCents = int(line.unitPriceCents, -10_000_000, 10_000_000);
-    return quantity !== null && unitPriceCents !== null ? [{ name: text(line.name, 120), quantity, unitPriceCents }] : [];
+    return quantity !== null && unitPriceCents !== null ? [{ name: text(line.name, 120), quantity, unitPriceCents, category: text(line.category, 60) || null }] : [];
   });
   return {
     label: text(o.label, 80),

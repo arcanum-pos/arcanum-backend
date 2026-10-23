@@ -34,7 +34,7 @@ describe('MAIL_CONFIG', () => {
     expect(sent.body.provider).toEqual({ type: 'smtp', ...smtp });
   });
 
-  it('the mailer refusing, or a broken MAIL_CONFIG: the invite is still made — mailSent false', async () => {
+  it('the mailer refusing, or a broken MAIL_CONFIG: the invite is still made - mailSent false', async () => {
     const org = await seedOrg();
     const spy = vi.spyOn(env.ARCANUM_MAILER_SERVICE, 'fetch').mockResolvedValueOnce(Response.json({ ok: false, code: 'auth_failed' }, { status: 502 }));
     const refused = await invite(org, { MAIL_CONFIG: BREVO });
@@ -49,7 +49,7 @@ describe('MAIL_CONFIG', () => {
 });
 
 describe('the issuer', () => {
-  it('comes straight from DEFAULT_IDP_ISSUER_URL — no copied row, no client secret needed (demo orgs)', async () => {
+  it('comes straight from DEFAULT_IDP_ISSUER_URL - no copied row, no client secret needed (demo orgs)', async () => {
     const sub = `guest-${crypto.randomUUID()}`;
     const res = await apiWith(
       { ORG_CREATION: 'internal', DEFAULT_IDP_ISSUER_URL: 'https://login.test/' },
@@ -76,11 +76,11 @@ describe("the installer's test mail (POST /organizations/mail-test)", () => {
     expect(sent.provider).toMatchObject({ type: 'brevo' });
     expect(sent.message.to).toBe('boss@example.test');
     // …marked as a test, so nobody takes it for a real one.
-    expect(sent.message.subject).toMatch(/^Testmail — Uitnodiging voor /);
+    expect(sent.message.subject).toMatch(/^Testmail - Uitnodiging voor /);
     expect(sent.message.text).toMatch(/^Dit is een testmail van je Arcanum-installatie/);
     expect(sent.message.html).toContain('<em>Dit is een testmail');
     expect(sent.message.text).toContain('/login');
-    expect(sent.message.fromName).toBe(sent.message.subject.replace('Testmail — Uitnodiging voor ', ''));
+    expect(sent.message.fromName).toBe(sent.message.subject.replace('Testmail - Uitnodiging voor ', ''));
   });
 
   it('to another address when given (a checker like mail-tester.com); not to something that is no address', async () => {

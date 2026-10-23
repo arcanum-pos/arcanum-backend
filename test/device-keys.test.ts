@@ -95,7 +95,7 @@ describe('pairing with the code alone', () => {
     expect((await asDevice(null, 'POST', '/public/pair', { code: 'XXXX-XXXX' })).body.code).toBe('pairing_code_invalid');
   });
 
-  it("a kassa's code: needs someone signed in — and isn't used up by trying", async () => {
+  it("a kassa's code: needs someone signed in - and isn't used up by trying", async () => {
     const org = await seedOrg();
     const kassaCode = await code(org, { role: 'pos', name: 'Kassa 2' });
     expect((await asDevice(null, 'POST', '/public/pair', { code: kassaCode })).body).toMatchObject({ code: 'pairing_needs_login', role: 'pos' });
@@ -182,7 +182,7 @@ describe("a station screen's key: its own station, nothing else", () => {
 });
 
 describe("a station screen's key and the staff list (release B1)", () => {
-  it('reads the names, chooses a person (with their PIN), passes a ticket on — a customer display does none of it', async () => {
+  it('reads the names, chooses a person (with their PIN), passes a ticket on - a customer display does none of it', async () => {
     const org = await seedOrg();
     const v = await venue(org);
     const o = `/organizations/${org.orgId}`;
@@ -202,7 +202,7 @@ describe("a station screen's key and the staff list (release B1)", () => {
 describe('a pickup screen (ROADMAP.md §5): order numbers for guests, read-only', () => {
   const paidAll = (org: TestOrg) => env.DB.prepare("UPDATE tabs SET status = 'closed' WHERE org_id = ?").bind(org.orgId).run();
 
-  it("paired as one: its station's numbers by status — never the tickets, never moving one", async () => {
+  it("paired as one: its station's numbers by status - never the tickets, never moving one", async () => {
     const org = await seedOrg();
     const v = await venue(org);
     const pairing = await api('POST', `/organizations/${org.orgId}/device-pairings`, { user: org.admin, body: { role: 'station', name: 'Afhaal keuken', stationId: v.kitchen.id, view: 'pickup' } });
@@ -260,7 +260,7 @@ describe('a pickup screen (ROADMAP.md §5): order numbers for guests, read-only'
 });
 
 describe('an entrance screen (release D): the promised tables, nothing else', () => {
-  it("paired without a station; reads the promised tables — not a station's tickets", async () => {
+  it("paired without a station; reads the promised tables - not a station's tickets", async () => {
     const org = await seedOrg();
     const v = await venue(org);
     const pairing = await api('POST', `/organizations/${org.orgId}/device-pairings`, { user: org.admin, body: { role: 'station', name: 'Ingang', view: 'tables' } });
@@ -278,7 +278,7 @@ describe('an entrance screen (release D): the promised tables, nothing else', ()
 });
 
 describe("a customer display's key: its kassa's payments, nothing else", () => {
-  it("follows a payment of the kassa it's linked to — not another kassa's", async () => {
+  it("follows a payment of the kassa it's linked to - not another kassa's", async () => {
     const org = await seedOrg();
     const kassa = await api('POST', '/organizations/device-pairings/claim', { user: org.cashier, body: { code: await code(org, { role: 'pos', name: 'Kassa 1' }) } });
     const otherKassa = await api('POST', '/organizations/device-pairings/claim', { user: org.cashier, body: { code: await code(org, { role: 'pos', name: 'Kassa 2' }) } });

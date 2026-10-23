@@ -123,7 +123,7 @@ describe('a table, from seating to cleared', () => {
 });
 
 describe("a guest scanning the table's QR (T3)", () => {
-  it("orders on the table's tab while it's Bezet — when the mode lets guests order with the QR", async () => {
+  it("orders on the table's tab while it's Bezet - when the mode lets guests order with the QR", async () => {
     const org = await seedOrg();
     const wout = await waiter(org);
     const v = await venue(org, { qr: true });
