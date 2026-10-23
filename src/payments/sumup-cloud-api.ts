@@ -105,6 +105,14 @@ export async function createSumupReaderCheckout(params: {
   return { checkoutId: data.data.checkout_id, clientTransactionId: data.data.client_transaction_id };
 }
 
+// Stops what's on the reader's screen (the cashier cancelled at the kassa).
+// Best effort: already finished, SumUp refuses — the status says how it ended.
+export async function terminateSumupReaderCheckout(params: { merchantCode: string; apiKey: string; readerId: string }): Promise<boolean> {
+  return sumupFetch(`/v0.1/merchants/${encodeURIComponent(params.merchantCode)}/readers/${encodeURIComponent(params.readerId)}/terminate`, params.apiKey, { method: 'POST' })
+    .then(() => true)
+    .catch(() => false);
+}
+
 export interface SumupReaderCheckoutStatus {
   status: 'pending' | 'successful' | 'failed' | 'cancelled';
   paymentFailureReason: string | null;

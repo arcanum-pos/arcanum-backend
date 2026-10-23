@@ -25,7 +25,8 @@ import { getDecryptedPaymentCredential } from '../organizations/payment-credenti
 import { deviceCaller } from '../device-keys';
 import { callDeviceHub } from '../devicehub-client';
 import { extractCaller, refuseUnlessOrgMember, requireOrgRole } from '../organizations/auth';
-import { createSumupReaderCheckout, findSumupTransaction, SumupCloudApiError, listSumupReaders, pairSumupReader, removeSumupReader } from './sumup-cloud-api';
+import { createSumupReaderCheckout, findSumupTransaction, getSumupReaderCheckoutStatus, SumupCloudApiError, listSumupReaders, pairSumupReader, removeSumupReader, terminateSumupReaderCheckout } from './sumup-cloud-api';
+import { BANCONTACT_TERMINAL_STATUSES, cancelBancontactCharge, getBancontactPaymentStatus } from './bancontact';
 import { createCharge, getCharge, parseTipCents, setChargeProviderRef, resolveCharge, type ChargeRecord } from './charges';
 import { ensureChargePolling } from './charge-poller-client';
 import { customerOrder, isPendingTabChargeConflict, prepareTabCharge } from '../tabs';
@@ -79,9 +80,11 @@ export async function pairSumupReaderForOrg(request: Request, env: Env): Promise
   const account = await sumupAccountForAdmin(request, env, orgId);
   if (account instanceof Response) return account;
 
-  // As shown on the device; spaces and case don't matter to the person typing it.
-  const pairingCode = typeof body?.pairingCode === 'string' ? body.pairingCode.replace(/\s+/g, '').toUpperCase() : '';
-  if (!/^[A-Z0-9]{8,9}$/.test(pairingCode)) return errorJson('sumup_pairing_code_invalid', 400);
+  // As shown on the device (or a virtual reader's in SumUp's dashboard);
+  // spaces, dashes and case don't matter to the person typing it. Only a
+  // plain sanity check here — SumUp says whether it's a code (its reason is passed on).
+  const pairingCode = typeof body?.pairingCode === 'string' ? body.pairingCode.replace(/[\s-]+/g, '').toUpperCase() : '';
+  if (!/^[A-Z0-9]{4,16}$/.test(pairingCode)) return errorJson('sumup_pairing_code_invalid', 400);
   const name = (typeof body?.name === 'string' ? body.name.trim() : '').slice(0, 100) || 'Solo';
 
   try {
@@ -390,8 +393,52 @@ export async function confirmChargeFromPos(request: Request, env: Env): Promise<
     return json({ ok: true, chargeId: charge.id, status: current?.status ?? charge.status });
   }
 
+  // Cancelled while a Bancontact QR or a SumUp reader is waiting: stopped at
+  // the provider first, then its own word on how it ended — the customer
+  // may have just paid (then it stays paid). Never marked failed on our side
+  // alone while the provider could still take the payment.
+  // The provider couldn't be reached: it stays pending (the customer could
+  // still pay — that must never be lost) and the kassa says to try again;
+  // the poller ends it once it expires.
+  // Only one that reached the provider (a payment id there); one that never
+  // did can't be paid, so it's simply cancelled below.
+  if (body.success === false && charge.status === 'pending' && charge.providerRef && (charge.method === 'bancontact' || (charge.method === 'sumup' && (charge.providerData as { readerId?: string }).readerId))) {
+    let stopped = false;
+    try {
+      stopped = await cancelAtProvider(env, charge);
+    } catch (err) {
+      console.error(`Kon betaling ${charge.id} niet annuleren bij de provider`, err);
+    }
+    const now = await getCharge(env, charge.id);
+    if (now?.status === 'pending' && stopped) await resolveCharge(env, charge.id, { success: false, providerStatus: 'cancelled', errorMessage: 'Geannuleerd aan de kassa' });
+    const current = await getCharge(env, charge.id);
+    if (current?.status === 'pending') return errorJson('payment_cancel_unconfirmed', 409);
+    return json({ ok: true, chargeId: charge.id, status: current?.status ?? charge.status });
+  }
+
   await resolveCharge(env, body.chargeId, { success: body.success !== false });
   return json({ ok: true, chargeId: body.chargeId });
+}
+
+// Stops it at the provider, then takes the provider's own word on how it
+// ended (resolved here when it says). True when the provider took the cancel.
+async function cancelAtProvider(env: Env, charge: ChargeRecord): Promise<boolean> {
+  if (charge.method === 'bancontact' && charge.providerRef) {
+    const stopped = await cancelBancontactCharge(env, charge.orgId, charge.providerRef);
+    const result = await getBancontactPaymentStatus(env, charge.orgId, charge.providerRef).catch(() => null);
+    if (result && BANCONTACT_TERMINAL_STATUSES.has(result.status)) await resolveCharge(env, charge.id, { success: result.status === 'SUCCEEDED', providerStatus: result.status });
+    return stopped;
+  }
+  const readerId = (charge.providerData as { readerId?: string }).readerId;
+  if (charge.method !== 'sumup' || !charge.providerRef || !readerId) return false;
+  const credential = await getDecryptedPaymentCredential(env, charge.orgId, 'sumup');
+  const merchantCode = credential?.merchantId ? String(credential.merchantId) : '';
+  const apiKey = credential?.apiKey ? String(credential.apiKey) : '';
+  if (!merchantCode || !apiKey) return false;
+  const stopped = await terminateSumupReaderCheckout({ merchantCode, apiKey, readerId });
+  const result = await getSumupReaderCheckoutStatus({ merchantCode, apiKey, readerId, checkoutId: charge.providerRef }).catch(() => null);
+  if (result && result.status !== 'pending') await resolveCharge(env, charge.id, { success: result.status === 'successful', providerStatus: result.status, errorMessage: result.paymentFailureReason });
+  return stopped;
 }
 
 // The kassa and the customer display follow a charge here —

@@ -316,8 +316,18 @@ export interface BancontactStatus {
   failureReason?: string | null;
 }
 
-// Used only by ChargePoller's fallback sweep — the primary resolution path
-// is postBancontactCallback above.
+// Cancelled at the kassa: the payment cancelled at Bancontact (its QR stops
+// working) — best effort; the status afterwards says how it really ended.
+// True when Bancontact took the cancel (or the payment had already ended).
+export async function cancelBancontactCharge(env: Env, orgId: string, paymentId: string): Promise<boolean> {
+  const credential = await resolveCredential(env, orgId);
+  if (!credential) return false;
+  const res = await fetch(`${BASE_URLS[credential.environment]}/v3/payments/${encodeURIComponent(paymentId)}`, { method: 'DELETE', headers: bancontactHeaders(env, credential.apiKey) }).catch(() => null);
+  return !!res && (res.ok || res.status === 422);
+}
+
+// Used by ChargePoller's fallback sweep and a cancel at the kassa — the
+// primary resolution path is postBancontactCallback above.
 export async function getBancontactPaymentStatus(env: Env, orgId: string, paymentId: string): Promise<BancontactStatus | null> {
   const credential = await resolveCredential(env, orgId);
   if (!credential) return null;

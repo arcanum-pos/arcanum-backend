@@ -7,8 +7,8 @@ import { api, confirmCharge, createTab, DEVICE, getTab, line, payCash, recordedC
 
 const BANCONTACT_HOST = 'merchant.api.preprod.bancontact.net';
 
-let bancontactRequests: { url: string; body: any }[] = [];
-let bancontactReply: () => Response;
+let bancontactRequests: { url: string; method: string; body: any }[] = [];
+let bancontactReply: (request: Request) => Response;
 // Whose account Bancontact's answers name.
 let creditorId = 'm-1';
 
@@ -35,8 +35,8 @@ beforeEach(() => {
     const request = new Request(input, init);
     const url = new URL(request.url);
     if (url.hostname === BANCONTACT_HOST) {
-      bancontactRequests.push({ url: request.url, body: await request.clone().json().catch(() => null) });
-      return bancontactReply();
+      bancontactRequests.push({ url: request.url, method: request.method, body: await request.clone().json().catch(() => null) });
+      return bancontactReply(request);
     }
     if (url.hostname.endsWith('.test') || url.hostname === 'localhost') return realFetch(input, init);
     throw new Error(`Unexpected outbound fetch in test: ${request.url}`);
@@ -205,5 +205,50 @@ describe('which account a Bancontact key pays out to', () => {
     expect(res.body.code).toBe('bancontact_wrong_account');
     expect(bancontactRequests.map((r) => [r.url.endsWith('/v3/payments') ? 'create' : 'cancel'])).toEqual([['create'], ['cancel']]);
     expect(await rows('SELECT id FROM charges WHERE tab_id = ?', tab.id)).toEqual([]);
+  });
+});
+
+describe('cancelled at the kassa (Bancontact)', () => {
+  // After the payment's creation: a DELETE (cancel) and a GET (its status) answered as `ended`.
+  function endsAs(ended: string) {
+    const created = bancontactReply;
+    bancontactReply = (request) =>
+      request.method === 'DELETE' ? new Response(null, { status: 204 }) : request.method === 'GET' ? Response.json({ paymentId: 'bc-payment-1', status: ended }) : created(request);
+  }
+
+  it('cancels it at Bancontact (its QR stops), then the tab is free again', async () => {
+    const org = await orgWithBancontact();
+    const tab = await openTab(org);
+    const res = await payBancontact(org, tab.id, 1150);
+    endsAs('CANCELLED');
+    const cancelled = await confirmCharge(org, res.body.chargeId, false);
+    expect(cancelled.body).toMatchObject({ ok: true, status: 'failed' });
+    expect(bancontactRequests.map((r) => `${r.method} ${new URL(r.url).pathname}`)).toEqual(['POST /v3/payments', 'DELETE /v3/payments/bc-payment-1', 'GET /v3/payments/bc-payment-1']);
+    expect((await getTab(org, tab.id)).paymentPending).toBe(false);
+    expect((await getTab(org, tab.id)).status).toBe('open');
+  });
+
+  it('just paid after all: it stays paid — never failed on our side while Bancontact took it', async () => {
+    const org = await orgWithBancontact();
+    const tab = await openTab(org);
+    const res = await payBancontact(org, tab.id, 1150);
+    endsAs('SUCCEEDED');
+    expect((await confirmCharge(org, res.body.chargeId, false)).body).toMatchObject({ ok: true, status: 'succeeded' });
+    expect((await getTab(org, tab.id)).status).toBe('closed');
+  });
+
+  it("Bancontact can't be reached: it stays pending (the customer could still pay) and the kassa is told to try again", async () => {
+    const org = await orgWithBancontact();
+    const tab = await openTab(org);
+    const res = await payBancontact(org, tab.id, 1150);
+    const created = bancontactReply;
+    bancontactReply = (request) => (request.method === 'POST' ? created(request) : new Response('down', { status: 503 }));
+    const refused = await confirmCharge(org, res.body.chargeId, false);
+    expect(refused.status).toBe(409);
+    expect(refused.body.code).toBe('payment_cancel_unconfirmed');
+    expect((await getTab(org, tab.id)).paymentPending).toBe(true);
+    // Reachable again: the next try cancels it.
+    endsAs('CANCELLED');
+    expect((await confirmCharge(org, res.body.chargeId, false)).body).toMatchObject({ status: 'failed' });
   });
 });

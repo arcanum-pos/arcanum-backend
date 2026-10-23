@@ -2,10 +2,10 @@
 // of the org only, with the org's own SumUp account, SumUp stubbed (vi.spyOn
 // on the global fetch — nothing reaches the network).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { api, seedOrg, type TestOrg } from './helpers';
+import { api, confirmCharge, createTab, DEVICE, getTab, line, seedOrg, type TestOrg } from './helpers';
 
 let sumupRequests: { method: string; url: string; auth: string | null; body: any }[] = [];
-let sumupReply: (method: string) => Response;
+let sumupReply: (method: string, path: string) => Response;
 let accountReply: { readers: () => Response; profile: () => Response };
 
 beforeEach(() => {
@@ -27,7 +27,7 @@ beforeEach(() => {
       // The account check when saving (checkSumupAccount): the readers, the merchant's profile.
       if (request.method === 'GET' && url.pathname.endsWith('/readers')) return accountReply.readers();
       if (request.method === 'GET' && url.pathname.startsWith('/v1/merchants/')) return accountReply.profile();
-      return sumupReply(request.method);
+      return sumupReply(request.method, url.pathname);
     }
     if (url.hostname.endsWith('.test') || url.hostname === 'localhost') return realFetch(input, init);
     throw new Error(`Unexpected outbound fetch in test: ${request.url}`);
@@ -61,6 +61,12 @@ describe('pairing a SumUp reader', () => {
     ]);
   });
 
+  it("a virtual reader's code from SumUp's dashboard: dashes and other lengths are fine — SumUp decides", async () => {
+    const org = await orgWithSumup();
+    expect((await pair(org, org.admin, { pairingCode: 'ab12-cd34-ef', name: 'Virtueel' })).status).toBe(201);
+    expect(sumupRequests[0].body).toEqual({ pairing_code: 'AB12CD34EF', name: 'Virtueel' });
+  });
+
   it('a name is optional', async () => {
     const org = await orgWithSumup();
     expect((await pair(org, org.admin, { pairingCode: 'AB12CD345' })).status).toBe(201);
@@ -69,7 +75,7 @@ describe('pairing a SumUp reader', () => {
 
   it("refuses a code that can't be one, without asking SumUp", async () => {
     const org = await orgWithSumup();
-    for (const pairingCode of ['', 'ABC', 'AB12CD34567', 'AB12-CD34', 42]) {
+    for (const pairingCode of ['', 'ABC', 'AB12CD34567890XYZ', 'AB12/CD34', 42]) {
       const res = await pair(org, org.admin, { pairingCode });
       expect(res.status, String(pairingCode)).toBe(400);
       expect(res.body.code).toBe('sumup_pairing_code_invalid');
@@ -159,3 +165,40 @@ describe('which SumUp account a merchant code and key are', () => {
     expect((await api('PUT', `/organizations/${org.orgId}/payment-credentials/sumup`, { user: org.admin, body: { merchantId: 'MREAL', apiKey: 'k' } })).body).toMatchObject({ account: { sandbox: false } });
   });
 });
+
+describe('a payment on a reader, cancelled at the kassa', () => {
+  // The reader checkout, its terminate and its status (as `ended`).
+  function readerAnswers(ended: string) {
+    sumupReply = (_method, path) =>
+      path.endsWith('/checkout') ? Response.json({ data: { checkout_id: 'co_1', client_transaction_id: 'tx_1' } }, { status: 201 })
+      : path.endsWith('/checkout/co_1') ? Response.json({ data: { status: ended, payment_failure_reason: null } })
+      : new Response(null, { status: 204 })
+  }
+  async function onReader(org: TestOrg) {
+    const tab = await createTab(org, { label: 'Tafel 2', lines: [line('pils', 'Pils', 250, 2)] })
+    const res = await api('POST', '/sumup/charge', { user: org.cashier, body: { orgId: org.orgId, tabId: tab.id, amount: 500, readerId: 'rdr_1', ...DEVICE } })
+    expect(res.status).toBe(201)
+    return { tab, chargeId: res.body.chargeId as string }
+  }
+
+  it('stops it on the reader, then the tab is free again', async () => {
+    const org = await orgWithSumup()
+    readerAnswers('cancelled')
+    const { tab, chargeId } = await onReader(org)
+    expect((await confirmCharge(org, chargeId, false)).body).toMatchObject({ ok: true, status: 'failed' })
+    expect(sumupRequests.map((r) => `${r.method} ${new URL(r.url).pathname}`)).toEqual([
+      'POST /v0.1/merchants/MSANDBOX1/readers/rdr_1/checkout',
+      'POST /v0.1/merchants/MSANDBOX1/readers/rdr_1/terminate',
+      'GET /v0.1/merchants/MSANDBOX1/readers/rdr_1/checkout/co_1',
+    ])
+    expect((await getTab(org, tab.id)).paymentPending).toBe(false)
+  })
+
+  it('the card was just tapped: it stays paid', async () => {
+    const org = await orgWithSumup()
+    readerAnswers('successful')
+    const { tab, chargeId } = await onReader(org)
+    expect((await confirmCharge(org, chargeId, false)).body).toMatchObject({ status: 'succeeded' })
+    expect((await getTab(org, tab.id)).status).toBe('closed')
+  })
+})
