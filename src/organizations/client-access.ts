@@ -2,8 +2,8 @@
 // provider with restricted clients (arcanum-auth, login.kaboutersoft.be):
 // only people assigned to the installation's client get in. This
 // installation assigns whoever it invites (or imports) — an admin of any of
-// its organisations as an admin of the client, who then decides on access
-// requests too — and unassigns an address once it has no membership here
+// its organisations, or on its own admin list (INSTANCE_ADMIN_EMAILS), as an
+// admin of the client, who then decides on access requests too — and unassigns an address once it has no membership here
 // any more. Only when the provider
 // advertises it (`client_users_endpoint` in its discovery document) and the
 // installer gave this Worker the client's id and secret; any other provider
@@ -16,6 +16,7 @@
 // before this existed get assigned.
 import type { Env } from '../env';
 import { resolveInstanceIssuerUrl } from './idp-resolution';
+import { instanceAdminAddresses } from './instance-admins';
 
 const DISCOVERY_TTL_MS = 60 * 60 * 1000;
 const SYNC_EVERY_MS = 6 * 60 * 60 * 1000;
@@ -93,7 +94,9 @@ export async function syncAddresses(env: Env, emails: string[]): Promise<void> {
     )
       .bind(JSON.stringify(list))
       .all<{ email: string; admin: number | null; present: number }>();
-    const rows = results || [];
+    // The installation's own admins (the installer's list) are admins, with or without a membership.
+    const admins = new Set(instanceAdminAddresses(env));
+    const rows = (results || []).map((r) => (admins.has(r.email) ? { ...r, admin: 1, present: 1 } : r));
     await assignAll(target, rows.filter((r) => r.present).map((r) => ({ email: r.email, role: r.admin ? 'admin' : 'member' })));
     const gone = rows.filter((r) => !r.present).map((r) => r.email);
     if (gone.length > MAX_UNASSIGN) console.error(`client access: ${gone.length} addresses to unassign, only the first ${MAX_UNASSIGN} now`);
@@ -113,7 +116,9 @@ export async function syncAllMembers(env: Env, now = Date.now()): Promise<void> 
       email: string;
       admin: number;
     }>();
-    await assignAll(target, (results || []).filter((r) => r.email).map((r) => ({ email: r.email, role: r.admin ? 'admin' : 'member' })));
+    const users = new Map((results || []).filter((r) => r.email).map((r) => [r.email, r.admin ? 'admin' : 'member'] as const));
+    for (const email of instanceAdminAddresses(env)) users.set(email, 'admin');
+    await assignAll(target, [...users].map(([email, role]) => ({ email, role })));
   });
 }
 

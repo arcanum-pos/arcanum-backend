@@ -93,6 +93,21 @@ describe('client access at the login provider', () => {
     expect(told()).toEqual({ [creator.email]: 'admin' });
   });
 
+  it("the installation's own admins (exact addresses on its list) are client admins, never unassigned", async () => {
+    const env = { ...CLIENT, INSTANCE_ADMIN_EMAILS: 'Owner@Frigg.test, *@test' };
+    const org = await seedOrg();
+    await apiWith(env, 'GET', '/organizations', { user: org.admin });
+    expect(told()).toMatchObject({ 'owner@frigg.test': 'admin', [org.cashier.email.toLowerCase()]: 'member' });
+    expect(Object.keys(told())).not.toContain('*@test');
+    // Invited as a cashier and removed again: still an admin.
+    calls = [];
+    const invited = await apiWith(env, 'POST', `/organizations/${org.orgId}/members`, { user: org.admin, body: { email: 'owner@frigg.test', role: 'cashier' } });
+    expect(told()).toEqual({ 'owner@frigg.test': 'admin' });
+    calls = [];
+    await apiWith(env, 'DELETE', `/organizations/${org.orgId}/members/${invited.body.id}`, { user: org.admin });
+    expect(told()).toEqual({ 'owner@frigg.test': 'admin' });
+  });
+
   it('nothing is told without the client credentials or when the provider does not advertise it; a failure never fails the invite', async () => {
     const org = await seedOrg();
     expect((await invite(org, `a-${crypto.randomUUID()}@test`, {})).status).toBe(201);

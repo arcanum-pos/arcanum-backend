@@ -33,3 +33,13 @@ export function isInstanceAdmin(env: Env, email: string, emailVerified: boolean 
   if (emailVerified === false || !(env.INSTANCE_ADMIN_EMAILS || '').trim()) return false;
   return mayCreateOrganizations(env, email);
 }
+
+// The exact addresses on INSTANCE_ADMIN_EMAILS (not `*@domain` entries,
+// which name nobody in particular): this installation's own admins, also
+// admins of its client at the login provider (client-access.ts).
+export function instanceAdminAddresses(env: Env): string[] {
+  return (env.INSTANCE_ADMIN_EMAILS || '')
+    .split(',')
+    .map((e) => e.trim().toLowerCase())
+    .filter((e) => e.includes('@') && !e.startsWith('*@'));
+}
