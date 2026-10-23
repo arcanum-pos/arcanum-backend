@@ -57,3 +57,29 @@ describe('event on a tab', () => {
     await confirmCharge(org, charge.body.chargeId);
   });
 });
+
+describe('deleting an event', () => {
+  it('only while nothing was sold for it: its ordering modes go with it; an admin only', async () => {
+    const org = await seedOrg();
+    const event = await createEvent(org, 'Testevenement');
+    await api('POST', `/organizations/${org.orgId}/events/${event.id}/modes`, { user: org.admin, body: { name: 'Ter plaatse' } });
+    expect((await api('DELETE', `/organizations/${org.orgId}/events/${event.id}`, { user: org.cashier })).status).toBe(403);
+    expect((await api('DELETE', `/organizations/${org.orgId}/events/${event.id}`, { user: org.admin })).body).toEqual({ ok: true });
+    expect(await rows('SELECT 1 FROM events WHERE id = ?', event.id)).toEqual([]);
+    expect(await rows('SELECT 1 FROM event_order_modes WHERE event_id = ?', event.id)).toEqual([]);
+    expect((await api('DELETE', `/organizations/${org.orgId}/events/${event.id}`, { user: org.admin })).status).toBe(404);
+  });
+
+  it('one with a tab (even unpaid) or a sale stays: sales are never rewritten', async () => {
+    const org = await seedOrg();
+    const used = await createEvent(org, 'Fuif');
+    await createTab(org, { label: 'Toog', eventId: used.id, lines: [line('bon', 'Bonnen', 100, 1)] });
+    const res = await api('DELETE', `/organizations/${org.orgId}/events/${used.id}`, { user: org.admin });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('event_in_use');
+    expect(await rows('SELECT 1 FROM events WHERE id = ?', used.id)).toHaveLength(1);
+    // Another org's event: not found here.
+    const other = await seedOrg();
+    expect((await api('DELETE', `/organizations/${other.orgId}/events/${used.id}`, { user: other.admin })).status).toBe(404);
+  });
+});

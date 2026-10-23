@@ -3,7 +3,7 @@ import { createOrganization, listMyOrganizations, listMyMemberships, getOrganiza
 import { listMembers, inviteMember, updateMemberRole, removeMember } from './members';
 import { listPaymentCredentials, setPaymentCredential, setSumupTapToPay } from './payment-credentials';
 import { testInstallationMail } from './mail';
-import { listEvents, createEvent, createOrderMode, deleteOrderMode, newEventSelfOrderCode, resetEventNumbers, updateEvent, updateOrderMode } from './events';
+import { listEvents, createEvent, createOrderMode, deleteEvent, deleteOrderMode, newEventSelfOrderCode, resetEventNumbers, updateEvent, updateOrderMode } from './events';
 import { getOrgLocale, setOrgLocale } from './locale';
 import { getCapabilities } from './org-creation';
 import { dispatchDeviceRoute } from '../devices';
@@ -101,6 +101,7 @@ export async function dispatchOrganizationsRoute(request: Request, env: Env, pat
   if (eventMatch) {
     const [, orgId, eventId, action] = eventMatch;
     if (!action && request.method === 'PATCH') return updateEvent(request, env, orgId, eventId);
+    if (!action && request.method === 'DELETE') return deleteEvent(request, env, orgId, eventId);
     if (action === 'self-order-code' && request.method === 'POST') return newEventSelfOrderCode(request, env, orgId, eventId);
     if (action === 'reset-numbers' && request.method === 'POST') return resetEventNumbers(request, env, orgId, eventId);
   }

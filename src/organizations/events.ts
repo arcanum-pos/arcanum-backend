@@ -18,6 +18,8 @@
 //                                                                       payAtCounter?, payBancontact?, tabs?, tabContact?, notifySms?, atTable? }
 //   PATCH  /organizations/:org/events/:id/modes/:mode          admin  { the same, all optional, move?: 'up' | 'down' }
 //   DELETE /organizations/:org/events/:id/modes/:mode          admin
+//   DELETE /organizations/:org/events/:id                      admin  only while nothing was sold for it: no tab, no
+//                                                                       transaction (409 event_in_use) — its ordering modes go with it
 //   POST   /organizations/:org/events/:id/self-order-code      admin  a new code (the old URL/QR stops working)
 //   POST   /organizations/:org/events/:id/reset-numbers        admin  the next order is #1 again
 //
@@ -231,6 +233,24 @@ export async function updateEvent(request: Request, env: Env, orgId: string, eve
   // Another name in the readable link (a fresh suffix: the old readable link stops working).
   if (typeof body.linkName === 'string') await setSlug(env, eventId, linkNameOf(body.linkName));
   return eventResponse(env, orgId, eventId);
+}
+
+// An event made by mistake, or a test one: gone with its ordering modes —
+// only while nothing was sold for it (sales are never rewritten; a kassa
+// that still has it chosen hears unknown_event and lets it go).
+export async function deleteEvent(request: Request, env: Env, orgId: string, eventId: string): Promise<Response> {
+  const refused = await admin(request, env, orgId);
+  if (refused) return refused;
+  if (!(await loadEvent(env, orgId, eventId))) return errorJson('event_not_found', 404);
+  const used = await env.DB.prepare('SELECT EXISTS (SELECT 1 FROM tabs WHERE event_id = ?) OR EXISTS (SELECT 1 FROM transactions WHERE event_id = ?) AS used')
+    .bind(eventId, eventId)
+    .first<{ used: number }>();
+  if (used?.used) return errorJson('event_in_use', 409);
+  await env.DB.batch([
+    env.DB.prepare('DELETE FROM event_order_modes WHERE event_id = ?').bind(eventId),
+    env.DB.prepare('DELETE FROM events WHERE id = ? AND org_id = ?').bind(eventId, orgId),
+  ]);
+  return json({ ok: true });
 }
 
 // Self-ordering switched on without a mode guests can order with: one made
