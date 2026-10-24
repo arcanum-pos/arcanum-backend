@@ -295,6 +295,27 @@ describe('catalogs', () => {
     expect(results[0].n).toBe(0);
   });
 
+  it("a group's colour on the kassa: one of the palette or automatic (null), kept on rename and duplicate, sent to the kassa", async () => {
+    const org = await seedOrg();
+    const s = await sampleCatalog(org);
+    const path = catalogs(org.orgId, `/${s.catalog.id}/sections/${s.s1.id}`);
+    expect((await getCatalog(org, s.catalog.id)).sections[0].color).toBeNull();
+    await ok(api('PATCH', path, { user: org.admin, body: { color: '#15803d' } }));
+    // Anything outside the palette is refused (white text must stay readable).
+    expect((await api('PATCH', path, { user: org.admin, body: { color: '#ffff00' } })).status).toBe(400);
+    expect((await api('PATCH', path, { user: org.cashier, body: { color: '#2563eb' } })).status).toBe(403);
+    // A rename leaves the colour alone.
+    await ok(api('PATCH', path, { user: org.admin, body: { name: 'Dranken' } }));
+    const c = await getCatalog(org, s.catalog.id)
+    expect([c.sections[0].name, c.sections[0].color]).toEqual(['Dranken', '#15803d']);
+    const k = await ok(api('GET', catalogs(org.orgId, `/${s.catalog.id}/kassa`), { user: org.cashier }));
+    expect(k.sections.map((x: any) => x.color)).toEqual(['#15803d', null]);
+    const copy = await ok(api('POST', catalogs(org.orgId, `/${s.catalog.id}/duplicate`), { user: org.admin, body: { name: 'Kopie' } }), 201);
+    expect((await getCatalog(org, copy.id)).sections[0].color).toBe('#15803d');
+    await ok(api('PATCH', path, { user: org.admin, body: { color: null } }));
+    expect((await getCatalog(org, s.catalog.id)).sections[0].color).toBeNull();
+  });
+
   it('duplicates a catalog into an independent copy', async () => {
     const org = await seedOrg();
     const s = await sampleCatalog(org);

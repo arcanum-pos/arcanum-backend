@@ -521,7 +521,9 @@ CREATE TABLE IF NOT EXISTS catalog_sections (
   org_id TEXT NOT NULL REFERENCES organizations(id),
   catalog_id TEXT NOT NULL REFERENCES catalogs(id),
   name TEXT NOT NULL,
-  position INTEGER NOT NULL DEFAULT 0
+  position INTEGER NOT NULL DEFAULT 0,
+  -- The kassa's colour for it, one of its palette (migration 0046); NULL: automatic.
+  color TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_catalog_sections_catalog ON catalog_sections(catalog_id);
@@ -863,3 +865,4 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0042_org_icons.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0043_customer_views.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0044_branding.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0045_event_end_date.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0046_section_color.sql');

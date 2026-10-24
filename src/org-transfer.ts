@@ -92,7 +92,7 @@ export const EXPORT_TABLES: TableSpec[] = [
     orderBy: 'created_at, rowid',
   },
   { table: 'catalogs', columns: ['id', 'name', 'is_default', 'archived_at', 'created_at', 'updated_at'], excluded: ORG, remap: ['id'], orderBy: 'created_at, rowid' },
-  { table: 'catalog_sections', columns: ['id', 'catalog_id', 'name', 'position'], excluded: ORG, remap: ['id', 'catalog_id'], orderBy: 'rowid' },
+  { table: 'catalog_sections', columns: ['id', 'catalog_id', 'name', 'position', 'color'], excluded: ORG, remap: ['id', 'catalog_id'], orderBy: 'rowid' },
   {
     table: 'catalog_entries',
     columns: ['id', 'catalog_id', 'section_id', 'variant_id', 'price_cents', 'visible', 'position', 'quick_quantities'],

@@ -59,7 +59,13 @@ interface SectionRow {
   id: string;
   name: string;
   position: number;
+  color: string | null;
 }
+
+// The colours a group can have on the kassa (migration 0046): the kassa's
+// own palette (arcanum-frontends kassa/prefs.ts), each dark enough for white
+// text on it. Anything else is refused, so the kassa always stays readable.
+export const SECTION_COLORS = ['#2563eb', '#c2410c', '#be185d', '#15803d', '#7c3aed', '#0f766e', '#b45309', '#4f46e5'];
 
 interface EntryRow {
   id: string;
@@ -576,7 +582,7 @@ async function loadCatalogDetail(env: Env, orgId: string, catalogId: string) {
   const row = await loadCatalogRow(env, orgId, catalogId);
   if (!row) return null;
   const [sections, entries] = await env.DB.batch([
-    env.DB.prepare('SELECT id, name, position FROM catalog_sections WHERE catalog_id = ? ORDER BY position, rowid').bind(catalogId),
+    env.DB.prepare('SELECT id, name, position, color FROM catalog_sections WHERE catalog_id = ? ORDER BY position, rowid').bind(catalogId),
     env.DB.prepare(`${ENTRY_SELECT} WHERE e.catalog_id = ? ORDER BY e.position, e.rowid`).bind(catalogId),
   ]);
   const entryRows = (entries.results || []) as EntryRow[];
@@ -586,6 +592,7 @@ async function loadCatalogDetail(env: Env, orgId: string, catalogId: string) {
       id: s.id,
       name: s.name,
       position: s.position,
+      color: s.color,
       entries: entryRows.filter((e) => e.section_id === s.id).map(toEntry),
     })),
   };
@@ -668,7 +675,7 @@ async function duplicateCatalog(request: Request, env: Env, orgId: string, catal
   if (!name.ok) return json({ error: name.error }, 400);
 
   const [sections, entries] = await env.DB.batch([
-    env.DB.prepare('SELECT id, name, position FROM catalog_sections WHERE catalog_id = ?').bind(catalogId),
+    env.DB.prepare('SELECT id, name, position, color FROM catalog_sections WHERE catalog_id = ?').bind(catalogId),
     env.DB.prepare('SELECT id, section_id, variant_id, price_cents, visible, position, quick_quantities FROM catalog_entries WHERE catalog_id = ?').bind(catalogId),
   ]);
 
@@ -678,7 +685,7 @@ async function duplicateCatalog(request: Request, env: Env, orgId: string, catal
   const sectionRows = ((sections.results || []) as SectionRow[]).map((s) => {
     const newId = crypto.randomUUID();
     sectionIds.set(s.id, newId);
-    return { id: newId, org_id: orgId, catalog_id: id, name: s.name, position: s.position };
+    return { id: newId, org_id: orgId, catalog_id: id, name: s.name, position: s.position, color: s.color };
   });
   const entryRows = ((entries.results || []) as EntryRow[]).map((e) => ({
     id: crypto.randomUUID(),
@@ -695,7 +702,7 @@ async function duplicateCatalog(request: Request, env: Env, orgId: string, catal
   await env.DB.batch(
     present([
       env.DB.prepare('INSERT INTO catalogs (id, org_id, name, is_default, created_at, updated_at) VALUES (?, ?, ?, 0, ?, ?)').bind(id, orgId, name.value, t, t),
-      jsonRowsStatement(env.DB, 'catalog_sections', ['id', 'org_id', 'catalog_id', 'name', 'position'], sectionRows),
+      jsonRowsStatement(env.DB, 'catalog_sections', ['id', 'org_id', 'catalog_id', 'name', 'position', 'color'], sectionRows),
       jsonRowsStatement(
         env.DB,
         'catalog_entries',
@@ -774,15 +781,29 @@ async function createSection(request: Request, env: Env, orgId: string, catalogI
     ).bind(id, orgId, catalogId, name.value, catalogId),
     touch(env, catalogId),
   ]);
-  const row = await env.DB.prepare('SELECT id, name, position FROM catalog_sections WHERE id = ?').bind(id).first<SectionRow>();
+  const row = await env.DB.prepare('SELECT id, name, position, color FROM catalog_sections WHERE id = ?').bind(id).first<SectionRow>();
   return json({ ...row!, entries: [] }, 201);
 }
 
+// PATCH { name?, color? }: its name, its colour on the kassa (one of
+// SECTION_COLORS, or null for automatic), or both.
 async function renameSection(request: Request, env: Env, orgId: string, catalogId: string, sectionId: string) {
-  const name = parseName((await readBody(request)).name, 60);
-  if (!name.ok) return json({ error: name.error }, 400);
+  const body = await readBody(request);
+  const sets: string[] = [];
+  const values: unknown[] = [];
+  if (body.name !== undefined || body.color === undefined) {
+    const name = parseName(body.name, 60);
+    if (!name.ok) return json({ error: name.error }, 400);
+    sets.push('name = ?');
+    values.push(name.value);
+  }
+  if (body.color !== undefined) {
+    if (body.color !== null && !SECTION_COLORS.includes(body.color as string)) return json({ error: `color must be null or one of ${SECTION_COLORS.join(', ')}` }, 400);
+    sets.push('color = ?');
+    values.push(body.color);
+  }
   const [result] = await env.DB.batch([
-    env.DB.prepare('UPDATE catalog_sections SET name = ? WHERE id = ? AND catalog_id = ? AND org_id = ?').bind(name.value, sectionId, catalogId, orgId),
+    env.DB.prepare(`UPDATE catalog_sections SET ${sets.join(', ')} WHERE id = ? AND catalog_id = ? AND org_id = ?`).bind(...values, sectionId, catalogId, orgId),
     touch(env, catalogId),
   ]);
   if ((result.meta.changes || 0) === 0) return errorJson('section_not_found', 404);
@@ -913,7 +934,7 @@ export async function sellableCatalog(env: Env, orgId: string, catalogIdOrDefaul
   if (!row || row.archived_at) return null;
 
   const [sections, entries] = await env.DB.batch([
-    env.DB.prepare('SELECT id, name, position FROM catalog_sections WHERE catalog_id = ? ORDER BY position, rowid').bind(row.id),
+    env.DB.prepare('SELECT id, name, position, color FROM catalog_sections WHERE catalog_id = ? ORDER BY position, rowid').bind(row.id),
     env.DB.prepare(
       `${ENTRY_SELECT} WHERE e.catalog_id = ? AND e.visible = 1 AND v.archived_at IS NULL AND p.archived_at IS NULL ORDER BY e.position, e.rowid`
     ).bind(row.id),
@@ -928,6 +949,7 @@ export async function sellableCatalog(env: Env, orgId: string, catalogIdOrDefaul
       .map((s) => ({
         id: s.id,
         name: s.name,
+        color: s.color,
         entries: entryRows
           .filter((e) => e.section_id === s.id)
           .map((e) => ({
