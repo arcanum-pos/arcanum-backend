@@ -40,6 +40,11 @@ export const ERROR_TEXTS = {
   station_not_found: 'Station niet gevonden',
   station_in_use: 'Dit station wordt nog gebruikt door producten',
   station_name_taken: 'Er bestaat al een station met die naam',
+  // --- Printers (printing.ts) ---
+  printer_not_found: 'Printer niet gevonden',
+  printer_invalid: 'Controleer de gegevens van de printer ({field})',
+  print_job_not_found: 'Afdruk niet gevonden',
+  print_job_taken: 'Deze afdruk wordt al door een ander scherm geprint',
   unknown_station: 'Onbekend station',
   product_not_found: 'Product niet gevonden',
   unknown_product: 'Onbekend of gearchiveerd product',

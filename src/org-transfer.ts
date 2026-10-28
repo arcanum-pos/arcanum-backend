@@ -76,7 +76,13 @@ export const EXPORT_TABLES: TableSpec[] = [
     orderBy: 'created_at, rowid',
   },
   { table: 'categories', columns: ['id', 'name', 'position', 'created_at'], excluded: ORG, remap: ['id'], orderBy: 'position, rowid' },
-  { table: 'prep_stations', columns: ['id', 'name', 'position', 'created_at'], excluded: ORG, remap: ['id'], orderBy: 'position, rowid' },
+  {
+    table: 'prep_stations',
+    columns: ['id', 'name', 'position', 'created_at'],
+    excluded: { ...ORG, printer_id: "a printer belongs to the place (its network) - not exported, chosen again" },
+    remap: ['id'],
+    orderBy: 'position, rowid',
+  },
   {
     table: 'products',
     columns: ['id', 'category_id', 'prep_station_id', 'name', 'vat_rate_bp', 'archived_at', 'created_at'],

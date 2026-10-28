@@ -31,6 +31,7 @@ import { displayName } from './catalog';
 import { jsonRowsStatement } from './sql-json';
 import { notifyTabChanged } from './devicehub-client';
 import { cancelExpiredSelfOrders, MODE_LABEL_SQL, ticketInsertStatement } from './prep-tickets';
+import { queueTicketPrints } from './printing';
 
 type TabStatus = 'open' | 'closed' | 'cancelled';
 
@@ -689,6 +690,8 @@ export async function openTab(
 
   await env.DB.batch(statements);
   notifyTabChanged(env, orgId, tabId);
+  // Its tickets' print jobs (printing.ts): a few cheap queries, never an error.
+  if (o.lines.length > 0) await queueTicketPrints(env, orgId, tabId);
   return tabId;
 }
 
@@ -752,6 +755,7 @@ export async function addOrderToTab(
   ]);
   if ((orderResult.meta.changes || 0) === 0) return false;
   notifyTabChanged(env, orgId, tabId);
+  await queueTicketPrints(env, orgId, tabId);
   return true;
 }
 
@@ -1104,4 +1108,6 @@ export async function settleTab(env: Env, tabId: string, splitPart = false): Pro
        WHERE id = ? AND ${closable}`
     ).bind(new Date().toISOString(), tabId),
   ]);
+  // A self-order paid first: its tickets print now (queueTicketPrints skips the rest).
+  await queueTicketPrints(env, tab.org_id, tabId);
 }

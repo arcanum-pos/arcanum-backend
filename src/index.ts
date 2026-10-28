@@ -36,6 +36,7 @@ import { dispatchReportsRoute } from './reports';
 import { dispatchOrgTransferRoute } from './org-transfer';
 import { dispatchDemoOrgsRoute } from './demo-orgs';
 import { dispatchSelfOrderRoute } from './self-order';
+import { dispatchPrintingRoute } from './printing';
 import { dispatchPrepTicketsRoute } from './prep-tickets';
 import { dispatchStaffRoute } from './staff';
 import { dispatchPublicDeviceRoute } from './devices';
@@ -157,6 +158,9 @@ export default {
         // membership check) but aren't admin-portal code — own module.
         const tabsResponse = await dispatchTabsRoute(request, env, url.pathname);
         if (tabsResponse) return tabsResponse;
+        // Before the prep tickets: stations/:id/printer is ours.
+        const printingResponse = await dispatchPrintingRoute(request, env, url.pathname);
+        if (printingResponse) return printingResponse;
         const ticketsResponse = await dispatchPrepTicketsRoute(request, env, url.pathname);
         if (ticketsResponse) return ticketsResponse;
         const staffResponse = await dispatchStaffRoute(request, env, url.pathname);
