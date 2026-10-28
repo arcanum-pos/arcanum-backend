@@ -71,7 +71,7 @@ describe('printers', () => {
     expect(await rows('SELECT printer_id FROM prep_stations WHERE id = ?', v.bar.id)).toEqual([{ printer_id: null }]);
   });
 
-  it('refuses what a printer can not be (Star and polling come later)', async () => {
+  it('refuses what a printer can not be (Star comes later)', async () => {
     const org = await seedOrg();
     for (const [body, field] of [
       [{ ...PRINTER, host: '' }, 'host'],
@@ -79,7 +79,8 @@ describe('printers', () => {
       [{ ...PRINTER, port: 70000 }, 'port'],
       [{ ...PRINTER, paperMm: 72 }, 'paperMm'],
       [{ ...PRINTER, brand: 'star' }, 'brand'],
-      [{ ...PRINTER, connection: 'poll' }, 'connection'],
+      [{ ...PRINTER, connection: 'bluetooth' }, 'connection'],
+      [{ ...PRINTER, connection: 'poll', pollInterval: 1 }, 'pollInterval'],
     ] as const) {
       const res = await admin(org, 'POST', '/printers', body);
       expect(res.body, field).toMatchObject({ code: 'printer_invalid', params: { field } });
@@ -224,5 +225,91 @@ describe('the ticket', () => {
     // 58 mm, double width: 16 columns; the name continues under itself.
     expect(doc).toContain('2 x Spaghetti\n    bolognese\n    met extra\n    kaas\n&gt; zonder ui');
     expect(doc).toContain('<cut type="feed"/>');
+  });
+});
+
+// --- Polling (Server Direct Print, phase 3) ---
+
+const POLLER = { name: 'Barprinter', brand: 'epson', connection: 'poll', pollInterval: 10, paperMm: 80 };
+
+async function asPrinter(printerId: string, key: string, form: Record<string, string>) {
+  const res = await SELF.fetch(`https://backend.test/public/print/epson/${printerId}?key=${encodeURIComponent(key)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams(form).toString(),
+  });
+  return { status: res.status, type: res.headers.get('Content-Type'), body: await res.text() };
+}
+const result = (...responses: [boolean, string?][]) =>
+  `<?xml version="1.0" encoding="utf-8"?><PrintResponseInfo Version="1.00">${responses
+    .map(([ok, code = '']) => `<response xmlns="http://www.epson-pos.com/schemas/2011/03/epos-print" success="${ok}" code="${code}" status="251658262" battery="0"/>`)
+    .join('')}</PrintResponseInfo>`;
+
+describe('a printer that asks for its work', () => {
+  it('gets its secret once; no address needed', async () => {
+    const org = await seedOrg();
+    const created = await admin(org, 'POST', '/printers', POLLER);
+    expect(created.status).toBe(201);
+    expect(created.body).toMatchObject({ connection: 'poll', host: null, port: null, pollInterval: 10, lastPollAt: null });
+    expect(created.body.pollKey).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect((await api('GET', `${o(org)}/printers`, { user: org.admin })).body[0].pollKey).toBeUndefined();
+    expect(JSON.stringify(await rows('SELECT * FROM printers'))).not.toContain(created.body.pollKey);
+  });
+
+  it("asks: nothing (an empty answer), then its station's ticket, prints it and reports", async () => {
+    const org = await seedOrg();
+    const v = await venue(org);
+    const p = (await admin(org, 'POST', '/printers', { ...POLLER, stationIds: [v.bar.id] })).body;
+
+    const nothing = await asPrinter(p.id, p.pollKey, { ConnectionType: 'GetRequest', ID: '' })
+    expect(nothing).toMatchObject({ status: 200, body: '' });
+    expect((await rows<{ last_poll_at: string }>('SELECT last_poll_at FROM printers WHERE id = ?', p.id))[0].last_poll_at).toBeTruthy();
+
+    await order(org, v, [{ variantId: v.pils, quantity: 3 }]);
+    const work = await asPrinter(p.id, p.pollKey, { ConnectionType: 'GetRequest', ID: '' });
+    expect(work.type).toContain('text/xml');
+    expect(work.body).toMatch(/^<\?xml version="1.0" encoding="utf-8"\?><PrintRequestInfo Version="1.00"><ePOSPrint><Parameter><devid>local_printer<\/devid><timeout>10000<\/timeout><\/Parameter><PrintData><epos-print /);
+    expect(work.body).toContain('3 x Pils');
+    // Taken: a screen can't claim it now, and the next ask is empty.
+    const [job] = await rows<{ id: string; status: string }>('SELECT id, status FROM print_jobs WHERE printer_id = ?', p.id);
+    expect(job.status).toBe('claimed');
+    expect((await asPrinter(p.id, p.pollKey, { ConnectionType: 'GetRequest', ID: '' })).body).toBe('');
+
+    expect((await asPrinter(p.id, p.pollKey, { ConnectionType: 'SetResponse', ID: '', ResponseFile: result([true]) })).status).toBe(200);
+    expect((await rows('SELECT status FROM print_jobs WHERE id = ?', job.id))[0]).toEqual({ status: 'printed' });
+  });
+
+  it('several at once, results in the order sent; a failure is kept with its code and told to the screens', async () => {
+    const org = await seedOrg();
+    const v = await venue(org);
+    const p = (await admin(org, 'POST', '/printers', { ...POLLER, stationIds: [v.bar.id] })).body;
+    for (let i = 1; i <= 7; i++) await order(org, v, [{ variantId: v.pils, quantity: i }], `Tafel ${i}`);
+    const work = await asPrinter(p.id, p.pollKey, { ConnectionType: 'GetRequest', ID: '' });
+    // At most five per answer, oldest first.
+    expect(work.body.match(/<ePOSPrint>/g)).toHaveLength(5);
+    expect(work.body.indexOf('Tafel 1')).toBeLessThan(work.body.indexOf('Tafel 5'));
+    expect(work.body).not.toContain('Tafel 6');
+
+    pushes = [];
+    await asPrinter(p.id, p.pollKey, { ConnectionType: 'SetResponse', ID: '', ResponseFile: result([true], [true], [false, 'EPTR_REC_EMPTY'], [false, 'EPTR_REC_EMPTY'], [false, 'EPTR_REC_EMPTY']) });
+    const jobs = await rows<{ status: string; error: string | null }>('SELECT status, error FROM print_jobs WHERE printer_id = ? ORDER BY created_at, rowid', p.id);
+    expect(jobs.map((j) => j.status)).toEqual(['printed', 'printed', 'failed', 'failed', 'failed', 'waiting', 'waiting']);
+    expect(jobs[2].error).toBe('EPTR_REC_EMPTY');
+    expect(pushes.some((x) => x.event === 'print_job')).toBe(true);
+  });
+
+  it('refuses a wrong or old key; a new one replaces it', async () => {
+    const org = await seedOrg();
+    const p = (await admin(org, 'POST', '/printers', POLLER)).body;
+    expect((await asPrinter(p.id, 'x'.repeat(43), { ConnectionType: 'GetRequest' })).status).toBe(403);
+    expect((await asPrinter(p.id, p.pollKey, { ConnectionType: 'SetResponse', ResponseFile: result([true]) })).status).toBe(200);
+    const fresh = (await admin(org, 'POST', `/printers/${p.id}/key`)).body;
+    expect(fresh.pollKey).not.toBe(p.pollKey);
+    expect((await asPrinter(p.id, p.pollKey, { ConnectionType: 'GetRequest' })).status).toBe(403);
+    expect((await asPrinter(p.id, fresh.pollKey, { ConnectionType: 'GetRequest' })).status).toBe(200);
+    // A printer via a screen has no URL to ask at.
+    const push = (await admin(org, 'POST', '/printers', PRINTER)).body;
+    expect(push.pollKey).toBeUndefined();
+    expect((await admin(org, 'POST', `/printers/${push.id}/key`)).status).toBe(404);
   });
 });

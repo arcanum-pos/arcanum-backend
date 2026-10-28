@@ -825,7 +825,12 @@ CREATE TABLE IF NOT EXISTS printers (
   -- ePOS-Print's device id: local_printer is the printer itself.
   device_id TEXT NOT NULL DEFAULT 'local_printer',
   paper_mm INTEGER NOT NULL DEFAULT 80 CHECK (paper_mm IN (58, 80)),
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  -- Polling (migration 0048): the secret in its URL (SHA-256), how often it
+  -- asks, when it last asked (written at most once a minute).
+  poll_key_hash TEXT,
+  poll_interval INTEGER NOT NULL DEFAULT 10,
+  last_poll_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_printers_org ON printers(org_id);
 
@@ -913,3 +918,4 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0044_branding.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0045_event_end_date.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0046_section_color.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0047_printers.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0048_printer_polling.sql');

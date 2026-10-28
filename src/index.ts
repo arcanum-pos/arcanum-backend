@@ -36,7 +36,7 @@ import { dispatchReportsRoute } from './reports';
 import { dispatchOrgTransferRoute } from './org-transfer';
 import { dispatchDemoOrgsRoute } from './demo-orgs';
 import { dispatchSelfOrderRoute } from './self-order';
-import { dispatchPrintingRoute } from './printing';
+import { dispatchPrintingRoute, dispatchPublicPrintRoute } from './printing';
 import { dispatchPrepTicketsRoute } from './prep-tickets';
 import { dispatchStaffRoute } from './staff';
 import { dispatchPublicDeviceRoute } from './devices';
@@ -128,6 +128,9 @@ export default {
       // Self-ordering guests (not signed in) — arcanum-bff's /api/public/*.
       if (url.pathname.startsWith('/public/')) {
         // A station screen or customer display paired with its code alone.
+        // A ticket printer asking for its work (Server Direct Print).
+        const printResponse = await dispatchPublicPrintRoute(request, env, url.pathname);
+        if (printResponse) return printResponse;
         const pairResponse = await dispatchPublicDeviceRoute(request, env, url.pathname);
         if (pairResponse) return pairResponse;
         // An organisation's own app icons (org-icons.ts), for arcanum-bff's /icons/org/….

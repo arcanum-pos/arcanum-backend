@@ -17,6 +17,7 @@
 //   PATCH  printers/:id                change it, incl. which stations it prints for (admin)
 //   DELETE printers/:id                remove it (admin)
 //   POST   printers/:id/test           a test page
+//   POST   printers/:id/key            a new secret for a polling printer's URL (admin)
 //   GET    printers/:id/jobs           waiting jobs, and the last hour's failed ones
 //   POST   print-jobs/:id/claim        -> { claim, document, printer } or 409 print_job_taken
 //   POST   print-jobs/:id/result       { claim, success, code } -> printed / failed
@@ -230,11 +231,13 @@ interface PrinterRow {
   port: number | null;
   device_id: string;
   paper_mm: number;
+  poll_interval: number;
+  last_poll_at: string | null;
 }
 
 async function listPrinters(env: Env, orgId: string): Promise<Response> {
   const [printers, stations] = await env.DB.batch([
-    env.DB.prepare('SELECT id, name, brand, connection, host, port, device_id, paper_mm FROM printers WHERE org_id = ? ORDER BY name COLLATE NOCASE, created_at').bind(orgId),
+    env.DB.prepare('SELECT id, name, brand, connection, host, port, device_id, paper_mm, poll_interval, last_poll_at FROM printers WHERE org_id = ? ORDER BY name COLLATE NOCASE, created_at').bind(orgId),
     env.DB.prepare('SELECT id, name, printer_id FROM prep_stations WHERE org_id = ? AND printer_id IS NOT NULL ORDER BY position, created_at').bind(orgId),
   ]);
   const byPrinter = new Map<string, { id: string; name: string }[]>();
@@ -253,30 +256,42 @@ const toPrinter = (p: PrinterRow, stations: { id: string; name: string }[]) => (
   port: p.port,
   deviceId: p.device_id,
   paperMm: p.paper_mm,
+  // Polling: how often it asks, and when it last did (to the minute).
+  pollInterval: p.poll_interval,
+  lastPollAt: p.last_poll_at,
   stations,
 });
 
 // A host as typed in the console: a name or an IPv4/IPv6 address, no scheme or path.
 const HOST = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*|\[?[0-9a-f:]+\]?)$/i;
 
-function parsePrinter(body: Record<string, unknown>, existing?: PrinterRow): { ok: true; value: Omit<PrinterRow, 'id'> } | { ok: false; field: string } {
+type PrinterFields = Omit<PrinterRow, 'id' | 'last_poll_at'>;
+
+function parsePrinter(body: Record<string, unknown>, existing?: PrinterRow): { ok: true; value: PrinterFields } | { ok: false; field: string } {
   const name = body.name !== undefined ? String(body.name).trim() : existing?.name;
   if (!name || name.length > 60) return { ok: false, field: 'name' };
   const brand = String(body.brand ?? existing?.brand ?? 'epson');
   // Star is shown in the console as "later": not accepted yet.
   if (brand !== 'epson') return { ok: false, field: 'brand' };
-  const connection = String(body.connection ?? existing?.connection ?? 'push');
-  // Polling is phase 3.
-  if (connection !== 'push') return { ok: false, field: 'connection' };
-  const host = String(body.host ?? existing?.host ?? '').trim().replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
-  if (!host || host.length > 253 || !HOST.test(host)) return { ok: false, field: 'host' };
-  const port = body.port === undefined || body.port === null || body.port === '' ? (existing?.port ?? 443) : Number(body.port);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) return { ok: false, field: 'port' };
+  // How it gets its work - fixed once the printer exists.
+  const connection = existing?.connection ?? String(body.connection ?? 'poll');
+  if (connection !== 'push' && connection !== 'poll') return { ok: false, field: 'connection' };
+  // Via a screen: where the screen finds it. Polling: no address needed.
+  let host: string | null = null;
+  let port: number | null = null;
+  if (connection === 'push') {
+    host = String(body.host ?? existing?.host ?? '').trim().replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
+    if (!host || host.length > 253 || !HOST.test(host)) return { ok: false, field: 'host' };
+    port = body.port === undefined || body.port === null || body.port === '' ? (existing?.port ?? 443) : Number(body.port);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) return { ok: false, field: 'port' };
+  }
+  const pollInterval = Number(body.pollInterval ?? existing?.poll_interval ?? 10);
+  if (!Number.isInteger(pollInterval) || pollInterval < 3 || pollInterval > 300) return { ok: false, field: 'pollInterval' };
   const deviceId = String(body.deviceId ?? existing?.device_id ?? 'local_printer').trim();
   if (!/^[A-Za-z0-9_.-]{1,30}$/.test(deviceId)) return { ok: false, field: 'deviceId' };
   const paper = Number(body.paperMm ?? existing?.paper_mm ?? 80);
   if (paper !== 58 && paper !== 80) return { ok: false, field: 'paperMm' };
-  return { ok: true, value: { name, brand, connection, host, port, device_id: deviceId, paper_mm: paper } };
+  return { ok: true, value: { name, brand, connection, host, port, device_id: deviceId, paper_mm: paper, poll_interval: pollInterval } };
 }
 
 // Which stations a printer prints for: exactly the ones listed (others it
@@ -296,34 +311,53 @@ async function createPrinter(request: Request, env: Env, orgId: string): Promise
   if (!parsed.ok) return errorJson(codedError('printer_invalid', { field: parsed.field }), 400);
   const id = crypto.randomUUID();
   const p = parsed.value;
+  // A polling printer gets its secret now - shown this once (pollKey).
+  const key = p.connection === 'poll' ? newPollKey() : null;
   await env.DB.batch([
     env.DB.prepare(
-      'INSERT INTO printers (id, org_id, name, brand, connection, host, port, device_id, paper_mm, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-    ).bind(id, orgId, p.name, p.brand, p.connection, p.host, p.port, p.device_id, p.paper_mm, new Date().toISOString()),
+      'INSERT INTO printers (id, org_id, name, brand, connection, host, port, device_id, paper_mm, poll_interval, poll_key_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    ).bind(id, orgId, p.name, p.brand, p.connection, p.host, p.port, p.device_id, p.paper_mm, p.poll_interval, key ? await sha256(key) : null, new Date().toISOString()),
     ...stationStatements(env, orgId, id, body.stationIds),
   ]);
-  return printerResponse(env, orgId, id, 201);
+  return printerResponse(env, orgId, id, 201, key ? { pollKey: key } : {});
 }
 
-async function printerResponse(env: Env, orgId: string, id: string, status = 200): Promise<Response> {
+// A new secret for a polling printer's URL (the old one stops working).
+async function newKey(env: Env, orgId: string, id: string): Promise<Response> {
+  const key = newPollKey();
+  const result = await env.DB.prepare("UPDATE printers SET poll_key_hash = ? WHERE id = ? AND org_id = ? AND connection = 'poll'").bind(await sha256(key), id, orgId).run();
+  return (result.meta.changes || 0) > 0 ? printerResponse(env, orgId, id, 200, { pollKey: key }) : errorJson('printer_not_found', 404);
+}
+
+function newPollKey(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  return btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+async function sha256(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function printerResponse(env: Env, orgId: string, id: string, status = 200, extra: Record<string, unknown> = {}): Promise<Response> {
   const [printer, stations] = await env.DB.batch([
-    env.DB.prepare('SELECT id, name, brand, connection, host, port, device_id, paper_mm FROM printers WHERE id = ? AND org_id = ?').bind(id, orgId),
+    env.DB.prepare('SELECT id, name, brand, connection, host, port, device_id, paper_mm, poll_interval, last_poll_at FROM printers WHERE id = ? AND org_id = ?').bind(id, orgId),
     env.DB.prepare('SELECT id, name FROM prep_stations WHERE org_id = ? AND printer_id = ? ORDER BY position, created_at').bind(orgId, id),
   ]);
   const row = (printer.results || [])[0] as PrinterRow | undefined;
   if (!row) return errorJson('printer_not_found', 404);
-  return json(toPrinter(row, (stations.results || []) as { id: string; name: string }[]), status);
+  return json({ ...toPrinter(row, (stations.results || []) as { id: string; name: string }[]), ...extra }, status);
 }
 
 async function updatePrinter(request: Request, env: Env, orgId: string, id: string): Promise<Response> {
-  const existing = await env.DB.prepare('SELECT id, name, brand, connection, host, port, device_id, paper_mm FROM printers WHERE id = ? AND org_id = ?').bind(id, orgId).first<PrinterRow>();
+  const existing = await env.DB.prepare('SELECT id, name, brand, connection, host, port, device_id, paper_mm, poll_interval, last_poll_at FROM printers WHERE id = ? AND org_id = ?').bind(id, orgId).first<PrinterRow>();
   if (!existing) return errorJson('printer_not_found', 404);
   const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
   const parsed = parsePrinter(body, existing);
   if (!parsed.ok) return errorJson(codedError('printer_invalid', { field: parsed.field }), 400);
   const p = parsed.value;
   await env.DB.batch([
-    env.DB.prepare('UPDATE printers SET name = ?, host = ?, port = ?, device_id = ?, paper_mm = ? WHERE id = ?').bind(p.name, p.host, p.port, p.device_id, p.paper_mm, id),
+    env.DB.prepare('UPDATE printers SET name = ?, host = ?, port = ?, device_id = ?, paper_mm = ?, poll_interval = ? WHERE id = ?').bind(p.name, p.host, p.port, p.device_id, p.paper_mm, p.poll_interval, id),
     ...stationStatements(env, orgId, id, body.stationIds),
   ]);
   return printerResponse(env, orgId, id);
@@ -451,6 +485,7 @@ export async function dispatchPrintingRoute(request: Request, env: Env, pathname
     // A test page: from the console, or the station screen's settings.
     if (id && sub === 'test' && method === 'POST') return testPrint(env, orgId, id, who);
     if (!isAdmin(who)) return json({ error: 'Forbidden' }, 403);
+    if (id && sub === 'key' && method === 'POST') return newKey(env, orgId, id);
     if (!id && method === 'POST') return createPrinter(request, env, orgId);
     if (id && !sub && method === 'PATCH') return updatePrinter(request, env, orgId, id);
     if (id && !sub && method === 'DELETE') return deletePrinter(env, orgId, id);
@@ -462,4 +497,95 @@ export async function dispatchPrintingRoute(request: Request, env: Env, pathname
     if (sub === 'retry') return retryJob(env, orgId, id);
   }
   return null;
+}
+
+// --- A printer asking for its work (Epson Server Direct Print) ---
+//
+// POST /public/print/epson/:printerId?key=<secret>, a form:
+//   ConnectionType=GetRequest   -> an empty answer (nothing to print) or a
+//                                  <PrintRequestInfo> with up to POLL_JOBS
+//                                  jobs, claimed for this printer
+//   ConnectionType=SetResponse  -> ResponseFile: <PrintResponseInfo>, a
+//                                  <response success code> per job, in order
+// Version 1.00 (every SDP printer; no job ids): the results are matched to
+// the jobs in the order they were sent. Nothing to print costs one round
+// trip to D1.
+const POLL_JOBS = 5;
+
+export async function dispatchPublicPrintRoute(request: Request, env: Env, pathname: string): Promise<Response | null> {
+  const m = pathname.match(/^\/public\/print\/epson\/([^/]+)$/);
+  if (!m) return null;
+  if (request.method !== 'POST') return new Response(null, { status: 405 });
+  const printerId = decodeURIComponent(m[1]);
+  const key = new URL(request.url).searchParams.get('key') || '';
+  if (key.length < 20 || key.length > 100) return new Response(null, { status: 403 });
+  const keyHash = await sha256(key);
+  const form = new URLSearchParams(await request.text());
+  const type = form.get('ConnectionType');
+  if (type === 'GetRequest') return getRequest(env, printerId, keyHash);
+  if (type === 'SetResponse') return setResponse(env, printerId, keyHash, form.get('ResponseFile') || '');
+  // Anything else (a status notification): heard, nothing to do.
+  return (await pollingPrinter(env, printerId, keyHash)) ? new Response(null, { status: 200 }) : new Response(null, { status: 403 });
+}
+
+const pollingPrinter = (env: Env, printerId: string, keyHash: string) =>
+  env.DB.prepare("SELECT org_id FROM printers WHERE id = ? AND poll_key_hash = ? AND connection = 'poll'").bind(printerId, keyHash).first<{ org_id: string }>();
+
+async function getRequest(env: Env, printerId: string, keyHash: string): Promise<Response> {
+  const now = new Date();
+  const at = now.toISOString();
+  const stale = new Date(now.getTime() - CLAIM_SECONDS * 1000).toISOString();
+  const minuteAgo = new Date(now.getTime() - 60_000).toISOString();
+  const isPrinter = `EXISTS (SELECT 1 FROM printers p WHERE p.id = ? AND p.poll_key_hash = ? AND p.connection = 'poll')`;
+  const [printer, , claimed] = await env.DB.batch([
+    env.DB.prepare("SELECT id FROM printers WHERE id = ? AND poll_key_hash = ? AND connection = 'poll'").bind(printerId, keyHash),
+    // When it last asked: to the minute, so asking costs no write each time.
+    env.DB.prepare(`UPDATE printers SET last_poll_at = ? WHERE id = ? AND poll_key_hash = ? AND (last_poll_at IS NULL OR last_poll_at < ?)`).bind(at, printerId, keyHash, minuteAgo),
+    env.DB.prepare(
+      `UPDATE print_jobs SET status = 'claimed', claim_token = 'poll', claimed_by = 'printer', claimed_at = ?, attempts = attempts + 1, updated_at = ?
+       WHERE id IN (
+         SELECT id FROM print_jobs
+         WHERE printer_id = ? AND (status = 'waiting' OR (status = 'claimed' AND claimed_at < ?))
+         ORDER BY created_at, rowid LIMIT ${POLL_JOBS}
+       ) AND ${isPrinter}
+       RETURNING id, document, created_at`
+    ).bind(at, at, printerId, stale, printerId, keyHash),
+  ]);
+  if (!(printer.results || []).length) return new Response(null, { status: 403 });
+  const jobs = ((claimed.results || []) as { id: string; document: string; created_at: string }[]).sort((a, b) => a.created_at.localeCompare(b.created_at));
+  if (!jobs.length) return new Response(null, { status: 200 });
+  const body =
+    '<?xml version="1.0" encoding="utf-8"?><PrintRequestInfo Version="1.00">' +
+    jobs.map((j) => `<ePOSPrint><Parameter><devid>local_printer</devid><timeout>10000</timeout></Parameter><PrintData>${j.document}</PrintData></ePOSPrint>`).join('') +
+    '</PrintRequestInfo>';
+  return new Response(body, { status: 200, headers: { 'Content-Type': 'text/xml; charset=utf-8' } });
+}
+
+async function setResponse(env: Env, printerId: string, keyHash: string, file: string): Promise<Response> {
+  const printer = await pollingPrinter(env, printerId, keyHash);
+  if (!printer) return new Response(null, { status: 403 });
+  const results = [...file.matchAll(/<response\b([^>]*)>/g)].map((r) => ({
+    success: /\bsuccess="true"/.test(r[1]),
+    code: r[1].match(/\bcode="([^"]*)"/)?.[1] || null,
+  }));
+  if (!results.length) return new Response(null, { status: 200 });
+  // The jobs it took, in the order they were sent.
+  const { results: jobs } = await env.DB.prepare(
+    `SELECT id FROM print_jobs WHERE printer_id = ? AND status = 'claimed' AND claimed_by = 'printer' ORDER BY created_at, rowid LIMIT ?`
+  )
+    .bind(printerId, results.length)
+    .all<{ id: string }>();
+  const at = new Date().toISOString();
+  const statements = (jobs || []).map((j, i) =>
+    env.DB.prepare(`UPDATE print_jobs SET status = ?, error = ?, claim_token = NULL, updated_at = ? WHERE id = ? AND status = 'claimed'`).bind(
+      results[i].success ? 'printed' : 'failed',
+      results[i].success ? null : (results[i].code || 'unknown').slice(0, 60),
+      at,
+      j.id
+    )
+  );
+  if (statements.length) await env.DB.batch(statements);
+  // A failure shows on the screens that use this printer.
+  if (results.some((r) => !r.success)) notifyPrinter(env, printer.org_id, [printerId]);
+  return new Response(null, { status: 200 });
 }
