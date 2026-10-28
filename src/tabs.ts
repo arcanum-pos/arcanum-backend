@@ -404,7 +404,7 @@ async function loadTabSummary(env: Env, orgId: string, tabId: string) {
   return row ? rowToTabSummary(row) : null;
 }
 
-async function loadTabDetail(env: Env, orgId: string, tabId: string) {
+export async function loadTabDetail(env: Env, orgId: string, tabId: string) {
   const tab = await loadTabSummary(env, orgId, tabId);
   if (!tab) return null;
 

@@ -145,6 +145,8 @@ CREATE TABLE IF NOT EXISTS organizations (
   is_locked TEXT,
   -- A person must be chosen to sell (migration 0035).
   staff_required INTEGER NOT NULL DEFAULT 0,
+  -- Receipts on a printer (migration 0049): off until switched on.
+  receipts_enabled INTEGER NOT NULL DEFAULT 0,
   -- Kasopmaak: the expected cash only after the count (migration 0036).
   blind_count INTEGER NOT NULL DEFAULT 0
 );
@@ -919,3 +921,4 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0045_event_end_date.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0046_section_color.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0047_printers.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0048_printer_polling.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0049_receipts.sql');

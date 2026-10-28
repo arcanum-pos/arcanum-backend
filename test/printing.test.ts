@@ -3,8 +3,8 @@
 // printed exactly once however many screens try.
 import { env, SELF } from 'cloudflare:test';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { renderTicket } from '../src/printing';
-import { api, DEVICE, rows, seedOrg, tabsPath, type TestOrg } from './helpers';
+import { renderReceipt, renderTicket } from '../src/printing';
+import { api, createTab, DEVICE, line, payCash, rows, seedOrg, tabsPath, type TestOrg } from './helpers';
 
 let pushes: { role: string; event: string; payload: any }[];
 beforeEach(() => {
@@ -311,5 +311,65 @@ describe('a printer that asks for its work', () => {
     const push = (await admin(org, 'POST', '/printers', PRINTER)).body;
     expect(push.pollKey).toBeUndefined();
     expect((await admin(org, 'POST', `/printers/${push.id}/key`)).status).toBe(404);
+  });
+});
+
+// --- Receipts ---
+
+describe('receipts', () => {
+  it('are off until an admin switches them on', async () => {
+    const org = await seedOrg();
+    expect((await api('GET', `${o(org)}/receipt-settings`, { user: org.cashier })).body).toEqual({ enabled: false });
+    expect((await api('PUT', `${o(org)}/receipt-settings`, { user: org.cashier, body: { enabled: true } })).status).toBe(403);
+    expect((await admin(org, 'PUT', '/receipt-settings', { enabled: true })).body).toEqual({ enabled: true });
+    expect((await api('GET', `${o(org)}/receipt-settings`, { user: org.cashier })).body).toEqual({ enabled: true });
+  });
+
+  it("print a paid tab's lines, total and payment - not a VAT receipt", async () => {
+    const org = await seedOrg();
+    const printer = (await admin(org, 'POST', '/printers', POLLER)).body;
+    const tab = await createTab(org, { label: 'Tafel 4', lines: [line('pils', 'Pils', 250, 2), line('frieten', 'Frieten', 400, 1)] });
+    const chargeId = await payCash(org, tab.id, 900);
+
+    // Off: refused.
+    expect((await api('POST', `${o(org)}/printers/${printer.id}/receipt`, { user: org.cashier, body: { tabId: tab.id, chargeId } })).body.code).toBe('receipts_off');
+    await admin(org, 'PUT', '/receipt-settings', { enabled: true });
+    const made = await api('POST', `${o(org)}/printers/${printer.id}/receipt`, { user: org.cashier, body: { tabId: tab.id, chargeId } });
+    expect(made.status).toBe(201);
+
+    const [job] = await rows<{ kind: string; ref_id: string; document: string }>('SELECT kind, ref_id, document FROM print_jobs WHERE id = ?', made.body.id);
+    expect(job).toMatchObject({ kind: 'receipt', ref_id: tab.id });
+    expect(job.document).toMatch(/2 x Pils +5,00/);
+    expect(job.document).toMatch(/1 x Frieten +4,00/);
+    expect(job.document).toMatch(/Totaal EUR +9,00/);
+    expect(job.document).toMatch(/Contant +9,00/);
+    expect(job.document).toContain('Geen BTW-kasticket');
+    expect(job.document).toContain('Bonnummer');
+    // The printer picks it up like any other job.
+    expect((await asPrinter(printer.id, printer.pollKey, { ConnectionType: 'GetRequest' })).body).toContain('Totaal EUR');
+  });
+
+  it('only from a signed-in member', async () => {
+    const org = await seedOrg();
+    const printer = (await admin(org, 'POST', '/printers', POLLER)).body;
+    await admin(org, 'PUT', '/receipt-settings', { enabled: true });
+    const tab = await createTab(org, { lines: [line('pils', 'Pils', 250, 1)] });
+    const res = await SELF.fetch(`https://backend.test${o(org)}/printers/${printer.id}/receipt`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tabId: tab.id }) });
+    expect(res.status).toBe(401);
+  });
+
+  it('a part of a split says what was paid now and what is still open', () => {
+    const doc = renderReceipt({
+      orgName: 'Scouts', eventName: 'Fuif', tabLabel: 'Jan', tabNumber: 7, receiptNumber: null, at: '2026-10-28T20:00:00Z',
+      lines: [{ name: 'Pils', quantity: 4, unitPriceCents: 250 }], totalCents: 1000,
+      payments: [{ method: 'cash', amountCents: 500, tipCents: 0 }, { method: 'bancontact', amountCents: 300, tipCents: 50 }],
+      paidNowCents: 300, outstandingCents: 250, paperMm: 58, locale: 'fr',
+    });
+    expect(doc).toContain('Addition #7 - Jan');
+    expect(doc).toMatch(/Bancontact \(pourboire 0,50\) +3,00/);
+    expect(doc).toMatch(/Payé maintenant +3,00/);
+    expect(doc).toMatch(/Reste à payer +2,50/);
+    expect(doc).toContain('Pas un ticket TVA');
+    expect(doc).not.toContain('Ticket n°');
   });
 });

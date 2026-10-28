@@ -23,6 +23,9 @@
 //   POST   print-jobs/:id/result       { claim, success, code } -> printed / failed
 //   POST   print-jobs/:id/retry        a failed job waits again
 //   PUT    stations/:stationId/printer { printerId } (admin, or that station's screen)
+//   GET    receipt-settings            { enabled } - receipts switched on for the org?
+//   PUT    receipt-settings            { enabled } (admin)
+//   POST   printers/:id/receipt        { tabId, chargeId? } a receipt of a tab (members)
 import { waitUntil } from 'cloudflare:workers';
 import { deviceCaller } from './device-keys';
 import { broadcastOrgEvent } from './devicehub-client';
@@ -31,6 +34,7 @@ import { codedError, errorJson } from './errors';
 import { json } from './http';
 import { extractCaller, requireOrgRole, SERVICE_ROLES } from './organizations/auth';
 import { MODE_LABEL_SQL } from './prep-tickets';
+import { loadTabDetail } from './tabs';
 
 const CLAIM_SECONDS = 30;
 // Printed jobs are kept a day (the station screen shows what failed).
@@ -111,6 +115,87 @@ export function renderTestPage(p: { name: string; paperMm: number; requestedBy: 
     `<text>${'1234567890'.repeat(Math.ceil(width / 10)).slice(0, width)}&#10;</text>` +
     `<text em="true">Vet</text><text em="false"> - </text><text ul="true">onderlijnd</text><text ul="false"> - </text><text reverse="true">omgekeerd</text><text reverse="false">&#10;</text>` +
     `<text width="2" height="2">Groot 2x2&#10;</text><text width="1" height="1"/>` +
+    `<feed line="3"/>` +
+    `<cut type="feed"/>` +
+    `</epos-print>`
+  );
+}
+
+// A receipt: not a VAT receipt (Arcanum isn't a certified cash register,
+// a "witte kassa") - says so at the bottom. The org, the event, the tab and
+// its number, the lines net of voids, the total, the payments with their
+// tips; for one payment of several (a split), what was paid now. Amounts
+// without the euro sign and plain ASCII where it can be: a printer's
+// character set is checked on a real one (PRINTING.md).
+const RECEIPT_TEXTS = {
+  nl: { tab: 'Rekening', receipt: 'Bonnummer', total: 'Totaal', paidNow: 'Nu betaald', stillOpen: 'Nog open', tip: 'fooi', notVat: 'Geen BTW-kasticket', thanks: 'Bedankt!', methods: { cash: 'Contant', bancontact: 'Bancontact', sumup: 'Kaart', tap: 'Tap to Pay' } as Record<string, string> },
+  fr: { tab: 'Addition', receipt: 'Ticket n°', total: 'Total', paidNow: 'Payé maintenant', stillOpen: 'Reste à payer', tip: 'pourboire', notVat: 'Pas un ticket TVA', thanks: 'Merci !', methods: { cash: 'Espèces', bancontact: 'Bancontact', sumup: 'Carte', tap: 'Tap to Pay' } as Record<string, string> },
+  en: { tab: 'Tab', receipt: 'Receipt no.', total: 'Total', paidNow: 'Paid now', stillOpen: 'Still to pay', tip: 'tip', notVat: 'Not a VAT receipt', thanks: 'Thank you!', methods: { cash: 'Cash', bancontact: 'Bancontact', sumup: 'Card', tap: 'Tap to Pay' } as Record<string, string> },
+};
+type Locale = keyof typeof RECEIPT_TEXTS;
+
+const amount = (cents: number) => {
+  const sign = cents < 0 ? '-' : '';
+  const abs = Math.abs(cents);
+  return `${sign}${Math.floor(abs / 100)},${String(abs % 100).padStart(2, '0')}`;
+};
+// Text left, amount right, on one line of `width` (the text cut if needed).
+const row = (text: string, value: string, width: number) => {
+  const room = width - value.length - 1;
+  const left = text.length > room ? text.slice(0, room) : text;
+  return left + ' '.repeat(width - left.length - value.length) + value;
+};
+
+export interface ReceiptPrint {
+  orgName: string;
+  eventName: string | null;
+  tabLabel: string;
+  tabNumber: number;
+  receiptNumber: number | null;
+  at: string;
+  lines: { name: string; quantity: number; unitPriceCents: number }[];
+  totalCents: number;
+  payments: { method: string; amountCents: number; tipCents: number }[];
+  paidNowCents: number | null;
+  outstandingCents: number;
+  paperMm: number;
+  locale: Locale;
+}
+
+export function renderReceipt(r: ReceiptPrint): string {
+  const t = RECEIPT_TEXTS[r.locale] ?? RECEIPT_TEXTS.nl;
+  const width = columns(r.paperMm);
+  const rule = '-'.repeat(width);
+  const when = new Date(r.at).toLocaleString('nl-BE', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Brussels' });
+  const body = [
+    ...r.lines.map((l) => row(`${l.quantity} x ${l.name}`, amount(l.quantity * l.unitPriceCents), width)),
+    rule,
+  ].join('\n');
+  const payments = [
+    ...r.payments.map((p) => row(`${t.methods[p.method] ?? p.method}${p.tipCents ? ` (${t.tip} ${amount(p.tipCents)})` : ''}`, amount(p.amountCents), width)),
+    ...(r.paidNowCents !== null ? [row(t.paidNow, amount(r.paidNowCents), width)] : []),
+    ...(r.outstandingCents > 0 ? [row(t.stillOpen, amount(r.outstandingCents), width)] : []),
+  ].join('\n');
+  return (
+    `<epos-print xmlns="${EPOS_NS}">` +
+    `<text lang="en" smooth="true"/>` +
+    `<text align="center"/>` +
+    `<text width="2" height="2" em="true">${xml(r.orgName)}&#10;</text>` +
+    `<text width="1" height="1" em="false"/>` +
+    (r.eventName ? `<text>${xml(r.eventName)}&#10;</text>` : '') +
+    `<text>${xml(`${t.tab} #${r.tabNumber}${r.tabLabel ? ` - ${r.tabLabel}` : ''}`)}&#10;</text>` +
+    (r.receiptNumber ? `<text>${xml(`${t.receipt} ${r.receiptNumber}`)}&#10;</text>` : '') +
+    `<text>${xml(when)}&#10;</text>` +
+    `<feed line="1"/>` +
+    `<text align="left"/>` +
+    `<text>${xml(body)}&#10;</text>` +
+    `<text width="1" height="2" em="true">${xml(row(t.total + ' EUR', amount(r.totalCents), width))}&#10;</text>` +
+    `<text width="1" height="1" em="false"/>` +
+    (payments ? `<text>${xml(payments)}&#10;</text>` : '') +
+    `<feed line="1"/>` +
+    `<text align="center"/>` +
+    `<text em="true">${xml(t.notVat)}&#10;</text>` +
+    `<text em="false">${xml(t.thanks)}&#10;</text>` +
     `<feed line="3"/>` +
     `<cut type="feed"/>` +
     `</epos-print>`
@@ -388,6 +473,67 @@ async function testPrint(env: Env, orgId: string, id: string, who: Who): Promise
 
 // --- Jobs, for the screens that print ---
 
+// Receipts: switched on per organisation (most have no printer).
+async function receiptSettings(request: Request, env: Env, orgId: string, who: Who): Promise<Response> {
+  if (request.method === 'PUT') {
+    if (!isAdmin(who)) return json({ error: 'Forbidden' }, 403);
+    const body = (await request.json().catch(() => ({}))) as { enabled?: unknown };
+    if (typeof body.enabled !== 'boolean') return json({ error: 'enabled must be true or false' }, 400);
+    await env.DB.prepare('UPDATE organizations SET receipts_enabled = ? WHERE id = ?').bind(body.enabled ? 1 : 0, orgId).run();
+    return json({ enabled: body.enabled });
+  }
+  const row = await env.DB.prepare('SELECT receipts_enabled FROM organizations WHERE id = ?').bind(orgId).first<{ receipts_enabled: number }>();
+  return json({ enabled: !!row?.receipts_enabled });
+}
+
+async function printReceipt(request: Request, env: Env, orgId: string, printerId: string): Promise<Response> {
+  const body = (await request.json().catch(() => ({}))) as { tabId?: unknown; chargeId?: unknown };
+  const [org, printer] = await env.DB.batch([
+    env.DB.prepare('SELECT name, locale, receipts_enabled FROM organizations WHERE id = ?').bind(orgId),
+    env.DB.prepare('SELECT paper_mm FROM printers WHERE id = ? AND org_id = ?').bind(printerId, orgId),
+  ]);
+  const o = (org.results || [])[0] as { name: string; locale: string; receipts_enabled: number } | undefined;
+  if (!o?.receipts_enabled) return errorJson('receipts_off', 409);
+  const p = (printer.results || [])[0] as { paper_mm: number } | undefined;
+  if (!p) return errorJson('printer_not_found', 404);
+  const tab = await loadTabDetail(env, orgId, String(body.tabId || ''));
+  if (!tab) return errorJson('tab_not_found', 404);
+
+  // Lines net of voids, fully voided ones and tips left out.
+  const net = new Map<string, { name: string; quantity: number; unitPriceCents: number }>();
+  for (const l of tab.lines) {
+    if (l.voidsLineId || l.itemCode === 'fooi') continue;
+    const quantity = l.quantity - l.voidedQuantity;
+    if (quantity > 0) net.set(l.id, { name: l.name, quantity, unitPriceCents: l.unitPriceCents });
+  }
+  const paid = tab.payments.filter((c) => c.status === 'succeeded');
+  const now = body.chargeId ? paid.find((c) => c.id === body.chargeId) : null;
+  const document = renderReceipt({
+    orgName: o.name,
+    eventName: tab.eventName,
+    tabLabel: tab.label,
+    tabNumber: tab.eventNumber ?? tab.number,
+    receiptNumber: tab.receiptNumber,
+    at: new Date().toISOString(),
+    lines: [...net.values()],
+    totalCents: tab.totalCents,
+    payments: paid.map((c) => ({ method: c.method, amountCents: c.amountCents, tipCents: c.tipCents })),
+    paidNowCents: now && paid.length > 1 ? now.amountCents : null,
+    outstandingCents: tab.outstandingCents,
+    paperMm: p.paper_mm,
+    locale: (['nl', 'fr', 'en'].includes(o.locale) ? o.locale : 'nl') as Locale,
+  });
+  const at = new Date().toISOString();
+  const jobId = crypto.randomUUID();
+  await env.DB.prepare(
+    `INSERT INTO print_jobs (id, org_id, printer_id, kind, ref_id, title, document, status, created_at, updated_at) VALUES (?, ?, ?, 'receipt', ?, ?, ?, 'waiting', ?, ?)`
+  )
+    .bind(jobId, orgId, printerId, tab.id, `Bon #${tab.eventNumber ?? tab.number}`, document, at, at)
+    .run();
+  notifyPrinter(env, orgId, [printerId]);
+  return json({ id: jobId }, 201);
+}
+
 async function listJobs(env: Env, orgId: string, printerId: string): Promise<Response> {
   const stale = new Date(Date.now() - CLAIM_SECONDS * 1000).toISOString();
   const lastHour = new Date(Date.now() - 3600_000).toISOString();
@@ -469,7 +615,7 @@ async function setStationPrinter(request: Request, env: Env, orgId: string, stat
 }
 
 export async function dispatchPrintingRoute(request: Request, env: Env, pathname: string): Promise<Response | null> {
-  const m = pathname.match(/^\/organizations\/([^/]+)\/(printers|print-jobs|stations)(?:\/([^/]+))?(?:\/([^/]+))?$/);
+  const m = pathname.match(/^\/organizations\/([^/]+)\/(printers|print-jobs|stations|receipt-settings)(?:\/([^/]+))?(?:\/([^/]+))?$/);
   if (!m) return null;
   const [, orgId, root, id, sub] = m;
   const method = request.method;
@@ -479,11 +625,15 @@ export async function dispatchPrintingRoute(request: Request, env: Env, pathname
   if (who instanceof Response) return who;
 
   if (root === 'stations') return setStationPrinter(request, env, orgId, id!, who);
+  if (root === 'receipt-settings' && !id && (method === 'GET' || method === 'PUT')) return receiptSettings(request, env, orgId, who);
+  if (root === 'receipt-settings') return null;
   if (root === 'printers') {
     if (!id && method === 'GET') return listPrinters(env, orgId);
     if (id && sub === 'jobs' && method === 'GET') return listJobs(env, orgId, id);
     // A test page: from the console, or the station screen's settings.
     if (id && sub === 'test' && method === 'POST') return testPrint(env, orgId, id, who);
+    // A receipt: from a kassa or the waiter's screen (a signed-in member).
+    if (id && sub === 'receipt' && method === 'POST') return who.kind === 'member' ? printReceipt(request, env, orgId, id) : json({ error: 'Forbidden' }, 403);
     if (!isAdmin(who)) return json({ error: 'Forbidden' }, 403);
     if (id && sub === 'key' && method === 'POST') return newKey(env, orgId, id);
     if (!id && method === 'POST') return createPrinter(request, env, orgId);
