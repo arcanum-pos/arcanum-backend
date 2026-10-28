@@ -18,6 +18,7 @@
 //   DELETE printers/:id                remove it (admin)
 //   POST   printers/:id/test           a test page
 //   POST   printers/:id/key            a new secret for a polling printer's URL (admin)
+//   GET    printers/:id/key            its secret again, to show the URL (admin)
 //   GET    printers/:id/jobs           waiting jobs, and the last hour's failed ones
 //   POST   print-jobs/:id/claim        -> { claim, document, printer } or 409 print_job_taken
 //   POST   print-jobs/:id/result       { claim, success, code } -> printed / failed
@@ -35,6 +36,8 @@ import { json } from './http';
 import { extractCaller, requireOrgRole, SERVICE_ROLES } from './organizations/auth';
 import { MODE_LABEL_SQL } from './prep-tickets';
 import { loadTabDetail } from './tabs';
+import { decryptWithKey, encryptWithKey } from './organizations/crypto';
+import { getOrgDataKey } from './organizations/organizations';
 
 const CLAIM_SECONDS = 30;
 // Printed jobs are kept a day (the station screen shows what failed).
@@ -341,8 +344,8 @@ const toPrinter = (p: PrinterRow, stations: { id: string; name: string }[]) => (
   port: p.port,
   deviceId: p.device_id,
   paperMm: p.paper_mm,
-  // Polling: how often it asks, and when it last did (to the minute).
-  pollInterval: p.poll_interval,
+  // Polling: when it last asked (to the minute). How often it asks is set
+  // in the printer only.
   lastPollAt: p.last_poll_at,
   stations,
 });
@@ -370,13 +373,11 @@ function parsePrinter(body: Record<string, unknown>, existing?: PrinterRow): { o
     port = body.port === undefined || body.port === null || body.port === '' ? (existing?.port ?? 443) : Number(body.port);
     if (!Number.isInteger(port) || port < 1 || port > 65535) return { ok: false, field: 'port' };
   }
-  const pollInterval = Number(body.pollInterval ?? existing?.poll_interval ?? 10);
-  if (!Number.isInteger(pollInterval) || pollInterval < 3 || pollInterval > 300) return { ok: false, field: 'pollInterval' };
   const deviceId = String(body.deviceId ?? existing?.device_id ?? 'local_printer').trim();
   if (!/^[A-Za-z0-9_.-]{1,30}$/.test(deviceId)) return { ok: false, field: 'deviceId' };
   const paper = Number(body.paperMm ?? existing?.paper_mm ?? 80);
   if (paper !== 58 && paper !== 80) return { ok: false, field: 'paperMm' };
-  return { ok: true, value: { name, brand, connection, host, port, device_id: deviceId, paper_mm: paper, poll_interval: pollInterval } };
+  return { ok: true, value: { name, brand, connection, host, port, device_id: deviceId, paper_mm: paper, poll_interval: existing?.poll_interval ?? 10 } };
 }
 
 // Which stations a printer prints for: exactly the ones listed (others it
@@ -403,6 +404,7 @@ async function createPrinter(request: Request, env: Env, orgId: string): Promise
       'INSERT INTO printers (id, org_id, name, brand, connection, host, port, device_id, paper_mm, poll_interval, poll_key_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
     ).bind(id, orgId, p.name, p.brand, p.connection, p.host, p.port, p.device_id, p.paper_mm, p.poll_interval, key ? await sha256(key) : null, new Date().toISOString()),
     ...stationStatements(env, orgId, id, body.stationIds),
+    ...(key ? [await keepKey(env, orgId, id, key)] : []),
   ]);
   return printerResponse(env, orgId, id, 201, key ? { pollKey: key } : {});
 }
@@ -410,8 +412,35 @@ async function createPrinter(request: Request, env: Env, orgId: string): Promise
 // A new secret for a polling printer's URL (the old one stops working).
 async function newKey(env: Env, orgId: string, id: string): Promise<Response> {
   const key = newPollKey();
-  const result = await env.DB.prepare("UPDATE printers SET poll_key_hash = ? WHERE id = ? AND org_id = ? AND connection = 'poll'").bind(await sha256(key), id, orgId).run();
+  const [result] = await env.DB.batch([
+    env.DB.prepare("UPDATE printers SET poll_key_hash = ? WHERE id = ? AND org_id = ? AND connection = 'poll'").bind(await sha256(key), id, orgId),
+    await keepKey(env, orgId, id, key),
+  ]);
   return (result.meta.changes || 0) > 0 ? printerResponse(env, orgId, id, 200, { pollKey: key }) : errorJson('printer_not_found', 404);
+}
+
+// The secret encrypted under the org's data key, so its URL can be shown
+// again (showKey). The printer's requests are checked against the hash.
+async function keepKey(env: Env, orgId: string, id: string, key: string): Promise<D1PreparedStatement> {
+  const dek = await getOrgDataKey(env, orgId);
+  const sealed = dek ? await encryptWithKey(key, dek) : null;
+  return env.DB.prepare("UPDATE printers SET poll_key_ciphertext = ?, poll_key_iv = ? WHERE id = ? AND org_id = ? AND connection = 'poll'").bind(
+    sealed?.ciphertext ?? null,
+    sealed?.iv ?? null,
+    id,
+    orgId
+  );
+}
+
+// The URL's secret again (null for a printer made before it was kept).
+async function showKey(env: Env, orgId: string, id: string): Promise<Response> {
+  const row = await env.DB.prepare("SELECT poll_key_ciphertext, poll_key_iv FROM printers WHERE id = ? AND org_id = ? AND connection = 'poll'")
+    .bind(id, orgId)
+    .first<{ poll_key_ciphertext: string | null; poll_key_iv: string | null }>();
+  if (!row) return errorJson('printer_not_found', 404);
+  const dek = row.poll_key_ciphertext && row.poll_key_iv ? await getOrgDataKey(env, orgId) : null;
+  const pollKey = dek ? await decryptWithKey({ ciphertext: row.poll_key_ciphertext!, iv: row.poll_key_iv! }, dek).catch(() => null) : null;
+  return json({ pollKey });
 }
 
 function newPollKey(): string {
@@ -636,6 +665,7 @@ export async function dispatchPrintingRoute(request: Request, env: Env, pathname
     if (id && sub === 'receipt' && method === 'POST') return who.kind === 'member' ? printReceipt(request, env, orgId, id) : json({ error: 'Forbidden' }, 403);
     if (!isAdmin(who)) return json({ error: 'Forbidden' }, 403);
     if (id && sub === 'key' && method === 'POST') return newKey(env, orgId, id);
+    if (id && sub === 'key' && method === 'GET') return showKey(env, orgId, id);
     if (!id && method === 'POST') return createPrinter(request, env, orgId);
     if (id && !sub && method === 'PATCH') return updatePrinter(request, env, orgId, id);
     if (id && !sub && method === 'DELETE') return deletePrinter(env, orgId, id);

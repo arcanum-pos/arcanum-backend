@@ -832,7 +832,11 @@ CREATE TABLE IF NOT EXISTS printers (
   -- asks, when it last asked (written at most once a minute).
   poll_key_hash TEXT,
   poll_interval INTEGER NOT NULL DEFAULT 10,
-  last_poll_at TEXT
+  last_poll_at TEXT,
+  -- The same secret encrypted under the org's data key, to show its URL
+  -- again (migration 0050).
+  poll_key_ciphertext TEXT,
+  poll_key_iv TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_printers_org ON printers(org_id);
 
@@ -922,3 +926,4 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0046_section_color.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0047_printers.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0048_printer_polling.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0049_receipts.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0050_printer_poll_link.sql');

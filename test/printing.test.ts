@@ -80,7 +80,6 @@ describe('printers', () => {
       [{ ...PRINTER, paperMm: 72 }, 'paperMm'],
       [{ ...PRINTER, brand: 'star' }, 'brand'],
       [{ ...PRINTER, connection: 'bluetooth' }, 'connection'],
-      [{ ...PRINTER, connection: 'poll', pollInterval: 1 }, 'pollInterval'],
     ] as const) {
       const res = await admin(org, 'POST', '/printers', body);
       expect(res.body, field).toMatchObject({ code: 'printer_invalid', params: { field } });
@@ -230,7 +229,7 @@ describe('the ticket', () => {
 
 // --- Polling (Server Direct Print, phase 3) ---
 
-const POLLER = { name: 'Barprinter', brand: 'epson', connection: 'poll', pollInterval: 10, paperMm: 80 };
+const POLLER = { name: 'Barprinter', brand: 'epson', connection: 'poll', paperMm: 80 };
 
 async function asPrinter(printerId: string, key: string, form: Record<string, string>) {
   const res = await SELF.fetch(`https://backend.test/public/print/epson/${printerId}?key=${encodeURIComponent(key)}`, {
@@ -250,10 +249,23 @@ describe('a printer that asks for its work', () => {
     const org = await seedOrg();
     const created = await admin(org, 'POST', '/printers', POLLER);
     expect(created.status).toBe(201);
-    expect(created.body).toMatchObject({ connection: 'poll', host: null, port: null, pollInterval: 10, lastPollAt: null });
+    expect(created.body).toMatchObject({ connection: 'poll', host: null, port: null, lastPollAt: null });
+    expect(created.body.pollInterval).toBeUndefined();
     expect(created.body.pollKey).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect((await api('GET', `${o(org)}/printers`, { user: org.admin })).body[0].pollKey).toBeUndefined();
     expect(JSON.stringify(await rows('SELECT * FROM printers'))).not.toContain(created.body.pollKey);
+  });
+
+  it('shows its URL again - to an admin, decrypted from the org key; a new link changes it', async () => {
+    const org = await seedOrg();
+    const p = (await admin(org, 'POST', '/printers', POLLER)).body;
+    expect((await admin(org, 'GET', `/printers/${p.id}/key`)).body).toEqual({ pollKey: p.pollKey });
+    expect((await api('GET', `${o(org)}/printers/${p.id}/key`, { user: org.cashier })).status).toBe(403);
+    const fresh = (await admin(org, 'POST', `/printers/${p.id}/key`)).body;
+    expect((await admin(org, 'GET', `/printers/${p.id}/key`)).body).toEqual({ pollKey: fresh.pollKey });
+    // A printer made before the key was kept: nothing to show (a new link makes one).
+    await env.DB.prepare('UPDATE printers SET poll_key_ciphertext = NULL, poll_key_iv = NULL WHERE id = ?').bind(p.id).run();
+    expect((await admin(org, 'GET', `/printers/${p.id}/key`)).body).toEqual({ pollKey: null });
   });
 
   it("asks: nothing (an empty answer), then its station's ticket, prints it and reports", async () => {
