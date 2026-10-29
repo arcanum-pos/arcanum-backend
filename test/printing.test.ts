@@ -4,6 +4,8 @@
 import { env, SELF } from 'cloudflare:test';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderReceipt, renderTicket } from '../src/printing';
+import { parseCertificate, pemToDer } from '../src/printer-cert';
+import { EPSON_CERT, GOOD_CERT, OTHER_CERT, SIGNED_CERT } from './fixtures/printer-certs';
 import { api, createTab, DEVICE, line, payCash, rows, seedOrg, tabsPath, type TestOrg } from './helpers';
 
 let pushes: { role: string; event: string; payload: any }[];
@@ -383,5 +385,99 @@ describe('receipts', () => {
     expect(doc).toMatch(/Reste à payer +2,50/);
     expect(doc).toContain('Pas un ticket TVA');
     expect(doc).not.toContain('Ticket n°');
+  });
+});
+
+describe('trusting a push printer', () => {
+  const upload = (printerId: string, code: string, body: string) =>
+    SELF.fetch(`https://backend.test/public/print/cert/${printerId}?code=${encodeURIComponent(code)}`, { method: 'POST', headers: { 'Content-Type': 'application/x-pem-file' }, body });
+  const profile = (printerId: string, token: string) => SELF.fetch(`https://backend.test/public/print/profile/${printerId}?token=${encodeURIComponent(token)}`);
+
+  it('reads what a certificate names, and whether it is its own issuer', () => {
+    const good = parseCertificate(pemToDer(GOOD_CERT)!)!;
+    expect(good).toMatchObject({ selfSigned: true, isCa: true, commonName: '192.168.1.50', ipAddresses: ['192.168.1.50'] });
+    expect(Math.round((good.notAfter!.getTime() - good.notBefore!.getTime()) / 86_400_000)).toBe(825);
+    expect(parseCertificate(pemToDer(EPSON_CERT)!)).toMatchObject({ selfSigned: true, isCa: false, ipAddresses: [], dnsNames: [] });
+    expect(parseCertificate(pemToDer(SIGNED_CERT)!)!.selfSigned).toBe(false);
+    // Bare base64 (DER) too; junk is no certificate.
+    expect(parseCertificate(pemToDer(GOOD_CERT.replace(/-----[A-Z ]+-----/g, ''))!)!.selfSigned).toBe(true);
+    expect(pemToDer('<not a certificate>')).toBeNull();
+    expect(parseCertificate(pemToDer('not a certificate')!)).toBeNull();
+    expect(parseCertificate(new Uint8Array([0x30, 0x03, 0x02, 0x01, 0x01]))).toBeNull();
+  });
+
+  it('a screen gets a one-time code; the command uploads the certificate; the iPad gets a profile', async () => {
+    const org = await seedOrg();
+    const printer = (await admin(org, 'POST', '/printers', PRINTER)).body;
+    expect(printer.certFingerprint).toBeNull();
+    // No certificate yet: no profile.
+    expect((await api('POST', `${o(org)}/printers/${printer.id}/profile-link`, { user: org.cashier })).body.code).toBe('printer_no_certificate');
+
+    const made = await api('POST', `${o(org)}/printers/${printer.id}/trust-code`, { user: org.cashier });
+    expect(made.status).toBe(201);
+    const res = await upload(printer.id, made.body.code, GOOD_CERT);
+    expect(res.status).toBe(200);
+    const said = await res.text();
+    expect(said).toContain('Certificaat van "Keukenprinter" opgeslagen');
+    expect(said).toMatch(/Vingerafdruk \(SHA-256\): ([0-9A-F]{2}:){31}[0-9A-F]{2}/);
+    expect(said).not.toContain('Let op');
+    // Once only.
+    expect((await upload(printer.id, made.body.code, GOOD_CERT)).status).toBe(403);
+
+    const listed = (await admin(org, 'GET', '/printers')).body[0];
+    expect(listed.certFingerprint).toMatch(/^[0-9a-f]{64}$/);
+    expect(listed.certUploadedAt).toBeTruthy();
+    expect(pushes.some((p) => p.event === 'print_job')).toBe(true);
+
+    const link = (await api('POST', `${o(org)}/printers/${printer.id}/profile-link`, { user: org.cashier })).body;
+    const first = await profile(printer.id, link.token);
+    expect(first.status).toBe(200);
+    expect(first.headers.get('Content-Type')).toBe('application/x-apple-aspen-config');
+    expect(first.headers.get('Content-Disposition')).toBe('attachment; filename="arcanum-keukenprinter.mobileconfig"');
+    const plist = await first.text();
+    expect(plist).toContain('<string>com.apple.security.root</string>');
+    expect(plist).toContain(`<data>${GOOD_CERT.replace(/-----[A-Z ]+-----|\s/g, '')}</data>`);
+    // Safari may ask twice; the same printer and certificate give the same profile.
+    expect(await (await profile(printer.id, link.token)).text()).toBe(plist);
+    expect((await profile(printer.id, 'x'.repeat(32))).status).toBe(403);
+  });
+
+  it("warns about what Apple won't accept, and refuses another printer's or a signed certificate", async () => {
+    const org = await seedOrg();
+    const printer = (await admin(org, 'POST', '/printers', PRINTER)).body;
+    const code = async () => (await api('POST', `${o(org)}/printers/${printer.id}/trust-code`, { user: org.cashier })).body.code as string;
+
+    const other = await upload(printer.id, await code(), OTHER_CERT);
+    expect(other.status).toBe(400);
+    expect(await other.text()).toContain('niet voor 192.168.1.50');
+    expect((await upload(printer.id, await code(), SIGNED_CERT)).status).toBe(400);
+    expect((await upload(printer.id, await code(), 'hello')).status).toBe(400);
+
+    // Epson-like: its common name only, ten years, not a CA - kept, with warnings.
+    const epson = await upload(printer.id, await code(), EPSON_CERT);
+    expect(epson.status).toBe(200);
+    const said = await epson.text();
+    expect(said).toContain('Subject Alternative Name');
+    expect(said).toContain('hoogstens 825');
+    expect(said).toContain('certificaatautoriteit');
+  });
+
+  it('a new address forgets the certificate; codes stay with their printer, push only, any screen of the org', async () => {
+    const org = await seedOrg();
+    const printer = (await admin(org, 'POST', '/printers', PRINTER)).body;
+    const other = (await admin(org, 'POST', '/printers', { ...PRINTER, name: 'Bar', host: '10.0.0.9' })).body;
+    const code = (await api('POST', `${o(org)}/printers/${printer.id}/trust-code`, { user: org.cashier })).body.code;
+    // Not for another printer.
+    expect((await upload(other.id, code, OTHER_CERT)).status).toBe(403);
+    expect((await upload(printer.id, code, GOOD_CERT)).status).toBe(200);
+    expect((await admin(org, 'PATCH', `/printers/${printer.id}`, { name: 'Keuken' })).body.certFingerprint).toBeTruthy();
+    expect((await admin(org, 'PATCH', `/printers/${printer.id}`, { host: '192.168.1.51' })).body.certFingerprint).toBeNull();
+
+    const polling = (await admin(org, 'POST', '/printers', { name: 'Haalt op', brand: 'epson', connection: 'poll', paperMm: 80 })).body;
+    expect((await api('POST', `${o(org)}/printers/${polling.id}/trust-code`, { user: org.cashier })).status).toBe(404);
+    const stranger = await seedOrg();
+    expect((await api('POST', `${o(org)}/printers/${printer.id}/trust-code`, { user: stranger.admin })).status).toBe(403);
+    // Removing the printer removes its codes.
+    expect((await admin(org, 'DELETE', `/printers/${printer.id}`)).status).toBe(200);
   });
 });

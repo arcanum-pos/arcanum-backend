@@ -836,9 +836,27 @@ CREATE TABLE IF NOT EXISTS printers (
   -- The same secret encrypted under the org's data key, to show its URL
   -- again (migration 0050).
   poll_key_ciphertext TEXT,
-  poll_key_iv TEXT
+  poll_key_iv TEXT,
+  -- Push: the printer's own certificate, uploaded by the command a station
+  -- screen shows, for an iPad's profile (migration 0051).
+  cert_pem TEXT,
+  cert_fingerprint TEXT,
+  cert_uploaded_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_printers_org ON printers(org_id);
+
+-- Short-lived codes to upload a printer's certificate ('upload', once, 15
+-- minutes) and to download its profile ('profile', 10 minutes). SHA-256 only.
+CREATE TABLE IF NOT EXISTS printer_cert_tokens (
+  token_hash TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES organizations(id),
+  printer_id TEXT NOT NULL REFERENCES printers(id),
+  purpose TEXT NOT NULL CHECK (purpose IN ('upload', 'profile')),
+  expires_at TEXT NOT NULL,
+  used_at TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_printer_cert_tokens_printer ON printer_cert_tokens(printer_id, expires_at);
 
 -- One thing to print on one printer, printed exactly once: waiting ->
 -- claimed (one conditional UPDATE: of several screens, or the printer
@@ -927,3 +945,4 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0047_printers.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0048_printer_polling.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0049_receipts.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0050_printer_poll_link.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0051_printer_certificates.sql');

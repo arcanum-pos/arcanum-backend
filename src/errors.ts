@@ -46,6 +46,7 @@ export const ERROR_TEXTS = {
   print_job_not_found: 'Afdruk niet gevonden',
   print_job_taken: 'Deze afdruk wordt al door een ander scherm geprint',
   receipts_off: 'Bonnen printen staat niet aan (console, Toestellen)',
+  printer_no_certificate: 'Voor deze printer is nog geen certificaat opgeladen',
   unknown_station: 'Onbekend station',
   product_not_found: 'Product niet gevonden',
   unknown_product: 'Onbekend of gearchiveerd product',

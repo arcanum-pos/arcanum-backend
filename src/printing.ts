@@ -27,6 +27,12 @@
 //   GET    receipt-settings            { enabled } - receipts switched on for the org?
 //   PUT    receipt-settings            { enabled } (admin)
 //   POST   printers/:id/receipt        { tabId, chargeId? } a receipt of a tab (members)
+//   POST   printers/:id/trust-code     -> { code, expiresAt } for the command that uploads a
+//                                      push printer's certificate (once, 15 min)
+//   POST   printers/:id/profile-link   -> { token, expiresAt } for its iPad profile (10 min)
+//
+// Public (no session): /public/print/epson/:id (polling), /public/print/
+// cert/:id?code= (the upload), /public/print/profile/:id?token= (the profile).
 import { waitUntil } from 'cloudflare:workers';
 import { deviceCaller } from './device-keys';
 import { broadcastOrgEvent } from './devicehub-client';
@@ -38,6 +44,7 @@ import { MODE_LABEL_SQL } from './prep-tickets';
 import { loadTabDetail } from './tabs';
 import { decryptWithKey, encryptWithKey } from './organizations/crypto';
 import { getOrgDataKey } from './organizations/organizations';
+import { APPLE_MAX_DAYS, derToPem, fingerprint, mobileconfig, namesHost, parseCertificate, pemToDer, showFingerprint } from './printer-cert';
 
 const CLAIM_SECONDS = 30;
 // Printed jobs are kept a day (the station screen shows what failed).
@@ -321,11 +328,15 @@ interface PrinterRow {
   paper_mm: number;
   poll_interval: number;
   last_poll_at: string | null;
+  cert_fingerprint: string | null;
+  cert_uploaded_at: string | null;
 }
+
+const PRINTER_COLUMNS = 'id, name, brand, connection, host, port, device_id, paper_mm, poll_interval, last_poll_at, cert_fingerprint, cert_uploaded_at';
 
 async function listPrinters(env: Env, orgId: string): Promise<Response> {
   const [printers, stations] = await env.DB.batch([
-    env.DB.prepare('SELECT id, name, brand, connection, host, port, device_id, paper_mm, poll_interval, last_poll_at FROM printers WHERE org_id = ? ORDER BY name COLLATE NOCASE, created_at').bind(orgId),
+    env.DB.prepare(`SELECT ${PRINTER_COLUMNS} FROM printers WHERE org_id = ? ORDER BY name COLLATE NOCASE, created_at`).bind(orgId),
     env.DB.prepare('SELECT id, name, printer_id FROM prep_stations WHERE org_id = ? AND printer_id IS NOT NULL ORDER BY position, created_at').bind(orgId),
   ]);
   const byPrinter = new Map<string, { id: string; name: string }[]>();
@@ -347,13 +358,16 @@ const toPrinter = (p: PrinterRow, stations: { id: string; name: string }[]) => (
   // Polling: when it last asked (to the minute). How often it asks is set
   // in the printer only.
   lastPollAt: p.last_poll_at,
+  // Push: the printer's own certificate, once uploaded (its SHA-256).
+  certFingerprint: p.cert_fingerprint,
+  certUploadedAt: p.cert_uploaded_at,
   stations,
 });
 
 // A host as typed in the console: a name or an IPv4/IPv6 address, no scheme or path.
 const HOST = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*|\[?[0-9a-f:]+\]?)$/i;
 
-type PrinterFields = Omit<PrinterRow, 'id' | 'last_poll_at'>;
+type PrinterFields = Omit<PrinterRow, 'id' | 'last_poll_at' | 'cert_fingerprint' | 'cert_uploaded_at'>;
 
 function parsePrinter(body: Record<string, unknown>, existing?: PrinterRow): { ok: true; value: PrinterFields } | { ok: false; field: string } {
   const name = body.name !== undefined ? String(body.name).trim() : existing?.name;
@@ -455,7 +469,7 @@ async function sha256(text: string): Promise<string> {
 
 async function printerResponse(env: Env, orgId: string, id: string, status = 200, extra: Record<string, unknown> = {}): Promise<Response> {
   const [printer, stations] = await env.DB.batch([
-    env.DB.prepare('SELECT id, name, brand, connection, host, port, device_id, paper_mm, poll_interval, last_poll_at FROM printers WHERE id = ? AND org_id = ?').bind(id, orgId),
+    env.DB.prepare(`SELECT ${PRINTER_COLUMNS} FROM printers WHERE id = ? AND org_id = ?`).bind(id, orgId),
     env.DB.prepare('SELECT id, name FROM prep_stations WHERE org_id = ? AND printer_id = ? ORDER BY position, created_at').bind(orgId, id),
   ]);
   const row = (printer.results || [])[0] as PrinterRow | undefined;
@@ -464,7 +478,7 @@ async function printerResponse(env: Env, orgId: string, id: string, status = 200
 }
 
 async function updatePrinter(request: Request, env: Env, orgId: string, id: string): Promise<Response> {
-  const existing = await env.DB.prepare('SELECT id, name, brand, connection, host, port, device_id, paper_mm, poll_interval, last_poll_at FROM printers WHERE id = ? AND org_id = ?').bind(id, orgId).first<PrinterRow>();
+  const existing = await env.DB.prepare(`SELECT ${PRINTER_COLUMNS} FROM printers WHERE id = ? AND org_id = ?`).bind(id, orgId).first<PrinterRow>();
   if (!existing) return errorJson('printer_not_found', 404);
   const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
   const parsed = parsePrinter(body, existing);
@@ -472,15 +486,18 @@ async function updatePrinter(request: Request, env: Env, orgId: string, id: stri
   const p = parsed.value;
   await env.DB.batch([
     env.DB.prepare('UPDATE printers SET name = ?, host = ?, port = ?, device_id = ?, paper_mm = ?, poll_interval = ? WHERE id = ?').bind(p.name, p.host, p.port, p.device_id, p.paper_mm, p.poll_interval, id),
+    // Another address: its certificate names the old one - upload again.
+    ...(p.host !== existing.host ? [env.DB.prepare('UPDATE printers SET cert_pem = NULL, cert_fingerprint = NULL, cert_uploaded_at = NULL WHERE id = ?').bind(id)] : []),
     ...stationStatements(env, orgId, id, body.stationIds),
   ]);
   return printerResponse(env, orgId, id);
 }
 
 async function deletePrinter(env: Env, orgId: string, id: string): Promise<Response> {
-  const [, , removed] = await env.DB.batch([
+  const [, , , removed] = await env.DB.batch([
     env.DB.prepare('UPDATE prep_stations SET printer_id = NULL WHERE org_id = ? AND printer_id = ?').bind(orgId, id),
     env.DB.prepare('DELETE FROM print_jobs WHERE org_id = ? AND printer_id = ?').bind(orgId, id),
+    env.DB.prepare('DELETE FROM printer_cert_tokens WHERE org_id = ? AND printer_id = ?').bind(orgId, id),
     env.DB.prepare('DELETE FROM printers WHERE id = ? AND org_id = ?').bind(id, orgId),
   ]);
   return (removed.meta.changes || 0) > 0 ? json({ ok: true }) : errorJson('printer_not_found', 404);
@@ -663,6 +680,10 @@ export async function dispatchPrintingRoute(request: Request, env: Env, pathname
     if (id && sub === 'test' && method === 'POST') return testPrint(env, orgId, id, who);
     // A receipt: from a kassa or the waiter's screen (a signed-in member).
     if (id && sub === 'receipt' && method === 'POST') return who.kind === 'member' ? printReceipt(request, env, orgId, id) : json({ error: 'Forbidden' }, 403);
+    // Trusting a push printer: a code for the command that uploads its
+    // certificate, a link for an iPad's profile (any screen of the org).
+    if (id && sub === 'trust-code' && method === 'POST') return certToken(env, orgId, id, 'upload');
+    if (id && sub === 'profile-link' && method === 'POST') return certToken(env, orgId, id, 'profile');
     if (!isAdmin(who)) return json({ error: 'Forbidden' }, 403);
     if (id && sub === 'key' && method === 'POST') return newKey(env, orgId, id);
     if (id && sub === 'key' && method === 'GET') return showKey(env, orgId, id);
@@ -693,6 +714,13 @@ export async function dispatchPrintingRoute(request: Request, env: Env, pathname
 const POLL_JOBS = 5;
 
 export async function dispatchPublicPrintRoute(request: Request, env: Env, pathname: string): Promise<Response | null> {
+  const trust = pathname.match(/^\/public\/print\/(cert|profile)\/([^/]+)$/);
+  if (trust) {
+    const printerId = decodeURIComponent(trust[2]);
+    const params = new URL(request.url).searchParams;
+    if (trust[1] === 'cert') return request.method === 'POST' ? uploadCertificate(request, env, printerId, params.get('code') || '') : new Response(null, { status: 405 });
+    return request.method === 'GET' ? profile(env, printerId, params.get('token') || '') : new Response(null, { status: 405 });
+  }
   const m = pathname.match(/^\/public\/print\/epson\/([^/]+)$/);
   if (!m) return null;
   if (request.method !== 'POST') return new Response(null, { status: 405 });
@@ -768,4 +796,144 @@ async function setResponse(env: Env, printerId: string, keyHash: string, file: s
   // A failure shows on the screens that use this printer.
   if (results.some((r) => !r.success)) notifyPrinter(env, printer.org_id, [printerId]);
   return new Response(null, { status: 200 });
+}
+
+// --- Trusting a push printer (arcanum/PRINTING.md) ---
+//
+// A screen that can't reach its printer shows a command (macOS, Windows,
+// Linux) that reads the printer's own certificate, uploads it here with a
+// one-time code and trusts it on that computer. An iPad can't run it: it
+// downloads the uploaded certificate as a profile, with a link Safari can
+// open without a session.
+
+const TOKEN_MINUTES = { upload: 15, profile: 10 } as const;
+
+async function certToken(env: Env, orgId: string, printerId: string, purpose: 'upload' | 'profile'): Promise<Response> {
+  const printer = await env.DB.prepare("SELECT cert_fingerprint FROM printers WHERE id = ? AND org_id = ? AND connection = 'push'").bind(printerId, orgId).first<{ cert_fingerprint: string | null }>();
+  if (!printer) return errorJson('printer_not_found', 404);
+  if (purpose === 'profile' && !printer.cert_fingerprint) return errorJson('printer_no_certificate', 409);
+  const token = newPollKey().slice(0, 32);
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + TOKEN_MINUTES[purpose] * 60_000).toISOString();
+  await env.DB.batch([
+    // The printer's old codes go: only a few are ever around.
+    env.DB.prepare('DELETE FROM printer_cert_tokens WHERE printer_id = ? AND expires_at < ?').bind(printerId, now.toISOString()),
+    env.DB.prepare('INSERT INTO printer_cert_tokens (token_hash, org_id, printer_id, purpose, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)').bind(
+      await sha256(token),
+      orgId,
+      printerId,
+      purpose,
+      expiresAt,
+      now.toISOString()
+    ),
+  ]);
+  return json(purpose === 'upload' ? { code: token, expiresAt } : { token, expiresAt }, 201);
+}
+
+const TRUST_TEXTS = {
+  nl: {
+    badCode: 'Deze code is niet (meer) geldig. Open de printer op het scherm opnieuw en kopieer het commando nog eens.',
+    tooBig: 'Dat is geen certificaat (te groot).',
+    unreadable: 'Dat certificaat kon niet gelezen worden.',
+    notSelfSigned: 'Dit is niet het eigen certificaat van een printer (niet zelf-ondertekend).',
+    wrongHost: (host: string) => `Dit certificaat is niet voor ${host}. Klopt het adres van de printer in de console?`,
+    saved: (name: string) => `Certificaat van "${name}" opgeslagen in Arcanum.`,
+    fingerprint: 'Vingerafdruk (SHA-256)',
+    noSan: 'Let op: het certificaat noemt het adres niet als "Subject Alternative Name" - iPad, iPhone en Mac aanvaarden het dan niet.',
+    tooLong: (days: number) => `Let op: het certificaat is ${days} dagen geldig - iPad, iPhone en Mac aanvaarden er hoogstens ${APPLE_MAX_DAYS}.`,
+    notCa: 'Let op: dit certificaat is geen "certificaatautoriteit" - een iPad toont er mogelijk geen schakelaar voor onder Certificaatvertrouwen.',
+    expired: 'Let op: dit certificaat is verlopen. Maak er een nieuw op de printer.',
+    noCert: 'Voor deze printer is nog geen certificaat opgeladen.',
+    profileDescription: 'Laat dit toestel de bonprinter vertrouwen, zodat Arcanum erop kan printen.',
+  },
+  fr: {
+    badCode: 'Ce code n’est pas (plus) valable. Rouvrez l’imprimante à l’écran et copiez à nouveau la commande.',
+    tooBig: 'Ce n’est pas un certificat (trop grand).',
+    unreadable: 'Ce certificat n’a pas pu être lu.',
+    notSelfSigned: 'Ce n’est pas le certificat propre d’une imprimante (pas auto-signé).',
+    wrongHost: (host: string) => `Ce certificat n’est pas pour ${host}. L’adresse de l’imprimante dans la console est-elle correcte ?`,
+    saved: (name: string) => `Certificat de « ${name} » enregistré dans Arcanum.`,
+    fingerprint: 'Empreinte (SHA-256)',
+    noSan: 'Attention : le certificat ne cite pas l’adresse comme « Subject Alternative Name » - iPad, iPhone et Mac ne l’acceptent pas.',
+    tooLong: (days: number) => `Attention : le certificat est valable ${days} jours - iPad, iPhone et Mac en acceptent au plus ${APPLE_MAX_DAYS}.`,
+    notCa: 'Attention : ce certificat n’est pas une « autorité de certification » - un iPad n’affichera peut-être pas d’interrupteur pour lui dans Réglages des certificats.',
+    expired: 'Attention : ce certificat a expiré. Créez-en un nouveau sur l’imprimante.',
+    noCert: 'Aucun certificat n’a encore été envoyé pour cette imprimante.',
+    profileDescription: 'Fait confiance à l’imprimante de tickets sur cet appareil, pour qu’Arcanum puisse y imprimer.',
+  },
+  en: {
+    badCode: "This code isn't valid (anymore). Open the printer on the screen again and copy the command again.",
+    tooBig: "That's not a certificate (too large).",
+    unreadable: "That certificate couldn't be read.",
+    notSelfSigned: "This isn't a printer's own certificate (not self-signed).",
+    wrongHost: (host: string) => `This certificate isn't for ${host}. Is the printer's address in the console right?`,
+    saved: (name: string) => `Certificate of "${name}" saved in Arcanum.`,
+    fingerprint: 'Fingerprint (SHA-256)',
+    noSan: "Note: the certificate doesn't name the address as a \"Subject Alternative Name\" - iPad, iPhone and Mac won't accept it.",
+    tooLong: (days: number) => `Note: the certificate is valid for ${days} days - iPad, iPhone and Mac accept at most ${APPLE_MAX_DAYS}.`,
+    notCa: "Note: this certificate isn't a \"certificate authority\" - an iPad may not show a switch for it under Certificate Trust Settings.",
+    expired: 'Note: this certificate has expired. Make a new one on the printer.',
+    noCert: 'No certificate has been uploaded for this printer yet.',
+    profileDescription: 'Trusts the receipt printer on this device, so Arcanum can print on it.',
+  },
+};
+type TrustTexts = (typeof TRUST_TEXTS)['nl'];
+
+const plainText = (body: string, status = 200) => new Response(body.endsWith('\n') ? body : body + '\n', { status, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } });
+
+// A valid token for the printer, with its org's language.
+async function validToken(env: Env, printerId: string, token: string, purpose: 'upload' | 'profile') {
+  if (token.length < 20 || token.length > 100) return null;
+  return env.DB.prepare(
+    `SELECT t.token_hash, t.org_id, p.name, p.host, p.cert_pem, p.cert_fingerprint, o.name AS org_name, o.locale
+     FROM printer_cert_tokens t JOIN printers p ON p.id = t.printer_id JOIN organizations o ON o.id = t.org_id
+     WHERE t.token_hash = ? AND t.printer_id = ? AND t.purpose = ? AND t.expires_at > ? AND t.used_at IS NULL AND p.connection = 'push'`
+  )
+    .bind(await sha256(token), printerId, purpose, new Date().toISOString())
+    .first<{ token_hash: string; org_id: string; name: string; host: string | null; cert_pem: string | null; cert_fingerprint: string | null; org_name: string; locale: string }>();
+}
+
+const textsFor = (locale: string | undefined): TrustTexts => TRUST_TEXTS[(locale as keyof typeof TRUST_TEXTS) ?? 'nl'] ?? TRUST_TEXTS.nl;
+
+async function uploadCertificate(request: Request, env: Env, printerId: string, code: string): Promise<Response> {
+  const row = await validToken(env, printerId, code, 'upload');
+  if (!row) return plainText(TRUST_TEXTS.nl.badCode + '\n' + TRUST_TEXTS.en.badCode, 403);
+  const t = textsFor(row.locale);
+  const body = await request.text();
+  if (body.length > 16_384) return plainText(t.tooBig, 413);
+  const der = pemToDer(body);
+  const cert = der && parseCertificate(der);
+  if (!cert) return plainText(t.unreadable, 400);
+  if (!cert.selfSigned) return plainText(t.notSelfSigned, 400);
+  const host = row.host || '';
+  const names = namesHost(cert, host);
+  if (!names.inSan && !names.inCn) return plainText(t.wrongHost(host), 400);
+  const hex = await fingerprint(cert.der);
+  const at = new Date().toISOString();
+  await env.DB.batch([
+    env.DB.prepare('UPDATE printers SET cert_pem = ?, cert_fingerprint = ?, cert_uploaded_at = ? WHERE id = ?').bind(derToPem(cert.der), hex, at, printerId),
+    env.DB.prepare('UPDATE printer_cert_tokens SET used_at = ? WHERE token_hash = ?').bind(at, row.token_hash),
+  ]);
+  // The screens that use it show the new certificate.
+  notifyPrinter(env, row.org_id, [printerId]);
+  const days = cert.notBefore && cert.notAfter ? Math.round((cert.notAfter.getTime() - cert.notBefore.getTime()) / 86_400_000) : 0;
+  const warnings = [
+    ...(cert.notAfter && cert.notAfter.getTime() < Date.now() ? [t.expired] : []),
+    ...(!names.inSan ? [t.noSan] : []),
+    ...(days > APPLE_MAX_DAYS ? [t.tooLong(days)] : []),
+    ...(!cert.isCa ? [t.notCa] : []),
+  ];
+  return plainText([t.saved(row.name), `${t.fingerprint}: ${showFingerprint(hex)}`, ...warnings].join('\n'));
+}
+
+async function profile(env: Env, printerId: string, token: string): Promise<Response> {
+  const row = await validToken(env, printerId, token, 'profile');
+  if (!row) return plainText(TRUST_TEXTS.nl.badCode + '\n' + TRUST_TEXTS.en.badCode, 403);
+  const der = row.cert_pem ? pemToDer(row.cert_pem) : null;
+  if (!der || !row.cert_fingerprint) return plainText(textsFor(row.locale).noCert, 404);
+  const body = await mobileconfig({ printerId, printerName: row.name, orgName: row.org_name, der, fingerprint: row.cert_fingerprint, description: textsFor(row.locale).profileDescription });
+  const file = `arcanum-${row.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'printer'}.mobileconfig`;
+  return new Response(body, {
+    headers: { 'Content-Type': 'application/x-apple-aspen-config', 'Content-Disposition': `attachment; filename="${file}"`, 'Cache-Control': 'no-store' },
+  });
 }
