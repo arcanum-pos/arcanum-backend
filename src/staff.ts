@@ -94,10 +94,27 @@ export async function staffRequired(env: Env, orgId: string): Promise<boolean> {
 
 // The person for something a kassa does: refused (409 staff_required) when
 // the organisation requires one and none was chosen.
+// A personal device (the waiter screen on someone's own phone, signed in
+// with their own account - T7) chooses nobody: the account says who, and
+// the staff member linked to that account's membership, if any, is
+// recorded. The requirement is for shared devices only.
 export async function staffForSale(request: Request, env: Env, orgId: string): Promise<Staff | null | Response> {
   const staff = await staffOf(request, env, orgId);
-  if (!staff && (await staffRequired(env, orgId))) return errorJson('staff_required', 409);
-  return staff;
+  if (staff) return staff;
+  if (request.headers.get('X-Arcanum-Device') === 'personal') return linkedStaff(request, env, orgId);
+  if (await staffRequired(env, orgId)) return errorJson('staff_required', 409);
+  return null;
+}
+
+async function linkedStaff(request: Request, env: Env, orgId: string): Promise<Staff | null> {
+  const caller = extractCaller(request);
+  if (!caller) return null;
+  return env.DB.prepare(
+    `SELECT s.id, s.name FROM staff s JOIN memberships m ON m.id = s.member_id
+     WHERE s.org_id = ? AND s.archived_at IS NULL AND m.org_id = ? AND m.user_sub = ? AND m.issuer = ? AND m.status = 'active' LIMIT 1`
+  )
+    .bind(orgId, orgId, caller.sub, caller.issuer)
+    .first<Staff>();
 }
 
 type Access = { kind: 'member'; admin: boolean; who: string } | { kind: 'device'; who: string };

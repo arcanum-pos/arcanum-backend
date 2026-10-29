@@ -114,6 +114,24 @@ describe('an organisation that requires a person (S2)', () => {
     expect(tab.status).toBe(201);
     expect((await chargeCash(org, tab.body.id, 300)).body.code).toBe('staff_required');
   });
+
+  it("doesn't apply to a personal device: the account says who, or its linked staff member", async () => {
+    const org = await seedOrg();
+    await api('PUT', `/organizations/${org.orgId}/staff-settings`, { user: org.admin, body: { required: true } });
+    const body = await orderBody(org, { ...DEVICE, lines: [line('pils', 'Pils', 300, 1)] });
+    const personal = (b: unknown) => apiWith({}, 'POST', tabsPath(org.orgId), { user: org.cashier, body: b, headers: { 'X-Arcanum-Device': 'personal' } });
+    const tab = await personal(body);
+    expect(tab.status).toBe(201);
+    expect(tab.body.openedByStaff).toBeNull();
+    // Linked to the cashier's membership: that person is recorded.
+    const [membership] = await rows<{ id: string }>('SELECT id FROM memberships WHERE org_id = ? AND user_sub = ?', org.orgId, org.cashier.sub);
+    const an = await addStaff(org, 'An');
+    await api('PATCH', staffPath(org, `/${an.id}`), { user: org.admin, body: { memberId: membership.id } });
+    expect((await personal(body)).body.openedByStaff).toBe('An');
+    // Someone else's account isn't linked: nobody.
+    const mine = await apiWith({}, 'POST', tabsPath(org.orgId), { user: org.admin, body, headers: { 'X-Arcanum-Device': 'personal' } });
+    expect(mine.body.openedByStaff).toBeNull();
+  });
 });
 
 describe('who is making a ticket', () => {
