@@ -122,7 +122,7 @@ function parseVat(cell: Cell): number | undefined | CodedError {
   let n: number;
   if (typeof cell === 'number') n = cell;
   else {
-    const s = text(cell).replace('%', '').replace(',', '.').trim();
+    const s = text(cell).trim().replace(/%$/, '').replace(',', '.').trim();
     if (!s) return undefined;
     n = Number(s);
     if (!Number.isFinite(n)) return codedError('import_vat_not_a_number', { value: text(cell) });

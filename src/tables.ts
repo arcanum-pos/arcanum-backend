@@ -33,6 +33,7 @@ import { broadcastOrgEvent, callDeviceHub, notifyTabChanged, notifyTabsChanged }
 import { deviceCaller } from './device-keys';
 import { openTab, type Who } from './tabs';
 import { staffOf } from './staff';
+import { randomCode } from './random';
 
 const MAX_NAME = 30;
 
@@ -55,7 +56,7 @@ type TableState = 'free' | 'occupied' | 'clearing';
 // 20 characters from 32 without look-alikes: not guessable, short enough for a QR.
 function newToken(): string {
   const alphabet = 'abcdefghjkmnpqrstuvwxyz23456789';
-  return [...crypto.getRandomValues(new Uint8Array(20))].map((b) => alphabet[b % alphabet.length]).join('');
+  return randomCode(20, alphabet);
 }
 
 async function member(request: Request, env: Env, orgId: string): Promise<{ admin: boolean } | Response> {

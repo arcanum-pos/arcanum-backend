@@ -33,6 +33,7 @@ import { extractCaller, requireOrgRole, SERVICE_ROLES } from './auth';
 import { getDecryptedPaymentCredential } from './payment-credentials';
 import { smsConfig } from '../messaging';
 import { readColor } from '../branding';
+import { randomCode } from '../random';
 
 export interface EventRow {
   id: string;
@@ -141,8 +142,7 @@ export function linkNameOf(text: string): string {
 }
 
 function newSlug(linkName: string): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(4));
-  return `${linkName}-${[...bytes].map((b) => SUFFIX_ALPHABET[b % SUFFIX_ALPHABET.length]).join('')}`;
+  return `${linkName}-${randomCode(4, SUFFIX_ALPHABET)}`;
 }
 
 // Sets an event's readable link (a fresh suffix) — retried on the rare clash

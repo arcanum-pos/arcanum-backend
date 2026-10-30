@@ -48,6 +48,7 @@ import { json } from './http';
 import { extractCaller, requireOrgRole } from './organizations/auth';
 import type { CallerIdentity } from './organizations/types';
 import { createDeviceKey, deviceCaller, revokeDeviceKeys } from './device-keys';
+import { randomCode } from './random';
 
 const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // no 0/O, 1/I/L
 const CODE_LENGTH = 8;
@@ -100,14 +101,7 @@ interface DeviceRow {
 }
 
 function newCode(): string {
-  // Rejection sampling: 248 = 8 × 31, so every character is equally likely.
-  let code = '';
-  while (code.length < CODE_LENGTH) {
-    for (const byte of crypto.getRandomValues(new Uint8Array(16))) {
-      if (byte < 248 && code.length < CODE_LENGTH) code += CODE_ALPHABET[byte % CODE_ALPHABET.length];
-    }
-  }
-  return code;
+  return randomCode(CODE_LENGTH, CODE_ALPHABET);
 }
 
 // As typed: case, spaces and dashes don't matter.
