@@ -172,33 +172,33 @@ describe('a payment on a reader, cancelled at the kassa', () => {
     sumupReply = (_method, path) =>
       path.endsWith('/checkout') ? Response.json({ data: { checkout_id: 'co_1', client_transaction_id: 'tx_1' } }, { status: 201 })
       : path.endsWith('/checkout/co_1') ? Response.json({ data: { status: ended, payment_failure_reason: null } })
-      : new Response(null, { status: 204 })
+      : new Response(null, { status: 204 });
   }
   async function onReader(org: TestOrg) {
-    const tab = await createTab(org, { label: 'Tafel 2', lines: [line('pils', 'Pils', 250, 2)] })
-    const res = await api('POST', '/sumup/charge', { user: org.cashier, body: { orgId: org.orgId, tabId: tab.id, amount: 500, readerId: 'rdr_1', ...DEVICE } })
-    expect(res.status).toBe(201)
-    return { tab, chargeId: res.body.chargeId as string }
+    const tab = await createTab(org, { label: 'Tafel 2', lines: [line('pils', 'Pils', 250, 2)] });
+    const res = await api('POST', '/sumup/charge', { user: org.cashier, body: { orgId: org.orgId, tabId: tab.id, amount: 500, readerId: 'rdr_1', ...DEVICE } });
+    expect(res.status).toBe(201);
+    return { tab, chargeId: res.body.chargeId as string };
   }
 
   it('stops it on the reader, then the tab is free again', async () => {
-    const org = await orgWithSumup()
-    readerAnswers('cancelled')
-    const { tab, chargeId } = await onReader(org)
-    expect((await confirmCharge(org, chargeId, false)).body).toMatchObject({ ok: true, status: 'failed' })
+    const org = await orgWithSumup();
+    readerAnswers('cancelled');
+    const { tab, chargeId } = await onReader(org);
+    expect((await confirmCharge(org, chargeId, false)).body).toMatchObject({ ok: true, status: 'failed' });
     expect(sumupRequests.map((r) => `${r.method} ${new URL(r.url).pathname}`)).toEqual([
       'POST /v0.1/merchants/MSANDBOX1/readers/rdr_1/checkout',
       'POST /v0.1/merchants/MSANDBOX1/readers/rdr_1/terminate',
       'GET /v0.1/merchants/MSANDBOX1/readers/rdr_1/checkout/co_1',
-    ])
-    expect((await getTab(org, tab.id)).paymentPending).toBe(false)
-  })
+    ]);
+    expect((await getTab(org, tab.id)).paymentPending).toBe(false);
+  });
 
   it('the card was just tapped: it stays paid', async () => {
-    const org = await orgWithSumup()
-    readerAnswers('successful')
-    const { tab, chargeId } = await onReader(org)
-    expect((await confirmCharge(org, chargeId, false)).body).toMatchObject({ status: 'succeeded' })
-    expect((await getTab(org, tab.id)).status).toBe('closed')
-  })
-})
+    const org = await orgWithSumup();
+    readerAnswers('successful');
+    const { tab, chargeId } = await onReader(org);
+    expect((await confirmCharge(org, chargeId, false)).body).toMatchObject({ status: 'succeeded' });
+    expect((await getTab(org, tab.id)).status).toBe('closed');
+  });
+});

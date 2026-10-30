@@ -1,7 +1,9 @@
 # OpenSSF Scorecard: an independent score of this repo's security practices
 # (branch protection, pinned dependencies, token permissions, CI checks, …).
-# Results under Security → Code scanning, and published at
-# https://scorecard.dev/viewer/?uri=github.com/<this repo>.
+# Published at https://scorecard.dev/viewer/?uri=github.com/<this repo>, not
+# uploaded to Code scanning: some checks can't apply to a one-person project
+# that works on main (code review by a second person, fuzzing, the
+# best-practices badge), and would only sit there as open alerts.
 name: Scorecard
 
 on:
@@ -17,17 +19,13 @@ jobs:
   analysis:
     runs-on: ubuntu-latest
     permissions:
-      security-events: write
       id-token: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - uses: ossf/scorecard-action@v2.4.4
+      - uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
         with:
           results_file: results.sarif
           results_format: sarif
           publish_results: true
-      - uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: results.sarif

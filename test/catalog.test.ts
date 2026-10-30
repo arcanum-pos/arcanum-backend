@@ -306,7 +306,7 @@ describe('catalogs', () => {
     expect((await api('PATCH', path, { user: org.cashier, body: { color: '#2563eb' } })).status).toBe(403);
     // A rename leaves the colour alone.
     await ok(api('PATCH', path, { user: org.admin, body: { name: 'Dranken' } }));
-    const c = await getCatalog(org, s.catalog.id)
+    const c = await getCatalog(org, s.catalog.id);
     expect([c.sections[0].name, c.sections[0].color]).toEqual(['Dranken', '#15803d']);
     const k = await ok(api('GET', catalogs(org.orgId, `/${s.catalog.id}/kassa`), { user: org.cashier }));
     expect(k.sections.map((x: any) => x.color)).toEqual(['#15803d', null]);

@@ -275,7 +275,7 @@ describe('a printer that asks for its work', () => {
     const v = await venue(org);
     const p = (await admin(org, 'POST', '/printers', { ...POLLER, stationIds: [v.bar.id] })).body;
 
-    const nothing = await asPrinter(p.id, p.pollKey, { ConnectionType: 'GetRequest', ID: '' })
+    const nothing = await asPrinter(p.id, p.pollKey, { ConnectionType: 'GetRequest', ID: '' });
     expect(nothing).toMatchObject({ status: 200, body: '' });
     expect((await rows<{ last_poll_at: string }>('SELECT last_poll_at FROM printers WHERE id = ?', p.id))[0].last_poll_at).toBeTruthy();
 
