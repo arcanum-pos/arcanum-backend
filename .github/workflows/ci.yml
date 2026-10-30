@@ -1,0 +1,38 @@
+# Every push and pull request: the same checks as arcanum-auth's (its
+# HARDENING.md), without the ZAP scan - visitors reach this Worker only
+# through arcanum-bff, whose CI scans it. A push deploys nothing
+# (installations get this Worker from arcanum-releases), but a red run here
+# means the next build shouldn't ship.
+name: CI
+
+on:
+  push:
+  pull_request:
+  schedule:
+    # Weekly, for advisories published since the last push.
+    - cron: '23 5 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      # What's deployed: no known high or critical vulnerability.
+      - run: npm audit --omit=dev --audit-level=high
+
+  semgrep:
+    runs-on: ubuntu-latest
+    container: semgrep/semgrep
+    steps:
+      - uses: actions/checkout@v7
+      - run: semgrep scan --config p/typescript --config p/javascript --config p/secrets --config p/jwt --metrics=off --error src
