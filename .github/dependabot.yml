@@ -27,3 +27,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # Node stays on its LTS line, the same as distroless' nodejs24: a new
+      # major (an odd one is never LTS) is a deliberate step, by hand.
+      - dependency-name: node
+        update-types: ['version-update:semver-major']
