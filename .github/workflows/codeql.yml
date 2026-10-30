@@ -1,0 +1,29 @@
+# CodeQL with the security and the quality queries (security-and-quality):
+# besides vulnerabilities also dead code, unused variables, always-true
+# comparisons and the like. Free for a public repo. Findings show under
+# Security → Code scanning; triage them there (fix, or dismiss with a reason).
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '41 4 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+          queries: security-and-quality
+      - uses: github/codeql-action/analyze@v3
