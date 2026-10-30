@@ -1,5 +1,7 @@
 # arcanum-backend
 
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/arcanum-pos/arcanum-backend/badge)](https://scorecard.dev/viewer/?uri=github.com/arcanum-pos/arcanum-backend)
+
 
 Cloudflare Worker handling payments (Bancontact, SumUp, cash), tabs, catalogs and reports for Arcanum.
 
