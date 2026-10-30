@@ -18,6 +18,9 @@ updates:
       # a newer pool doesn't start with it. Upgraded together, by hand.
       - dependency-name: '@cloudflare/vitest-pool-workers'
       - dependency-name: miniflare
+      # Wrangler too: a newer one may need a newer miniflare than the pinned
+      # one (`wrangler dev` stops starting - the ZAP scan needs it).
+      - dependency-name: wrangler
   - package-ecosystem: github-actions
     directory: /
     schedule:
