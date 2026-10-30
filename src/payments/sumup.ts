@@ -370,8 +370,10 @@ export async function postSumupCallback(request: Request, env: Env, chargeId: st
 // Only by a member of the charge's own org.
 export async function confirmChargeFromPos(request: Request, env: Env): Promise<Response> {
   if (!extractCaller(request)) return json({ error: 'Unauthorized' }, 401);
-  const body = (await request.json().catch(() => ({}))) as { chargeId?: string; success?: boolean };
+  const body = (await request.json().catch(() => ({}))) as { chargeId?: string; success?: boolean; extraTipCents?: unknown };
   if (!body.chargeId) return json({ error: 'chargeId is required' }, 400);
+  const extraTipCents = parseTipCents(body.extraTipCents);
+  if (extraTipCents === null) return json({ error: 'extraTipCents must be an integer between 0 and 100000' }, 400);
   const charge = await getCharge(env, body.chargeId);
   if (!charge) return json({ error: 'Unknown chargeId' }, 404);
   const refused = await refuseUnlessOrgMember(request, env, charge.orgId);
@@ -416,7 +418,10 @@ export async function confirmChargeFromPos(request: Request, env: Env): Promise<
     return json({ ok: true, chargeId: charge.id, status: current?.status ?? charge.status });
   }
 
-  await resolveCharge(env, body.chargeId, { success: body.success !== false });
+  // "Keep the change": only for cash, where the cashier holds the money.
+  if (extraTipCents > 0 && (charge.method !== 'cash' || body.success === false)) return json({ error: 'extraTipCents is only for a confirmed cash payment' }, 400);
+  if (charge.tipCents + extraTipCents > 100_000) return json({ error: 'The tip may not exceed 100000' }, 400);
+  await resolveCharge(env, body.chargeId, { success: body.success !== false, extraTipCents });
   return json({ ok: true, chargeId: body.chargeId });
 }
 

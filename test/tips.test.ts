@@ -95,3 +95,57 @@ describe('tips on a plain (non-tab) charge', () => {
     expect(tx.tip_cents).toBe(100);
   });
 });
+
+// "Keep the change": a cash customer leaves more than asked; the cashier
+// adds it as a tip when confirming (the kassa's Ontvangen field).
+describe('a tip added when confirming cash', () => {
+  function confirmWithTip(org: TestOrg, chargeId: string, extraTipCents: unknown, success = true) {
+    return api('POST', '/sumup/confirm', { user: org.cashier, body: { chargeId, success, extraTipCents } });
+  }
+
+  it('adds it to the amount and the tip; the tab is paid, the extra counts as tip', async () => {
+    const org = await seedOrg();
+    const tab = await openTab(org);
+    const res = await chargeCash(org, tab.id, 1100, { tipCents: 100 });
+    expect((await confirmWithTip(org, res.body.chargeId, 250)).status).toBe(200);
+
+    const closed = await getTab(org, tab.id);
+    expect([closed.status, closed.paidCents, closed.outstandingCents]).toEqual(['closed', 1000, 0]);
+    expect(closed.payments[0]).toMatchObject({ amountCents: 1350, tipCents: 350 });
+    const [tx] = await rows<{ amount_cents: number; tip_cents: number }>('SELECT amount_cents, tip_cents FROM transactions WHERE tab_id = ?', tab.id);
+    expect(tx).toEqual({ amount_cents: 1350, tip_cents: 350 });
+  });
+
+  it('works on a plain (non-tab) cash charge too', async () => {
+    const org = await seedOrg();
+    const res = await api('POST', '/sumup/charge', { user: org.cashier, body: { orgId: org.orgId, method: 'cash', amount: 500, ...DEVICE } });
+    await confirmWithTip(org, res.body.chargeId, 50);
+    const [charge] = await rows<{ amount_cents: number; tip_cents: number; status: string }>('SELECT amount_cents, tip_cents, status FROM charges WHERE id = ?', res.body.chargeId);
+    expect(charge).toEqual({ amount_cents: 550, tip_cents: 50, status: 'succeeded' });
+  });
+
+  it('is only for cash, only on success, and never twice', async () => {
+    const org = await seedOrg();
+    const tab = await openTab(org);
+    const sumup = await api('POST', '/sumup/charge', { user: org.cashier, body: { orgId: org.orgId, method: 'sumup', tabId: tab.id, amount: 1000, ...DEVICE } });
+    expect((await confirmWithTip(org, sumup.body.chargeId, 100)).status).toBe(400);
+    expect((await confirmWithTip(org, sumup.body.chargeId, 0, false)).status).toBe(200);
+
+    const cash = await chargeCash(org, tab.id, 1000);
+    expect((await confirmWithTip(org, cash.body.chargeId, 100, false)).status).toBe(400);
+    expect((await confirmWithTip(org, cash.body.chargeId, 100)).status).toBe(200);
+    // A second confirm (a double tap) changes nothing.
+    await confirmWithTip(org, cash.body.chargeId, 100);
+    const [charge] = await rows<{ amount_cents: number; tip_cents: number }>('SELECT amount_cents, tip_cents FROM charges WHERE id = ?', cash.body.chargeId);
+    expect(charge).toEqual({ amount_cents: 1100, tip_cents: 100 });
+  });
+
+  it('refuses an invalid amount (400) and leaves the payment open', async () => {
+    const org = await seedOrg();
+    const tab = await openTab(org);
+    const res = await chargeCash(org, tab.id, 1000);
+    for (const bad of [-1, 1.5, 'x', 100_001]) expect((await confirmWithTip(org, res.body.chargeId, bad)).status).toBe(400);
+    const [charge] = await rows<{ status: string }>('SELECT status FROM charges WHERE id = ?', res.body.chargeId);
+    expect(charge.status).toBe('pending');
+  });
+});

@@ -252,6 +252,9 @@ export interface ResolveOutcome {
   providerStatus?: string | null;
   transactionCode?: string | null;
   errorMessage?: string | null;
+  // Cash only, on success: "keep the change" told at the kassa's confirm,
+  // added to the amount and the tip in the same update that resolves it.
+  extraTipCents?: number;
 }
 
 export interface ResolveResult {
@@ -268,9 +271,11 @@ export interface ResolveResult {
 export async function resolveCharge(env: Env, id: string, outcome: ResolveOutcome): Promise<ResolveResult | null> {
   const status: ChargeStatus = outcome.success ? 'succeeded' : 'failed';
   const resolvedAt = new Date().toISOString();
+  const extraTip = outcome.success && outcome.extraTipCents ? outcome.extraTipCents : 0;
 
   const result = await env.DB.prepare(
-    `UPDATE charges SET status = ?, provider_status = ?, transaction_code = ?, error_message = ?, resolved_at = ?
+    `UPDATE charges SET status = ?, provider_status = ?, transaction_code = ?, error_message = ?, resolved_at = ?,
+       amount_cents = amount_cents + ?, tip_cents = tip_cents + ?
      WHERE id = ? AND status = 'pending'`
   )
     .bind(
@@ -279,6 +284,8 @@ export async function resolveCharge(env: Env, id: string, outcome: ResolveOutcom
       outcome.transactionCode ?? null,
       outcome.errorMessage ? outcome.errorMessage.slice(0, 200) : null,
       resolvedAt,
+      extraTip,
+      extraTip,
       id
     )
     .run();
