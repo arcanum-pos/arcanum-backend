@@ -207,6 +207,19 @@ describe('GET /tabs: status=all and since', () => {
     expect((await list(org, '')).body.map((t: any) => t.id)).toEqual([openToday.id, stillOpen.id]);
   });
 
+  it("a partly paid bill (a split part, or some products) is in today's bills, open, with what's paid and what's left", async () => {
+    const org = await seedOrg();
+    const since = new Date(Date.now() - 60 * 60_000).toISOString();
+    const tab = await createTab(org, { label: 'deels betaald', lines: [line('bon', 'Bonnen', 100, 10)] });
+    const part = await chargeCash(org, tab.id, 400, { partial: true });
+    expect(part.status).toBe(201);
+    await confirmCharge(org, part.body.chargeId);
+
+    const res = await list(org, `?status=all&since=${encodeURIComponent(since)}`);
+    const shown = res.body.find((t: any) => t.id === tab.id);
+    expect(shown).toMatchObject({ status: 'open', totalCents: 1000, paidCents: 400, outstandingCents: 600 });
+  });
+
   it('refuses an invalid since or status (400)', async () => {
     const org = await seedOrg();
     for (const q of ['?since=gisteren', '?since=', '?status=all&since=2026-13-45T00:00:00Z', '?status=paid']) {
