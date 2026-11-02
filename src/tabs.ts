@@ -147,13 +147,21 @@ const SUMMARY_SELECT = `SELECT tabs.*, ${TOTAL_SQL} AS total_cents, ${PAID_SQL} 
 // open and a line added halfway spreads over the remaining parts.
 function splitState(row: TabSummaryRow) {
   if (!row.split_parts) return null;
-  const left = Math.max(1, row.split_parts - (row.split_paid || 0));
   const outstanding = row.total_cents - row.paid_cents;
   return {
     parts: row.split_parts,
     paid: Math.min(row.split_paid || 0, row.split_parts),
-    nextCents: left === 1 ? outstanding : Math.floor(outstanding / left),
+    nextCents: splitPartsCents(outstanding, partsLeft(row.split_parts, row.split_paid || 0), 1),
   };
+}
+
+const partsLeft = (parts: number, paid: number) => Math.max(1, parts - paid);
+
+// `count` of the parts left paid at once (3 of 11): their share of what's
+// open, rounded down; all of them take the rest. The same rounding as one
+// part at a time, so the kassa computes it too (kassa/lib.ts splitPartsCents).
+export function splitPartsCents(outstanding: number, left: number, count: number): number {
+  return count >= left ? outstanding : Math.floor((outstanding * count) / left);
 }
 
 function rowToTabSummary(row: TabSummaryRow) {
@@ -942,8 +950,9 @@ export interface TabChargeContext {
   // Per item: the units this payment covers (empty otherwise).
   lines: { lineId: string; quantity: number }[];
   // The part this payment would be of the tab's "Gelijk verdelen" plan
-  // (next unpaid, 1-based), 0 without a plan.
+  // (next unpaid, 1-based), 0 without a plan; and how many parts it covers.
   splitPart: number;
+  splitCount: number;
   // The legacy `items` JSON (bon/fietstocht/.../fooi) derived from the tab's
   // net lines — what transactions.items and every report built on it still
   // expect until reports move to order_lines. Derived here, not taken from
@@ -970,7 +979,7 @@ export async function prepareTabCharge(
   // view (a line added elsewhere, a split changed) gets a 409 instead of
   // silently paying the wrong amount: the whole tab (default), the next
   // part of its split, or deliberately any part of it.
-  intent: { splitPart?: boolean; partial?: boolean; lines?: unknown } = {}
+  intent: { splitPart?: boolean; splitParts?: unknown; partial?: boolean; lines?: unknown } = {}
 ): Promise<{ ok: true; context: TabChargeContext } | { ok: false; response: Response }> {
   const refusal = await authorize(request, env, orgId);
   if (refusal) return { ok: false, response: refusal };
@@ -992,7 +1001,7 @@ export async function prepareTabChargeFor(
   tabId: string,
   amountCents: number,
   tipCents = 0,
-  intent: { splitPart?: boolean; partial?: boolean; lines?: unknown } = {}
+  intent: { splitPart?: boolean; splitParts?: unknown; partial?: boolean; lines?: unknown } = {}
 ): Promise<{ ok: true; context: TabChargeContext } | { ok: false; response: Response }> {
   const tab = await loadTabSummary(env, orgId, tabId);
   if (!tab) return { ok: false, response: errorJson('tab_not_found', 404) };
@@ -1011,10 +1020,16 @@ export async function prepareTabChargeFor(
     itemLines = picked.lines;
   }
 
+  // Several parts at once (3 of 11): 1 up to the parts left.
+  const splitCount = intent.splitParts === undefined || intent.splitParts === null ? 1 : Number(intent.splitParts);
+  if (!Number.isInteger(splitCount) || splitCount < 1 || splitCount > 50) return { ok: false, response: json({ error: 'splitParts must be an integer from 1' }, 400) };
+  const left = tab.split ? Math.max(1, tab.split.parts - tab.split.paid) : 0;
+  if (intent.splitPart && splitCount > left) return { ok: false, response: errorJson('tab_changed', 409, { tab }) };
+
   const expected = intent.lines !== undefined
     ? paysCents >= 1 && paysCents <= tab.outstandingCents
     : intent.splitPart
-    ? paysCents === tab.split?.nextCents
+    ? !!tab.split && paysCents === splitPartsCents(tab.outstandingCents, left, splitCount)
     : intent.partial
       ? paysCents >= 1 && paysCents <= tab.outstandingCents
       : paysCents === tab.outstandingCents;
@@ -1045,6 +1060,7 @@ export async function prepareTabChargeFor(
     context: {
       ...(settlesTab ? { items, description } : { items: {}, description: `${description} (deel)` }),
       splitPart: tab.split ? tab.split.paid + 1 : 0,
+      splitCount: intent.splitPart ? splitCount : 1,
       lines: itemLines,
     },
   };
@@ -1088,7 +1104,8 @@ export function isPendingTabChargeConflict(err: unknown): boolean {
 // no receipt number is ever skipped. The paid >= total check lives inside
 // the SQL too, not just in a read beforehand. Idempotent — a second call on
 // an already-closed tab changes nothing.
-export async function settleTab(env: Env, tabId: string, splitPart = false): Promise<void> {
+// `splitParts`: the parts of a "Gelijk verdelen" plan this payment covered (0: none).
+export async function settleTab(env: Env, tabId: string, splitParts = 0): Promise<void> {
   const closable = `status = 'open' AND ${PAID_SQL} >= ${TOTAL_SQL}`;
   const tab = await env.DB.prepare('SELECT org_id FROM tabs WHERE id = ?').bind(tabId).first<{ org_id: string }>();
   if (!tab) return;
@@ -1096,7 +1113,7 @@ export async function settleTab(env: Env, tabId: string, splitPart = false): Pro
   await env.DB.batch([
     // One more part of a "Gelijk verdelen" plan paid (the charge is only
     // resolved once — resolveCharge's pending → succeeded — so this can't double count).
-    ...(splitPart ? [env.DB.prepare(`UPDATE tabs SET split_paid = split_paid + 1 WHERE id = ? AND split_parts IS NOT NULL`).bind(tabId)] : []),
+    ...(splitParts > 0 ? [env.DB.prepare(`UPDATE tabs SET split_paid = MIN(split_parts, split_paid + ?) WHERE id = ? AND split_parts IS NOT NULL`).bind(splitParts, tabId)] : []),
     env.DB.prepare(`INSERT OR IGNORE INTO org_counters (org_id, name, value) VALUES (?, 'receipt', 0)`).bind(tab.org_id),
     env.DB.prepare(
       `UPDATE org_counters SET value = value + 1

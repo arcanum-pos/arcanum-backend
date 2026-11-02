@@ -208,7 +208,7 @@ export const EXPORT_TABLES: TableSpec[] = [
     table: 'charges',
     columns: [
       'id', 'method', 'status', 'provider_status', 'amount_cents', 'description', 'items', 'slot_id', 'device_id', 'device_name', 'user_name',
-      'user_email', 'created_at', 'resolved_at', 'transaction_code', 'error_message', 'provider_ref', 'expires_at', 'tab_id', 'tip_cents', 'split_part',
+      'user_email', 'created_at', 'resolved_at', 'transaction_code', 'error_message', 'provider_ref', 'expires_at', 'tab_id', 'tip_cents', 'split_part', 'split_count',
       'staff_id', 'staff_name', 'shift_id',
     ],
     excluded: {

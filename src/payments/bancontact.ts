@@ -69,6 +69,8 @@ export async function createPayment(request: Request, env: Env): Promise<Respons
     tabId?: string;
     tipCents?: number;
     splitPart?: boolean;
+    // How many parts of the plan this payment covers (1 by default).
+    splitParts?: unknown;
     partial?: boolean;
     lines?: unknown;
     registerId?: unknown;
@@ -99,13 +101,15 @@ export async function createPayment(request: Request, env: Env): Promise<Respons
   let items = body.items || {};
   let description = body.description ? String(body.description).slice(0, 140) : '';
   let splitPart = 0;
+  let splitCount = 1;
   let lines: { lineId: string; quantity: number }[] = [];
   if (tabId) {
-    const prepared = await prepareTabCharge(request, env, orgId, tabId, amountCents, tipCents, { splitPart: body.splitPart === true, partial: body.partial === true, lines: body.lines });
+    const prepared = await prepareTabCharge(request, env, orgId, tabId, amountCents, tipCents, { splitPart: body.splitPart === true, splitParts: body.splitParts, partial: body.partial === true, lines: body.lines });
     if (!prepared.ok) return prepared.response;
     items = prepared.context.items;
     description = description || prepared.context.description;
     splitPart = prepared.context.splitPart;
+    splitCount = prepared.context.splitCount;
     lines = prepared.context.lines;
   }
 
@@ -117,6 +121,7 @@ export async function createPayment(request: Request, env: Env): Promise<Respons
     items,
     tabId,
     splitPart: body.splitPart === true ? splitPart : 0,
+    splitCount,
     lines,
     posTerminalId: body.posTerminalId ? String(body.posTerminalId) : null,
     slotId: body.slotId ? String(body.slotId) : null,
@@ -145,6 +150,7 @@ export async function startBancontactPayment(
     items: Record<string, unknown>;
     tabId: string | null;
     splitPart: number;
+    splitCount?: number;
     lines: { lineId: string; quantity: number }[];
     posTerminalId: string | null;
     slotId: string | null;
@@ -158,7 +164,7 @@ export async function startBancontactPayment(
     returnUrl: string | null;
   }
 ): Promise<Response> {
-  const { orgId, amountCents, tipCents, description, items, tabId, splitPart, lines, posTerminalId } = p;
+  const { orgId, amountCents, tipCents, description, items, tabId, splitPart, splitCount, lines, posTerminalId } = p;
   const credential = await resolveCredential(env, orgId);
   if (!credential) {
     return errorJson('bancontact_not_configured', 400);
@@ -223,6 +229,7 @@ export async function startBancontactPayment(
       tabId,
       tipCents,
       splitPart,
+      splitCount,
       lines,
       providerRef: data.paymentId || null,
       // Stored so a linked CFD — same-device or a genuinely separate one —

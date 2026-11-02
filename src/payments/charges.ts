@@ -41,6 +41,8 @@ export interface ChargeRecord {
   tipCents: number;
   // Which part of the tab's "Gelijk verdelen" plan this pays (1-based; 0 = not a part).
   splitPart: number;
+  // How many parts it covers, from splitPart on (3 of 11 at once).
+  splitCount: number;
   // Who handled it, on a shared device (staff.ts).
   staffId?: string | null;
   staffName?: string | null;
@@ -73,6 +75,7 @@ interface ChargeRow {
   tab_id: string | null;
   tip_cents: number;
   split_part?: number;
+  split_count?: number;
   staff_id?: string | null;
   staff_name?: string | null;
   shift_id?: string | null;
@@ -104,6 +107,7 @@ function rowToCharge(row: ChargeRow): ChargeRecord {
     tabId: row.tab_id,
     tipCents: row.tip_cents || 0,
     splitPart: row.split_part || 0,
+    splitCount: row.split_count || 1,
     staffId: row.staff_id ?? null,
     staffName: row.staff_name ?? null,
     shiftId: row.shift_id ?? null,
@@ -139,6 +143,8 @@ export interface CreateChargeFields {
   // Which part of the tab's "Gelijk verdelen" plan this pays — from
   // prepareTabCharge, never the client (counts toward split_paid once it succeeds).
   splitPart?: number;
+  // How many parts from splitPart on (prepareTabCharge, 1 by default).
+  splitCount?: number;
   // Per item: the units this payment covers — written with the charge, in
   // the same batch (see tabs.ts checkItemLines).
   lines?: { lineId: string; quantity: number }[];
@@ -167,8 +173,8 @@ export async function createCharge(env: Env, fields: CreateChargeFields): Promis
 
   const insertCharge = env.DB.prepare(
     `INSERT INTO charges
-      (id, org_id, method, status, provider_status, amount_cents, description, pos_terminal_id, items, slot_id, device_id, device_name, user_name, user_email, created_at, provider_ref, provider_data, expires_at, tab_id, tip_cents, split_part, staff_id, staff_name, shift_id)
-     VALUES (?, ?, ?, 'pending', NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      (id, org_id, method, status, provider_status, amount_cents, description, pos_terminal_id, items, slot_id, device_id, device_name, user_name, user_email, created_at, provider_ref, provider_data, expires_at, tab_id, tip_cents, split_part, split_count, staff_id, staff_name, shift_id)
+     VALUES (?, ?, ?, 'pending', NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
     .bind(
       id,
@@ -190,6 +196,7 @@ export async function createCharge(env: Env, fields: CreateChargeFields): Promis
       fields.tabId || null,
       fields.tipCents || 0,
       fields.tabId && fields.splitPart ? fields.splitPart : 0,
+      fields.tabId && fields.splitPart ? fields.splitCount || 1 : 1,
       fields.staffId || null,
       fields.staffName || null,
       fields.shiftId || null
@@ -301,7 +308,7 @@ export async function resolveCharge(env: Env, id: string, outcome: ResolveOutcom
     }
     if (record.status === 'succeeded') {
       await recordChargeTransaction(env, record);
-      if (record.tabId) await settleTab(env, record.tabId, record.splitPart > 0);
+      if (record.tabId) await settleTab(env, record.tabId, record.splitPart > 0 ? record.splitCount : 0);
     }
     // Every kassa of the org: the tab's paymentPending (and, on success,
     // paid/outstanding/split/status) just changed — failed and expired too.

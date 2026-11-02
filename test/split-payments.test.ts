@@ -122,6 +122,43 @@ describe('"Gelijk verdelen"', () => {
     expect((await split(org, tab.id, 2)).status).toBe(409); // closed
   });
 
+  it('several parts in one payment (3 of 11, then 2, 2 and 4): each counts, the last takes the rest', async () => {
+    const org = await seedOrg();
+    const tab = await createTab(org, { label: 'Tafel 5', lines: [line('bon', 'Bonnen', 100, 100)] }); // 10000
+    await split(org, tab.id, 11);
+    await pay(org, tab.id, 2727, { splitPart: true, splitParts: 3 }); // 10000 * 3 / 11
+    expect((await getTab(org, tab.id)).split).toEqual({ parts: 11, paid: 3, nextCents: 909 });
+    await pay(org, tab.id, 1818, { splitPart: true, splitParts: 2, method: 'sumup' }); // 7273 * 2 / 8
+    await pay(org, tab.id, 1818, { splitPart: true, splitParts: 2 }); // 5455 * 2 / 6
+    expect((await getTab(org, tab.id)).split).toEqual({ parts: 11, paid: 7, nextCents: 909 });
+    const last = await pay(org, tab.id, 3637, { splitPart: true, splitParts: 4 });
+    const parts = await rows<{ split_part: number; split_count: number }>('SELECT split_part, split_count FROM charges WHERE tab_id = ? ORDER BY created_at, rowid', tab.id);
+    expect(parts.map((p) => [p.split_part, p.split_count])).toEqual([[1, 3], [4, 2], [6, 2], [8, 4]]);
+    expect((await api('GET', `/sumup/status/${last}`, { user: org.cashier })).body).toMatchObject({ splitPart: 8, splitCount: 4 });
+    const closed = await getTab(org, tab.id);
+    expect([closed.status, closed.paidCents]).toEqual(['closed', 10000]);
+  });
+
+  it('several parts: more than are left, another amount, or not a count is refused', async () => {
+    const org = await seedOrg();
+    const tab = await createTab(org, { label: 'Tafel 5', lines: [line('bon', 'Bonnen', 100, 30)] });
+    await split(org, tab.id, 3);
+    await pay(org, tab.id, 1000, { splitPart: true });
+    expect((await chargeCash(org, tab.id, 2000, { splitPart: true, splitParts: 3 })).status).toBe(409); // 2 left
+    expect((await chargeCash(org, tab.id, 1000, { splitPart: true, splitParts: 2 })).status).toBe(409); // 2 parts are 2000
+    for (const bad of [0, 1.5, 'twee']) expect((await chargeCash(org, tab.id, 2000, { splitPart: true, splitParts: bad })).status, String(bad)).toBe(400);
+    expect((await chargeCash(org, tab.id, 2000, { splitPart: true, splitParts: 2 })).status).toBe(201);
+  });
+
+  it('a failed payment of several parts counts none of them', async () => {
+    const org = await seedOrg();
+    const tab = await createTab(org, { label: 'Tafel 5', lines: [line('bon', 'Bonnen', 100, 30)] });
+    await split(org, tab.id, 3);
+    const failed = await chargeCash(org, tab.id, 2000, { splitPart: true, splitParts: 2 });
+    await confirmCharge(org, failed.body.chargeId, false);
+    expect((await getTab(org, tab.id)).split).toEqual({ parts: 3, paid: 0, nextCents: 1000 });
+  });
+
   it('refuses more parts than cents open', async () => {
     const org = await seedOrg();
     const tab = await createTab(org, { label: 'Tafel 2', lines: [line('bon', 'Bonnen', 100, 1)] });

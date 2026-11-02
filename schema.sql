@@ -310,6 +310,8 @@ CREATE TABLE IF NOT EXISTS charges (
   tip_cents INTEGER NOT NULL DEFAULT 0,
   -- Which part of the tab's "Gelijk verdelen" plan this pays (1-based; 0 = not a part) (0018).
   split_part INTEGER NOT NULL DEFAULT 0,
+  -- How many parts it covers, from split_part on (0052).
+  split_count INTEGER NOT NULL DEFAULT 1,
   -- Who handled the payment (migration 0035).
   staff_id TEXT,
   staff_name TEXT,
@@ -946,3 +948,4 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0048_printer_polling.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0049_receipts.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0050_printer_poll_link.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0051_printer_certificates.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0052_split_count.sql');
