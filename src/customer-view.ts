@@ -7,6 +7,10 @@
 // kassa itself gets it over the browser's own channel, not through here.
 //
 //   PUT /organizations/:org/devices/:pos/customer-view   member   { order: CustomerOrder | null, seq }
+//                                                        → { shown, linked }: shown, whether a display on
+//                                                          another device gets it (else the kassa stops
+//                                                          sending until its links change); linked, whether
+//                                                          any device elsewhere hangs off this kassa
 //   GET /organizations/:org/devices/:cfd/customer-view   member, or that display's own key
 //                                                        → { order, seq } of the kassa it's linked to
 //
@@ -61,9 +65,26 @@ export function readOrder(value: unknown): CustomerViewOrder | null {
   };
 }
 
-async function device(env: Env, terminalId: string): Promise<{ org_id: string | null; role: string; linked_to: string | null } | null> {
+interface Device {
+  org_id: string | null;
+  role: string;
+  linked_to: string | null;
+  // The devices linked to it (devicehub since 0.1.91; absent from an older one).
+  linked?: { terminal_id: string; role: string }[];
+}
+
+async function device(env: Env, terminalId: string): Promise<Device | null> {
   const res = await callDeviceHub(env, `/devices/${encodeURIComponent(terminalId)}`, {});
-  return res.ok ? ((await res.json()) as { org_id: string | null; role: string; linked_to: string | null }) : null;
+  return res.ok ? ((await res.json()) as Device) : null;
+}
+
+// What hangs off a kassa, from its device lookup - asked separately only
+// from a devicehub that doesn't say.
+async function linkedTo(env: Env, posId: string, pos: Device): Promise<{ terminal_id: string; role: string }[]> {
+  if (pos.linked) return pos.linked;
+  const res = await callDeviceHub(env, `/devices/${encodeURIComponent(posId)}/linked?role=cfd`, {});
+  const display = res.ok ? ((await res.json().catch(() => null)) as { terminal_id?: string } | null) : null;
+  return display?.terminal_id ? [{ terminal_id: display.terminal_id, role: 'cfd' }] : [];
 }
 
 async function member(request: Request, env: Env, orgId: string): Promise<boolean> {
@@ -80,9 +101,9 @@ async function putView(request: Request, env: Env, orgId: string, posId: string)
   const seq = int(body?.seq, 0, Number.MAX_SAFE_INTEGER);
   if (seq === null) return json({ error: 'seq is required' }, 400);
   // A display on another device? (Its own second window gets it directly.)
-  const linked = await callDeviceHub(env, `/devices/${encodeURIComponent(posId)}/linked?role=cfd`, {});
-  const display = linked.ok ? ((await linked.json().catch(() => null)) as { terminal_id?: string } | null) : null;
-  if (!display?.terminal_id || display.terminal_id === `display-of-${posId}`) return json({ shown: false });
+  const elsewhere = (await linkedTo(env, posId, pos)).filter((d) => d.terminal_id !== `display-of-${posId}`);
+  const linked = elsewhere.length > 0;
+  if (!elsewhere.some((d) => d.role === 'cfd')) return json({ shown: false, linked });
 
   const order = readOrder(body?.order);
   const saved = await env.DB.prepare(
@@ -92,7 +113,7 @@ async function putView(request: Request, env: Env, orgId: string, posId: string)
     .bind(posId, orgId, order ? JSON.stringify(order) : null, seq, new Date().toISOString())
     .run();
   if (saved.meta.changes) await broadcastPaymentEvent(env, posId, 'order_shown', {});
-  return json({ shown: true });
+  return json({ shown: true, linked });
 }
 
 async function getView(request: Request, env: Env, orgId: string, displayId: string): Promise<Response> {

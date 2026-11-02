@@ -201,6 +201,7 @@ export const ERROR_TEXTS = {
   icon_slot_unknown: 'Voor deze pagina kan je geen icoon instellen',
   icon_invalid: 'Dit icoon kon niet bewaard worden ({size} px): kies een andere afbeelding',
   payment_cancel_unconfirmed: 'De betaling kon nog niet geannuleerd worden bij de provider - probeer opnieuw (anders vervalt ze vanzelf)',
+  payment_already_failed: 'Deze betaling is al mislukt - er is niets betaald. Annuleer ze en probeer opnieuw.',
   branding_color_invalid: 'Kies een kleur als #rrggbb',
   branding_logo_invalid: 'Dit logo kon niet bewaard worden: kies een andere afbeelding',
   pairing_code_invalid: 'Deze koppelcode klopt niet, is al gebruikt of is verlopen - vraag een beheerder om een nieuwe',

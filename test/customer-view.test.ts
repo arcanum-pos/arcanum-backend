@@ -14,16 +14,22 @@ interface Device {
 }
 let registry: Map<string, Device>;
 let broadcasts: { pos_terminal_id: string; event: string }[];
+// The devicehub paths asked, and whether it's one from before 0.1.91 (no `linked` in a device).
+let asked: string[];
+let oldDevicehub: boolean;
 
 beforeEach(() => {
   registry = new Map();
   broadcasts = [];
+  asked = [];
+  oldDevicehub = false;
   // arcanum-devicehub, in memory.
   vi.spyOn(env.ARCANUM_DEVICEHUB_SERVICE, 'fetch').mockImplementation(async (input: any, init?: any) => {
     const request = new Request(input, init);
     const url = new URL(request.url);
     const body = (request.method === 'GET' ? null : await request.json().catch(() => null)) as any;
     const p = url.pathname;
+    asked.push(`${request.method} ${p}`);
     if (p === '/devices/register') {
       registry.set(body.terminal_id, { terminal_id: body.terminal_id, org_id: body.org_id, role: body.role, linked_to: null, name: body.name ?? null });
       return Response.json(registry.get(body.terminal_id));
@@ -43,7 +49,13 @@ beforeEach(() => {
     let m = p.match(/^\/devices\/(.+)\/linked$/);
     if (m) return Response.json([...registry.values()].find((d) => d.linked_to === decodeURIComponent(m![1]) && d.role === 'cfd') ?? null);
     m = p.match(/^\/devices\/(.+)$/);
-    if (m) return registry.has(decodeURIComponent(m[1])) ? Response.json(registry.get(decodeURIComponent(m[1]))) : Response.json({ error: 'Unknown terminal_id' }, { status: 404 });
+    if (m) {
+      const id = decodeURIComponent(m[1]);
+      const device = registry.get(id);
+      if (!device) return Response.json({ error: 'Unknown terminal_id' }, { status: 404 });
+      const linked = [...registry.values()].filter((d) => d.linked_to === id).map((d) => ({ terminal_id: d.terminal_id, role: d.role }));
+      return Response.json(oldDevicehub ? device : { ...device, linked });
+    }
     return Response.json({ ok: true });
   });
 });
@@ -70,8 +82,11 @@ describe('the customer display while the order is entered', () => {
   it("the kassa's order reaches its display: pushed (no data), fetched with the display's own key", async () => {
     const org = await seedOrg();
     const { kassa, display, key } = await kassaWithDisplay(org);
-    expect((await put(org, kassa, ORDER, 1)).body).toEqual({ shown: true });
+    asked = [];
+    expect((await put(org, kassa, ORDER, 1)).body).toEqual({ shown: true, linked: true });
     expect(broadcasts).toEqual([{ pos_terminal_id: kassa, event: 'order_shown' }]);
+    // One lookup (the kassa with what's linked to it), then the push.
+    expect(asked).toEqual([`GET /devices/${kassa}`, 'POST /devices/broadcast']);
     const view = await asDevice(key, `/organizations/${org.orgId}/devices/${display}/customer-view`);
     expect(view.status).toBe(200);
     expect(view.body).toEqual({ order: ORDER, seq: 1 });
@@ -93,12 +108,30 @@ describe('the customer display while the order is entered', () => {
     const org = await seedOrg();
     const code = (await api('POST', `/organizations/${org.orgId}/device-pairings`, { user: org.admin, body: { role: 'pos', name: 'Kassa' } })).body.code;
     const kassa = (await api('POST', '/organizations/device-pairings/claim', { user: org.cashier, body: { code } })).body.terminalId;
-    expect((await put(org, kassa, ORDER, 1)).body).toEqual({ shown: false });
+    expect((await put(org, kassa, ORDER, 1)).body).toEqual({ shown: false, linked: false });
     // Its own second window (the companion display) gets it directly, not through here.
     await api('POST', `/organizations/${org.orgId}/devices/${kassa}/display`, { user: org.cashier });
-    expect((await put(org, kassa, ORDER, 2)).body).toEqual({ shown: false });
+    expect((await put(org, kassa, ORDER, 2)).body).toEqual({ shown: false, linked: false });
     expect(await rows('SELECT * FROM customer_views WHERE terminal_id = ?', kassa)).toEqual([]);
     expect(broadcasts).toEqual([]);
+  });
+
+  it('a Tap to Pay phone but no display elsewhere: not shown, but something is linked (it hears resets)', async () => {
+    const org = await seedOrg();
+    const code = (await api('POST', `/organizations/${org.orgId}/device-pairings`, { user: org.admin, body: { role: 'pos', name: 'Kassa' } })).body.code;
+    const kassa = (await api('POST', '/organizations/device-pairings/claim', { user: org.cashier, body: { code } })).body.terminalId;
+    registry.set('tap-1', { terminal_id: 'tap-1', org_id: org.orgId, role: 'tap', linked_to: kassa, name: null });
+    expect((await put(org, kassa, ORDER, 1)).body).toEqual({ shown: false, linked: true });
+    expect(broadcasts).toEqual([]);
+  });
+
+  it('a devicehub from before 0.1.91 (no linked devices in its answer): asked separately, same result', async () => {
+    const org = await seedOrg();
+    const { kassa } = await kassaWithDisplay(org);
+    oldDevicehub = true;
+    asked = [];
+    expect((await put(org, kassa, ORDER, 1)).body).toEqual({ shown: true, linked: true });
+    expect(asked).toEqual([`GET /devices/${kassa}`, `GET /devices/${kassa}/linked`, 'POST /devices/broadcast']);
   });
 
   it('only what an order is: names cut short, odd lines left out', async () => {

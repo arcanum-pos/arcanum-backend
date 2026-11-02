@@ -421,8 +421,13 @@ export async function confirmChargeFromPos(request: Request, env: Env): Promise<
   // "Keep the change": only for cash, where the cashier holds the money.
   if (extraTipCents > 0 && (charge.method !== 'cash' || body.success === false)) return json({ error: 'extraTipCents is only for a confirmed cash payment' }, 400);
   if (charge.tipCents + extraTipCents > 100_000) return json({ error: 'The tip may not exceed 100000' }, 400);
+  // Confirmed by hand after the reader (or SumUp's callback) already said it
+  // failed: nothing was paid, so it's never shown as paid (REQUEST_BUDGET.md,
+  // found on the first live day).
+  if (body.success !== false && charge.status === 'failed') return errorJson('payment_already_failed', 409);
   await resolveCharge(env, body.chargeId, { success: body.success !== false, extraTipCents });
-  return json({ ok: true, chargeId: body.chargeId });
+  const current = await getCharge(env, body.chargeId);
+  return json({ ok: true, chargeId: body.chargeId, status: current?.status ?? charge.status });
 }
 
 // Stops it at the provider, then takes the provider's own word on how it

@@ -59,6 +59,29 @@ describe('tab payments: charge rules', () => {
     expect((await chargeCash(org, tab.id, 1150)).status).toBe(201);
   });
 
+  it('a payment that already failed (the reader said so) is never confirmed as paid by hand afterwards', async () => {
+    const org = await seedOrg();
+    const tab = await openTab(org);
+    const charge = await chargeCash(org, tab.id, 1150);
+    const { resolveCharge } = await import('../src/payments/charges');
+    await resolveCharge(env as any, charge.body.chargeId, { success: false, providerStatus: 'FAILED', errorMessage: 'PIN' } as any);
+
+    const late = await confirmCharge(org, charge.body.chargeId);
+    expect(late.status).toBe(409);
+    expect(late.body.code).toBe('payment_already_failed');
+    expect(await getTab(org, tab.id)).toMatchObject({ status: 'open', paidCents: 0, paymentPending: false });
+  });
+
+  it('a confirm says what the charge is now', async () => {
+    const org = await seedOrg();
+    const tab = await openTab(org);
+    const charge = await chargeCash(org, tab.id, 1150);
+    expect((await confirmCharge(org, charge.body.chargeId)).body).toMatchObject({ ok: true, status: 'succeeded' });
+    const other = await openTab(org);
+    const cancelled = await chargeCash(org, other.id, 1150);
+    expect((await confirmCharge(org, cancelled.body.chargeId, false)).body).toMatchObject({ ok: true, status: 'failed' });
+  });
+
   it('refuses a charge on a closed tab (409)', async () => {
     const org = await seedOrg();
     const tab = await openTab(org);
