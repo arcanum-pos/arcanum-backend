@@ -8,6 +8,7 @@ import { errorJson } from '../errors';
 import { reconcilePendingInvites } from './invite-reconciliation';
 import { generateDataKey, wrapDataKey, unwrapDataKey } from './crypto';
 import { toLocale } from './locale';
+import { exampleMenuRows, exampleMenuStatements } from './example-menu';
 import type { OrganizationRow } from './types';
 
 function rowToOrganization(row: OrganizationRow, env: Env) {
@@ -31,9 +32,13 @@ export async function createOrganization(request: Request, env: Env): Promise<Re
   const refusal = await orgCreationRefusal(env, caller);
   if (refusal) return errorJson(refusal, 403);
 
-  const body = (await request.json().catch(() => ({}))) as { name?: string };
+  // exampleMenu: start with the example menukaart (example-menu.ts), in
+  // `locale` - also the org's own language. Both optional: without them an
+  // empty org as before.
+  const body = (await request.json().catch(() => ({}))) as { name?: string; exampleMenu?: unknown; locale?: unknown };
   const name = (body.name || '').trim();
   if (!name) return json({ error: 'name is required' }, 400);
+  const locale = body.locale === undefined ? null : toLocale(body.locale);
 
   const dek = generateDataKey();
   const wrapped = await wrapDataKey(dek, env.ENCRYPTION_KEY);
@@ -45,15 +50,17 @@ export async function createOrganization(request: Request, env: Env): Promise<Re
   // own guard, so two concurrent first creates can't both get through; the
   // membership only follows an org row that was actually written.
   const guard = orgCreationMode(env) === 'single' ? NO_ORG_YET_SQL : '1';
+  const orgExists = { sql: 'EXISTS (SELECT 1 FROM organizations WHERE id = ?)', params: [orgId] };
   const [inserted] = await env.DB.batch([
     env.DB.prepare(
-      `INSERT INTO organizations (id, name, logo_url, theme, dek_ciphertext, dek_iv, created_at, created_by_sub) SELECT ?, ?, NULL, NULL, ?, ?, ?, ? WHERE ${guard}`
-    ).bind(orgId, name, wrapped.ciphertext, wrapped.iv, now, caller.sub),
+      `INSERT INTO organizations (id, name, logo_url, theme, locale, dek_ciphertext, dek_iv, created_at, created_by_sub) SELECT ?, ?, NULL, NULL, COALESCE(?, 'nl'), ?, ?, ?, ? WHERE ${guard}`
+    ).bind(orgId, name, locale, wrapped.ciphertext, wrapped.iv, now, caller.sub),
     // Creator becomes the organization's first admin automatically — already
     // "active" (not "pending") since we already know their sub.
     env.DB.prepare(
       'INSERT INTO memberships (id, org_id, user_sub, issuer, invited_email, role, status, invited_at, accepted_at) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM organizations WHERE id = ?)'
     ).bind(crypto.randomUUID(), orgId, caller.sub, caller.issuer, caller.email, 'admin', 'active', now, now, orgId),
+    ...(body.exampleMenu === true ? exampleMenuStatements(env.DB, exampleMenuRows(orgId, locale ?? 'nl', now), orgExists) : []),
   ]);
   if ((inserted.meta.changes || 0) === 0) return errorJson('org_creation_disabled', 403);
   // Its admin: an admin of the installation's client at the login provider too.

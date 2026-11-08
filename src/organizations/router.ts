@@ -6,6 +6,7 @@ import { testInstallationMail } from './mail';
 import { listEvents, createEvent, createOrderMode, deleteEvent, deleteOrderMode, newEventSelfOrderCode, resetEventNumbers, updateEvent, updateOrderMode } from './events';
 import { getOrgLocale, setOrgLocale } from './locale';
 import { getCapabilities } from './org-creation';
+import { addExampleMenu, getOnboarding } from './onboarding';
 import { dispatchDeviceRoute } from '../devices';
 import { dispatchCustomerViewRoute } from '../customer-view';
 import { dispatchTapDeviceRoute } from '../tap-to-pay';
@@ -62,6 +63,11 @@ export async function dispatchOrganizationsRoute(request: Request, env: Env, pat
     if (request.method === 'PUT') return setOrgLocale(request, env, localeMatch[1]);
     return null;
   }
+
+  const onboardingMatch = pathname.match(/^\/organizations\/([^/]+)\/onboarding$/);
+  if (onboardingMatch && request.method === 'GET') return getOnboarding(request, env, onboardingMatch[1]);
+  const exampleMenuMatch = pathname.match(/^\/organizations\/([^/]+)\/example-menu$/);
+  if (exampleMenuMatch && request.method === 'POST') return addExampleMenu(request, env, exampleMenuMatch[1]);
 
   const membersMatch = pathname.match(/^\/organizations\/([^/]+)\/members$/);
   if (membersMatch) {
