@@ -4,6 +4,7 @@
 //   POST   /organizations/:orgId/backup   (admin) { code } → links this org to a cloud backup, starts the first sync
 //   GET    /organizations/:orgId/backup   (admin) → the link's status (on the cloud: that it is a backup)
 //   DELETE /organizations/:orgId/backup   (admin) → stops sending (the cloud keeps its copy)
+//   GET    /organizations/:orgId/backup/connection (kassa) → whether this box reaches the internet, as far as the sync knows
 //
 // The push (pushOnce) reads the oldest changes from sync_outbox, sends the
 // rows as they are now (state-based: a key whose row is gone becomes a
@@ -12,7 +13,7 @@
 import type { Env } from '../env';
 import { json } from '../http';
 import { errorJson } from '../errors';
-import { extractCaller, requireOrgRole } from '../organizations/auth';
+import { extractCaller, refuseUnlessOrgMember, requireOrgRole } from '../organizations/auth';
 import { decryptWithKey, encryptWithKey } from '../organizations/crypto';
 import { getOrgDataKey } from '../organizations/organizations';
 import { EXPORT_TABLES } from '../org-transfer';
@@ -195,7 +196,22 @@ async function unlink(request: Request, env: Env, orgId: string): Promise<Respon
   return json(await status(env, orgId));
 }
 
+// For the kassa's "no internet" bar: only a box with a backup knows (its
+// sync reaches the cloud or not; at most a heartbeat, 5 minutes, behind).
+// Without a link: null, nothing to show.
+async function connection(request: Request, env: Env, orgId: string): Promise<Response> {
+  const refused = await refuseUnlessOrgMember(request, env, orgId);
+  if (refused) return refused;
+  const link = await env.DB.prepare("SELECT last_sync_at, last_error FROM sync_links WHERE org_id = ? AND role = 'source'")
+    .bind(orgId)
+    .first<{ last_sync_at: string | null; last_error: string | null }>();
+  if (!link) return json({ linked: false, online: null, lastSyncAt: null });
+  return json({ linked: true, online: !link.last_error?.startsWith('unreachable'), lastSyncAt: link.last_sync_at });
+}
+
 export async function dispatchBackupRoute(request: Request, env: Env, pathname: string): Promise<Response | null> {
+  const c = pathname.match(/^\/organizations\/([^/]+)\/backup\/connection$/);
+  if (c && request.method === 'GET') return connection(request, env, decodeURIComponent(c[1]));
   const m = pathname.match(/^\/organizations\/([^/]+)\/backup$/);
   if (!m) return null;
   const orgId = decodeURIComponent(m[1]);

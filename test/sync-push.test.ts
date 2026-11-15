@@ -172,9 +172,19 @@ describe('when it goes wrong', () => {
     expect(waiting.lastError).toContain('ETIMEDOUT');
     expect(waiting.pending).toBeGreaterThan(0);
 
+    // The kassa (a cashier, not only an admin) sees there's no internet.
+    expect((await api('GET', `/organizations/${org.orgId}/backup/connection`, { user: org.cashier })).body).toMatchObject({ linked: true, online: false });
+
     cloudTransport();
     await drain(org.orgId);
     expect((await api('GET', `/organizations/${org.orgId}/backup`, { user: org.admin })).body).toMatchObject({ lastError: null, pending: 0 });
+    expect((await api('GET', `/organizations/${org.orgId}/backup/connection`, { user: org.cashier })).body).toMatchObject({ linked: true, online: true });
+  });
+
+  it("says nothing about the internet for an org without a backup", async () => {
+    const org = await seedOrg();
+    expect((await api('GET', `/organizations/${org.orgId}/backup/connection`, { user: org.cashier })).body).toEqual({ linked: false, online: null, lastSyncAt: null });
+    expect((await api('GET', `/organizations/${org.orgId}/backup/connection`, { user: null })).status).toBe(401);
   });
 
   it("waits for the next UTC day after the cloud's daily write limit", async () => {
