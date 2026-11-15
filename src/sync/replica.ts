@@ -20,6 +20,7 @@ import { extractCaller } from '../organizations/auth';
 import { encryptWithKey, generateDataKey, unwrapDataKey, wrapDataKey } from '../organizations/crypto';
 import { orgCreationRefusal } from '../organizations/org-creation';
 import { toLocale } from '../organizations/locale';
+import { ensureSyncWatch } from './watch';
 import { SYNC_PROTOCOL, SYNC_REFS, SYNC_SCHEMA, SYNC_TABLE, SYNC_TABLES, type SyncTable } from './spec';
 
 const INVITE_DAYS = 7;
@@ -148,6 +149,7 @@ async function hello(request: Request, env: Env): Promise<Response> {
   ]);
   const made = await replicaFor(env, keyHash);
   if (!made) return json({ error: 'Unauthorized' }, 401);
+  await ensureSyncWatch(env);
   return json({ orgId: made.org_id, lastSeq: made.last_seq, protocol: SYNC_PROTOCOL, schema: SYNC_SCHEMA }, 201);
 }
 
@@ -326,7 +328,7 @@ async function applyStatements(env: Env, orgId: string, toSeq: number, now: stri
     ...deletes,
     ...upserts,
     env.DB.prepare('DELETE FROM sync_applying WHERE org_id = ?').bind(orgId),
-    env.DB.prepare("UPDATE sync_links SET last_seq = MAX(last_seq, ?), last_sync_at = ?, last_error = NULL WHERE org_id = ? AND role = 'replica'").bind(toSeq, now, orgId),
+    env.DB.prepare("UPDATE sync_links SET last_seq = MAX(last_seq, ?), last_sync_at = ?, last_error = NULL, warned_at = NULL WHERE org_id = ? AND role = 'replica'").bind(toSeq, now, orgId),
   ]);
 }
 

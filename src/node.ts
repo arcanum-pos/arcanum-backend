@@ -20,6 +20,7 @@ import { NodeD1Database } from './node/d1';
 import { httpFetcher } from './node/fetcher';
 import { migrate, readMigrations } from './node/migrate';
 import { SyncPusher } from './sync/push';
+import { SyncWatch } from './sync/watch';
 
 function required(env: NodeJS.ProcessEnv, name: string): string {
   const value = env[name];
@@ -92,10 +93,12 @@ export function nodeEnv(environment: NodeJS.ProcessEnv, db = openDatabase(enviro
   const strings = Object.fromEntries(Object.entries(environment).filter(([, v]) => typeof v === 'string')) as Record<string, string>;
   let env: Env;
   const poller = new AlarmNamespace((state) => new ChargePoller(state as unknown as DurableObjectState, env));
+  const watch = new AlarmNamespace((state) => new SyncWatch(state as unknown as DurableObjectState, env));
   env = {
     ...strings,
     DB: db as unknown as D1Database,
     CHARGE_POLLER: poller as unknown as DurableObjectNamespace,
+    SYNC_WATCH: watch as unknown as DurableObjectNamespace,
     ARCANUM_DEVICEHUB_SERVICE: httpFetcher(required(environment, 'DEVICEHUB_URL')) as unknown as Fetcher,
     ARCANUM_MAILER_SERVICE: httpFetcher(required(environment, 'MAILER_URL')) as unknown as Fetcher,
     INTERNAL_API_KEY: required(environment, 'INTERNAL_API_KEY'),

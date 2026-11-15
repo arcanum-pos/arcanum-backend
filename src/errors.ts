@@ -104,6 +104,8 @@ export const ERROR_TEXTS = {
   backup_unreachable: 'De cloudinstallatie is niet bereikbaar',
   backup_version_mismatch: 'De cloudinstallatie draait een andere versie - werk beide bij naar dezelfde versie',
   backup_org_exists: 'Deze organisatie bestaat al op de cloudinstallatie',
+  backup_not_replica: 'Deze organisatie is geen reservekopie',
+  backup_confirm_name: 'Typ de naam van de organisatie precies over om te bevestigen',
   org_read_only: 'Dit is een reservekopie - wijzigen kan alleen op de lokale installatie',
   not_an_export: 'Dit is geen Arcanum-exportbestand',
   export_version_unsupported: 'Exportversie {version} wordt niet ondersteund (verwacht {expected})',

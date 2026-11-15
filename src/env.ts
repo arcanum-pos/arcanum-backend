@@ -1,6 +1,8 @@
 export interface Env {
   AUTH_SCHEME?: string;
   CHARGE_POLLER: DurableObjectNamespace;
+  // Offline sync: the backups' watch (sync/watch.ts).
+  SYNC_WATCH: DurableObjectNamespace;
   DB: D1Database;
   // Test-only: max D1 queries per invocation, enforced by query-budget.ts
   // (the suite sets 50, the Workers Free plan's limit). Unset in production.

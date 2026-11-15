@@ -4,6 +4,7 @@
 //   POST   /organizations/:orgId/backup   (admin) { code } → links this org to a cloud backup, starts the first sync
 //   GET    /organizations/:orgId/backup   (admin) → the link's status (on the cloud: that it is a backup)
 //   DELETE /organizations/:orgId/backup   (admin) → stops sending (the cloud keeps its copy)
+//   POST   /organizations/:orgId/backup/promote (admin, on the cloud) { confirm: <org name> } → the backup becomes the org in use
 //   GET    /organizations/:orgId/backup/connection (kassa) → whether this box reaches the internet, as far as the sync knows
 //
 // The push (pushOnce) reads the oldest changes from sync_outbox, sends the
@@ -209,7 +210,26 @@ async function connection(request: Request, env: Env, orgId: string): Promise<Re
   return json({ linked: true, online: !link.last_error?.startsWith('unreachable'), lastSyncAt: link.last_sync_at });
 }
 
+// Disaster recovery (OFFLINE.md): the box broke, the backup becomes the org
+// in use. Deliberate and final: the link goes, so the old box (should it
+// come back) can't send anything any more (its key is unknown here), and
+// people can change everything again. Behind the org's name typed as a
+// confirmation.
+async function promote(request: Request, env: Env, orgId: string): Promise<Response> {
+  const refused = await authorizeAdmin(request, env, orgId);
+  if (refused) return refused;
+  const body = (await request.json().catch(() => ({}))) as { confirm?: unknown };
+  const org = await env.DB.prepare('SELECT name FROM organizations WHERE id = ?').bind(orgId).first<{ name: string }>();
+  if (!org) return errorJson('org_not_found', 404);
+  if (!(await env.DB.prepare("SELECT 1 FROM sync_links WHERE org_id = ? AND role = 'replica'").bind(orgId).first())) return errorJson('backup_not_replica', 409);
+  if (typeof body.confirm !== 'string' || body.confirm.trim() !== org.name.trim()) return errorJson('backup_confirm_name', 400);
+  await env.DB.prepare("DELETE FROM sync_links WHERE org_id = ? AND role = 'replica'").bind(orgId).run();
+  return json(await status(env, orgId));
+}
+
 export async function dispatchBackupRoute(request: Request, env: Env, pathname: string): Promise<Response | null> {
+  const p = pathname.match(/^\/organizations\/([^/]+)\/backup\/promote$/);
+  if (p && request.method === 'POST') return promote(request, env, decodeURIComponent(p[1]));
   const c = pathname.match(/^\/organizations\/([^/]+)\/backup\/connection$/);
   if (c && request.method === 'GET') return connection(request, env, decodeURIComponent(c[1]));
   const m = pathname.match(/^\/organizations\/([^/]+)\/backup$/);

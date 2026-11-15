@@ -59,6 +59,11 @@
 			{
 				"name": "CHARGE_POLLER",
 				"class_name": "ChargePoller"
+			},
+			// Offline sync: warns when a backup's box goes silent (src/sync/watch.ts).
+			{
+				"name": "SYNC_WATCH",
+				"class_name": "SyncWatch"
 			}
 		]
 	},
@@ -106,6 +111,12 @@
 			"tag": "v4",
 			"new_sqlite_classes": [
 				"ChargePoller"
+			]
+		},
+		{
+			"tag": "v5",
+			"new_sqlite_classes": [
+				"SyncWatch"
 			]
 		}
 	],

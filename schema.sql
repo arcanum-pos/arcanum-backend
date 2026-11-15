@@ -907,7 +907,9 @@ CREATE TABLE IF NOT EXISTS sync_links (
   last_sync_at TEXT,
   last_seq INTEGER NOT NULL DEFAULT 0,
   last_error TEXT,
-  backfill_done_at TEXT
+  backfill_done_at TEXT,
+  -- Replica: when its admins were warned that the box went silent (migration 0055).
+  warned_at TEXT
 );
 -- AUTOINCREMENT: a sequence number is never reused, even once the outbox is
 -- emptied (the cloud remembers the last one it applied).
@@ -1950,3 +1952,4 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0051_printer_certificates.sq
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0052_split_count.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0053_sync_outbox.sql');
 INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0054_sync_replica.sql');
+INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0055_sync_warning.sql');

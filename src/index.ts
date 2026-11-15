@@ -53,6 +53,7 @@ import { errorJson } from './errors';
 // Durable Object classes must be a named export of the Worker's main entry
 // file — re-exported here since it actually lives in payments/poller.ts.
 export { ChargePoller };
+export { SyncWatch } from './sync/watch';
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
