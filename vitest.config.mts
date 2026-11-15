@@ -89,6 +89,8 @@ export default defineConfig({
                 DEVICEHUB_LOCAL_URL: '',
                 MAILER_LOCAL_URL: '',
               },
+              // A second installation's database: the cloud in the offline sync tests (test/sync-push.test.ts).
+              d1Databases: { CLOUD_DB: 'cloud-test-db' },
               serviceBindings: {
                 ARCANUM_DEVICEHUB_SERVICE: recordingService('devicehub'),
                 ARCANUM_MAILER_SERVICE: recordingService('mailer'),

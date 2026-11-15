@@ -99,6 +99,11 @@ export const ERROR_TEXTS = {
   // Too many live demo orgs at once (DEMO_MAX_LIVE) — see demo-orgs.ts.
   demo_limit_reached: 'Er lopen nu te veel demo\'s tegelijk - probeer het over een tijdje opnieuw',
   // A backup on the cloud (OFFLINE.md): changed only by its box, until it is promoted.
+  backup_code_invalid: 'Deze koppelcode klopt niet of is verlopen - maak een nieuwe op de cloudinstallatie',
+  backup_already_linked: 'Deze organisatie heeft al een reservekopie',
+  backup_unreachable: 'De cloudinstallatie is niet bereikbaar',
+  backup_version_mismatch: 'De cloudinstallatie draait een andere versie - werk beide bij naar dezelfde versie',
+  backup_org_exists: 'Deze organisatie bestaat al op de cloudinstallatie',
   org_read_only: 'Dit is een reservekopie - wijzigen kan alleen op de lokale installatie',
   not_an_export: 'Dit is geen Arcanum-exportbestand',
   export_version_unsupported: 'Exportversie {version} wordt niet ondersteund (verwacht {expected})',

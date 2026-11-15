@@ -46,6 +46,7 @@ import { dispatchBrandingRoute, dispatchPublicBrandingRoute } from './branding';
 import { dispatchPublicTapRoute } from './tap-to-pay';
 import { QueryBudgetExceeded, withQueryBudget } from './query-budget';
 import { dispatchSyncRoute } from './sync/replica';
+import { dispatchBackupRoute } from './sync/push';
 import { READ_ONLY_ERROR } from './sync/spec';
 import { errorJson } from './errors';
 
@@ -165,6 +166,9 @@ export default {
         // First: /organizations/import/start would otherwise be read as an org id.
         const transferResponse = await dispatchOrgTransferRoute(request, env, url.pathname);
         if (transferResponse) return transferResponse;
+        // An org's backup (sync/push.ts): link, status, unlink.
+        const backupResponse = await dispatchBackupRoute(request, env, url.pathname);
+        if (backupResponse) return backupResponse;
         const iconsResponse = await dispatchOrgIconRoute(request, env, url.pathname);
         if (iconsResponse) return iconsResponse;
         const brandingResponse = await dispatchBrandingRoute(request, env, url.pathname);

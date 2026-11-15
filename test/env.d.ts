@@ -9,6 +9,8 @@ declare global {
       TEST_MIGRATION_0013: string;
       // Every migrations/*.sql as { name, sql }, in order.
       TEST_MIGRATIONS: string;
+      // The cloud's database in the offline sync tests.
+      CLOUD_DB: D1Database;
     }
   }
 }

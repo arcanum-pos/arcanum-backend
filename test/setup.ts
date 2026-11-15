@@ -8,4 +8,6 @@ import { beforeAll } from 'vitest';
 beforeAll(async () => {
   const statements = JSON.parse(env.TEST_SCHEMA) as string[];
   await env.DB.batch(statements.map((sql) => env.DB.prepare(sql)));
+  // The cloud of the offline sync tests: a database of its own.
+  await env.CLOUD_DB.batch(statements.map((sql) => env.CLOUD_DB.prepare(sql)));
 });

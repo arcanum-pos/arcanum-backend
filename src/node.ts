@@ -19,6 +19,7 @@ import { AlarmNamespace } from './node/alarms';
 import { NodeD1Database } from './node/d1';
 import { httpFetcher } from './node/fetcher';
 import { migrate, readMigrations } from './node/migrate';
+import { SyncPusher } from './sync/push';
 
 function required(env: NodeJS.ProcessEnv, name: string): string {
   const value = env[name];
@@ -108,5 +109,7 @@ export function nodeEnv(environment: NodeJS.ProcessEnv, db = openDatabase(enviro
 export function start(environment: NodeJS.ProcessEnv = process.env) {
   const { env } = nodeEnv(environment);
   const port = Number(environment.PORT || 8080);
+  // Offline (OFFLINE.md): this box's orgs with a cloud backup send their changes.
+  new SyncPusher(env).start();
   return serve({ fetch: (request) => worker.fetch(request, env), port }, () => console.log(`arcanum-backend listening on :${port}`));
 }

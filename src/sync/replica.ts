@@ -310,14 +310,24 @@ async function applyBatch(request: Request, env: Env): Promise<Response> {
   }
 
   const now = new Date().toISOString();
+  try {
+    await applyStatements(env, orgId, body.toSeq, now, deletes, upserts);
+  } catch (err) {
+    // D1 Free's rows written per day: the box waits for the next UTC day.
+    if (/daily|rows written|limit exceeded/i.test((err as Error).message)) return syncError('sync_cloud_daily_limit', 'This installation reached its daily write limit', 429);
+    throw err;
+  }
+  return json({ lastSeq: Math.max(link.last_seq, body.toSeq) });
+}
+
+async function applyStatements(env: Env, orgId: string, toSeq: number, now: string, deletes: D1PreparedStatement[], upserts: D1PreparedStatement[]) {
   await env.DB.batch([
     env.DB.prepare('INSERT OR REPLACE INTO sync_applying (org_id) VALUES (?)').bind(orgId),
     ...deletes,
     ...upserts,
     env.DB.prepare('DELETE FROM sync_applying WHERE org_id = ?').bind(orgId),
-    env.DB.prepare("UPDATE sync_links SET last_seq = MAX(last_seq, ?), last_sync_at = ?, last_error = NULL WHERE org_id = ? AND role = 'replica'").bind(body.toSeq, now, orgId),
+    env.DB.prepare("UPDATE sync_links SET last_seq = MAX(last_seq, ?), last_sync_at = ?, last_error = NULL WHERE org_id = ? AND role = 'replica'").bind(toSeq, now, orgId),
   ]);
-  return json({ lastSeq: Math.max(link.last_seq, body.toSeq) });
 }
 
 export async function dispatchSyncRoute(request: Request, env: Env, pathname: string): Promise<Response | null> {
