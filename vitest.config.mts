@@ -11,10 +11,19 @@ function sqlStatements(file: string): string[] {
     .split('\n')
     .map((line) => line.replace(/--.*$/, ''))
     .join('\n');
-  return sql
-    .split(';')
-    .map((s) => s.trim())
-    .filter(Boolean);
+  // A trigger's body has its own ';'s: keep CREATE TRIGGER … END together.
+  const statements: string[] = [];
+  let trigger = '';
+  for (const piece of sql.split(';').map((s) => s.trim()).filter(Boolean)) {
+    if (trigger || /^CREATE TRIGGER/i.test(piece)) {
+      trigger = trigger ? `${trigger}; ${piece}` : piece;
+      if (/\bEND$/i.test(piece)) {
+        statements.push(trigger);
+        trigger = '';
+      }
+    } else statements.push(piece);
+  }
+  return statements;
 }
 
 // Stand-in for arcanum-devicehub / arcanum-mailer: records every call so a

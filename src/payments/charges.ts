@@ -159,6 +159,8 @@ export interface CreateChargeFields {
 // amount. Returns null for anything invalid; undefined/null input means 0.
 export function parseTipCents(raw: unknown): number | null {
   if (raw === undefined || raw === null) return 0;
+  // Only a number or a numeric string: Number() throws on some objects.
+  if (typeof raw !== 'number' && typeof raw !== 'string') return null;
   const n = Number(raw);
   return Number.isInteger(n) && n >= 0 && n <= 100_000 ? n : null;
 }
