@@ -363,6 +363,8 @@ export async function pushOnce(env: Env, orgId: string, now = Date.now()): Promi
       return fail(`unreachable: ${(err as Error).message}`);
     }
     if (res.status === 429 && res.body?.code === 'sync_cloud_daily_limit') return fail('sync_cloud_daily_limit', nextUtcDay(now));
+    // The cloud no longer knows this key: the backup was deleted or taken into use there.
+    if (res.status === 401) return fail('sync_key_refused');
     if (res.status !== 200) return fail(res.body?.code ?? `${res.status}: ${res.body?.error ?? ''}`);
 
     const sentAt = new Date(now).toISOString();

@@ -184,6 +184,20 @@ describe('when it goes wrong', () => {
     expect((await api('GET', `/organizations/${org.orgId}/backup/connection`, { user: org.cashier })).body).toMatchObject({ linked: true, online: true });
   });
 
+  it('says so when the backup is gone on the cloud (deleted, or taken into use)', async () => {
+    const { org } = await boxWithSale();
+    await linked(org);
+    await drain(org.orgId);
+    for (let i = 0; i < 6; i++) {
+      const res = await onCloud('DELETE', `/organizations/${org.orgId}`, org.admin, { confirm: 'Test org' });
+      expect(res.status).toBe(200);
+      if (res.body.done) break;
+    }
+    await env.DB.prepare("UPDATE organizations SET name = 'Nog nieuwer' WHERE id = ?").bind(org.orgId).run();
+    expect(await pushOnce(env, org.orgId)).toMatchObject({ kind: 'error', error: 'sync_key_refused' });
+    expect((await api('GET', `/organizations/${org.orgId}/backup`, { user: org.admin })).body).toMatchObject({ lastError: 'sync_key_refused', pending: 1 });
+  });
+
   it("says nothing about the internet for an org without a backup", async () => {
     const org = await seedOrg();
     expect((await api('GET', `/organizations/${org.orgId}/backup/connection`, { user: org.cashier })).body).toEqual({ linked: false, online: null, lastSyncAt: null });
