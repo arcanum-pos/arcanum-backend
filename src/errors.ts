@@ -98,6 +98,8 @@ export const ERROR_TEXTS = {
   org_creation_disabled: 'Op deze installatie kunnen geen nieuwe organisaties aangemaakt worden',
   // Too many live demo orgs at once (DEMO_MAX_LIVE) — see demo-orgs.ts.
   demo_limit_reached: 'Er lopen nu te veel demo\'s tegelijk - probeer het over een tijdje opnieuw',
+  // A backup on the cloud (OFFLINE.md): changed only by its box, until it is promoted.
+  org_read_only: 'Dit is een reservekopie - wijzigen kan alleen op de lokale installatie',
   not_an_export: 'Dit is geen Arcanum-exportbestand',
   export_version_unsupported: 'Exportversie {version} wordt niet ondersteund (verwacht {expected})',
   org_name_required: 'De organisatie heeft een naam nodig (max 100 tekens)',

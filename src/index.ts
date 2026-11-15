@@ -11,6 +11,7 @@
 //   reports.ts                                   — sales report
 //   org-transfer.ts                              — org data export / import (self-hosting move)
 //   demo-orgs.ts                                 — demo orgs for the bootstrapper (internal, bearer key)
+//   sync/                                        — offline: a box's outbox, a cloud's backup (OFFLINE.md)
 //   devicehub-client.ts                          — outbound calls to arcanum-devicehub
 //   organizations/                                — multi-tenant admin portal backend
 // Kept as file-level modules within one deployed Worker rather than split into
@@ -44,6 +45,9 @@ import { dispatchOrgIconRoute, dispatchPublicIconRoute } from './org-icons';
 import { dispatchBrandingRoute, dispatchPublicBrandingRoute } from './branding';
 import { dispatchPublicTapRoute } from './tap-to-pay';
 import { QueryBudgetExceeded, withQueryBudget } from './query-budget';
+import { dispatchSyncRoute } from './sync/replica';
+import { READ_ONLY_ERROR } from './sync/spec';
+import { errorJson } from './errors';
 
 // Durable Object classes must be a named export of the Worker's main entry
 // file — re-exported here since it actually lives in payments/poller.ts.
@@ -149,6 +153,14 @@ export default {
         if (tableResponse) return tableResponse;
       }
 
+      // Offline sync (sync/replica.ts): the box's calls with its sync key, and
+      // a backup's link code - before the org routes, which would read
+      // 'backups' as an org id.
+      if (url.pathname.startsWith('/sync/') || url.pathname === '/organizations/backups') {
+        const syncResponse = await dispatchSyncRoute(request, env, url.pathname);
+        if (syncResponse) return syncResponse;
+      }
+
       if (url.pathname.startsWith('/organizations')) {
         // First: /organizations/import/start would otherwise be read as an org id.
         const transferResponse = await dispatchOrgTransferRoute(request, env, url.pathname);
@@ -185,6 +197,8 @@ export default {
 
       return json({ error: 'Not found' }, 404);
     } catch (err) {
+      // A replica org's guard triggers (sync/spec.ts): read-only until promoted.
+      if ((err as Error)?.message?.includes(READ_ONLY_ERROR)) return errorJson('org_read_only', 403);
       if (err instanceof QueryBudgetExceeded) return json({ error: 'Query budget exceeded', details: err.message }, 500);
       return json({ error: 'Unexpected worker error', details: (err as Error).message }, 502);
     }

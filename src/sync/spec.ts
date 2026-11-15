@@ -124,3 +124,69 @@ export function syncTriggers(t: SyncTable): SyncTrigger[] {
   };
   return [make('insert'), make('update'), make('delete')];
 }
+
+// On the cloud a replica org is read-only for people (OFFLINE.md): a write to
+// a synced table of a replica org aborts, unless it is the sync itself (which
+// marks its own transaction in sync_applying, see replica.ts). In the
+// database, so no route (kassa, console, guests, payment callbacks) can
+// slip past it. Updates only count when they set a synced column, as above.
+export const READ_ONLY_ERROR = 'org_read_only';
+
+export function guardTriggers(t: SyncTable): SyncTrigger[] {
+  const make = (op: 'insert' | 'update' | 'delete') => {
+    const row = op === 'delete' ? 'OLD' : 'NEW';
+    const event = op === 'update' ? `UPDATE OF ${[...t.key, ...t.columns.filter((c) => !t.key.includes(c))].join(', ')}` : op.toUpperCase();
+    return {
+      name: `sync_guard_${t.table}_${op}`,
+      sql:
+        `CREATE TRIGGER IF NOT EXISTS sync_guard_${t.table}_${op} BEFORE ${event} ON ${t.table}\n` +
+        `WHEN EXISTS (SELECT 1 FROM sync_links WHERE org_id = ${row}.${t.orgColumn} AND role = 'replica')\n` +
+        `  AND NOT EXISTS (SELECT 1 FROM sync_applying WHERE org_id = ${row}.${t.orgColumn})\n` +
+        `BEGIN\n` +
+        `  SELECT RAISE(ABORT, '${READ_ONLY_ERROR}');\n` +
+        `END`,
+    };
+  };
+  return [make('insert'), make('update'), make('delete')];
+}
+
+export function allSyncTriggers(): SyncTrigger[] {
+  return SYNC_TABLES.flatMap((t) => [...syncTriggers(t), ...guardTriggers(t)]);
+}
+
+// Synced columns that name a row of another synced table (its id): the cloud
+// checks they belong to the same org before applying a batch. A test checks
+// this against the schema's foreign keys.
+export const SYNC_REFS: Record<string, Record<string, string>> = {
+  products: { category_id: 'categories', prep_station_id: 'prep_stations' },
+  product_variants: { product_id: 'products' },
+  catalog_sections: { catalog_id: 'catalogs' },
+  catalog_entries: { catalog_id: 'catalogs', section_id: 'catalog_sections', variant_id: 'product_variants' },
+  events: { catalog_id: 'catalogs' },
+  event_order_modes: { event_id: 'events', catalog_id: 'catalogs' },
+  shifts: { register_id: 'registers' },
+  cash_movements: { shift_id: 'shifts' },
+  tabs: { event_id: 'events' },
+  orders: { tab_id: 'tabs', catalog_id: 'catalogs' },
+  order_lines: { tab_id: 'tabs', order_id: 'orders', voids_line_id: 'order_lines' },
+  prep_tickets: { tab_id: 'tabs', order_id: 'orders' },
+  charges: { tab_id: 'tabs' },
+  charge_lines: { charge_id: 'charges', tab_id: 'tabs', line_id: 'order_lines' },
+  transactions: { tab_id: 'tabs', event_id: 'events' },
+};
+
+// Both sides must sync the same tables and columns. The protocol number
+// changes with the batch format; the schema fingerprint with the spec, so a
+// box and a cloud on releases with different synced columns stop and say so
+// instead of losing a column.
+export const SYNC_PROTOCOL = 1;
+
+export const SYNC_SCHEMA = (() => {
+  const text = JSON.stringify(SYNC_TABLES.map((t) => [t.table, t.key, t.columns]));
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, '0');
+})();

@@ -3,7 +3,7 @@
 // org in sync_outbox.
 import { env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { SYNC_TABLES, syncTriggers } from '../src/sync/spec';
+import { SYNC_TABLES, allSyncTriggers } from '../src/sync/spec';
 import { createTab, payCash, rows, seedOrg, type TestOrg } from './helpers';
 
 const now = () => new Date().toISOString();
@@ -54,13 +54,13 @@ describe('the sync spec', () => {
 });
 
 describe('the sync triggers', () => {
-  it('exist for every synced table, exactly as src/sync/spec.ts makes them', async () => {
+  it('exist for every synced table (capture and read-only guard), exactly as src/sync/spec.ts makes them', async () => {
     // A later migration that rebuilds a table drops its triggers, and a new
     // synced column needs them made again: both fail here.
     const have = new Map(
       (await rows<{ name: string; sql: string }>(`SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'sync\\_%' ESCAPE '\\'`)).map((r) => [r.name, r.sql])
     );
-    const want = SYNC_TABLES.flatMap(syncTriggers);
+    const want = allSyncTriggers();
     for (const trigger of want) expect(normalize(have.get(trigger.name) ?? 'missing'), trigger.name).toBe(normalize(trigger.sql));
     expect([...have.keys()].sort()).toEqual(want.map((t) => t.name).sort());
   });
@@ -73,9 +73,14 @@ describe('capturing changes', () => {
     await payCash(plain, tab.id, 300);
     expect(await outbox(plain)).toEqual([]);
 
+    // A replica only changes through the sync (sync_applying in its transaction).
     const replica = await seedOrg();
     await link(replica, 'replica');
-    await createTab(replica, { label: 'Tafel 2', lines: [{ itemCode: 'cola', name: 'Cola', unitPriceCents: 300, quantity: 1 }] });
+    await env.DB.batch([
+      env.DB.prepare('INSERT INTO sync_applying (org_id) VALUES (?)').bind(replica.orgId),
+      env.DB.prepare("INSERT INTO categories (id, org_id, name, position, created_at) VALUES (?, ?, 'X', 0, ?)").bind(crypto.randomUUID(), replica.orgId, now()),
+      env.DB.prepare('DELETE FROM sync_applying WHERE org_id = ?').bind(replica.orgId),
+    ]);
     expect(await outbox(replica)).toEqual([]);
   });
 
