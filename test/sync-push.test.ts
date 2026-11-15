@@ -198,6 +198,22 @@ describe('when it goes wrong', () => {
     expect((await api('GET', `/organizations/${org.orgId}/backup`, { user: org.admin })).body).toMatchObject({ lastError: 'sync_key_refused', pending: 1 });
   });
 
+  it('a backup deleted by mistake: unlink, link with a new code, and the box makes the whole copy again', async () => {
+    const { org } = await boxWithSale();
+    await linked(org);
+    await drain(org.orgId);
+    for (let i = 0; i < 6; i++) {
+      if ((await onCloud('DELETE', `/organizations/${org.orgId}`, org.admin, { confirm: 'Test org' })).body.done) break;
+    }
+    expect(await cloudRows('SELECT 1 FROM organizations WHERE id = ?', org.orgId)).toEqual([]);
+
+    expect((await api('DELETE', `/organizations/${org.orgId}/backup`, { user: org.admin })).status).toBe(200);
+    await linked(org);
+    await drain(org.orgId);
+    expect(await snapshot(env.CLOUD_DB, org.orgId)).toEqual(await snapshot(env.DB, org.orgId));
+    expect((await onCloud('GET', `/organizations/${org.orgId}/backup`, org.admin)).body).toMatchObject({ role: 'replica' });
+  });
+
   it("says nothing about the internet for an org without a backup", async () => {
     const org = await seedOrg();
     expect((await api('GET', `/organizations/${org.orgId}/backup/connection`, { user: org.cashier })).body).toEqual({ linked: false, online: null, lastSyncAt: null });
