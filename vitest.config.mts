@@ -88,6 +88,8 @@ export default defineConfig({
                 // blank them so tests always go through the stub bindings below.
                 DEVICEHUB_LOCAL_URL: '',
                 MAILER_LOCAL_URL: '',
+                // The tests' installation is a box (node.ts sets it); the cloud in test/sync-push.test.ts blanks it.
+                SYNC_SENDER: '1',
               },
               // A second installation's database: the cloud in the offline sync tests (test/sync-push.test.ts).
               d1Databases: { CLOUD_DB: 'cloud-test-db' },

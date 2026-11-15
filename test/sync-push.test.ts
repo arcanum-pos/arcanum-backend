@@ -11,7 +11,7 @@ import { BATCH_ROWS, HEARTBEAT_MS, pushOnce, setSyncTransport, SyncPusher } from
 import { SYNC_TABLES } from '../src/sync/spec';
 import { api, createTab, identityHeaders, payCash, rows, seedOrg, storePaymentConfig, type TestOrg } from './helpers';
 
-const cloudEnv = () => ({ ...env, DB: env.CLOUD_DB });
+const cloudEnv = () => ({ ...env, DB: env.CLOUD_DB, SYNC_SENDER: '' });
 
 async function onCloud(method: string, path: string, user: TestOrg['admin'], body?: unknown) {
   const res = await worker.fetch(
@@ -73,7 +73,7 @@ describe('linking a box org to a backup', () => {
   it('makes the replica with the same org id, then the first sync makes it a copy', async () => {
     const { org, openTabId } = await boxWithSale();
     const status = await linked(org);
-    expect(status).toMatchObject({ role: 'source', remoteUrl: 'https://arcanum.test', firstSyncDoneAt: null });
+    expect(status).toMatchObject({ role: 'source', sends: true, remoteUrl: 'https://arcanum.test', firstSyncDoneAt: null });
     expect(status.pendingFirstSync).toBeGreaterThan(10);
     // Settings first, then what's open, then the history (foreign-key order within each).
     const order = (await rows<{ table_name: string; row_key: string }>('SELECT table_name, row_key FROM sync_outbox WHERE org_id = ? ORDER BY seq', org.orgId)).map((r) => `${r.table_name}:${r.row_key}`);
@@ -87,7 +87,7 @@ describe('linking a box org to a backup', () => {
     const after = (await api('GET', `/organizations/${org.orgId}/backup`, { user: org.admin })).body;
     expect(after).toMatchObject({ pending: 0, pendingFirstSync: 0, lastError: null, firstSyncDoneAt: expect.any(String) });
     // On the cloud: a backup, read-only, its maker an admin.
-    expect((await onCloud('GET', `/organizations/${org.orgId}/backup`, org.admin)).body).toMatchObject({ role: 'replica' });
+    expect((await onCloud('GET', `/organizations/${org.orgId}/backup`, org.admin)).body).toMatchObject({ role: 'replica', sends: false });
     expect((await onCloud('POST', `/organizations/${org.orgId}/catalogs`, org.admin, { name: 'X' })).body.code).toBe('org_read_only');
   });
 
@@ -105,6 +105,9 @@ describe('linking a box org to a backup', () => {
     });
     expect((await api('POST', `/organizations/${org.orgId}/backup`, { user: org.admin, body: { code: invite.body.code } })).body.code).toBe('backup_unreachable');
     expect(await rows('SELECT 1 FROM sync_links WHERE org_id = ?', org.orgId)).toEqual([]);
+
+    // A cloud installation only receives: its own org can't send a backup.
+    expect((await onCloud('POST', `/organizations/${org.orgId}/backup`, org.admin, { code: invite.body.code })).body.code).toBe('backup_not_local');
 
     cloudTransport();
     expect((await api('POST', `/organizations/${org.orgId}/backup`, { user: org.admin, body: { code: invite.body.code } })).status).toBe(201);

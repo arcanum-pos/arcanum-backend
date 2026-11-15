@@ -28,6 +28,9 @@ export interface Env {
   // — used to build the callbackUrl/return_url handed to Bancontact/SumUp
   // at charge creation (see payments/bancontact.ts, payments/sumup.ts).
   PUBLIC_BASE_URL: string;
+  // Set by node.ts: this installation runs the sync's push loop, so its orgs
+  // can send a backup (OFFLINE.md). Not on Workers: a cloud only receives.
+  SYNC_SENDER?: string;
   // Self-hosted installations: who may create/import orgs (see
   // organizations/instance-admins.ts). Unset = anyone who can log in.
   INSTANCE_ADMIN_EMAILS?: string;

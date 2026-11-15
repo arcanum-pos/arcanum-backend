@@ -105,6 +105,7 @@ export function nodeEnv(environment: NodeJS.ProcessEnv, db = openDatabase(enviro
     MAILER_INTERNAL_KEY: required(environment, 'MAILER_INTERNAL_KEY'),
     ENCRYPTION_KEY: required(environment, 'ENCRYPTION_KEY'),
     PUBLIC_BASE_URL: required(environment, 'PUBLIC_BASE_URL'),
+    SYNC_SENDER: '1',
   } as Env;
   return { env, poller };
 }

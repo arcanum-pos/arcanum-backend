@@ -109,6 +109,8 @@ async function authorizeAdmin(request: Request, env: Env, orgId: string): Promis
 }
 
 async function link(request: Request, env: Env, orgId: string): Promise<Response> {
+  // Only a box runs the push loop: on a cloud the changes would wait forever.
+  if (!env.SYNC_SENDER) return errorJson('backup_not_local', 409);
   const refused = await authorizeAdmin(request, env, orgId);
   if (refused) return refused;
   const body = (await request.json().catch(() => ({}))) as { code?: unknown };
@@ -150,6 +152,8 @@ async function link(request: Request, env: Env, orgId: string): Promise<Response
 
 export interface BackupStatus {
   role: 'none' | 'source' | 'replica';
+  // This installation can send a backup (a box); else it only receives one (the cloud).
+  sends: boolean;
   remoteUrl?: string;
   linkedAt?: string;
   lastSyncAt?: string | null;
@@ -164,7 +168,7 @@ export interface BackupStatus {
 }
 
 export async function status(env: Env, orgId: string): Promise<BackupStatus> {
-  const versions = { protocol: SYNC_PROTOCOL, schema: SYNC_SCHEMA };
+  const versions = { sends: !!env.SYNC_SENDER, protocol: SYNC_PROTOCOL, schema: SYNC_SCHEMA };
   const link = await env.DB.prepare('SELECT * FROM sync_links WHERE org_id = ?').bind(orgId).first<SourceLink & { role: string }>();
   if (!link) return { role: 'none', ...versions };
   if (link.role === 'replica') return { role: 'replica', linkedAt: link.created_at, lastSyncAt: link.last_sync_at, ...versions };
