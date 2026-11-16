@@ -17,7 +17,7 @@ RUN npm run build:node
 # shell, no package manager: less to patch). Node is its entrypoint. As uid
 # 1000, like the Alpine image before (the installer runs it so; existing data
 # volumes belong to it).
-FROM gcr.io/distroless/nodejs24-debian13@sha256:b770c59f44ed459329508a73794e6d284f6c10143f83c8012a8f775cd514eca2
+FROM gcr.io/distroless/nodejs24-debian13@sha256:24bc0fe0225c7518f202a822587dad74fe143b96326b81fe5cc08c1df8bed03e
 LABEL org.opencontainers.image.source="https://github.com/arcanum-pos/arcanum-backend" \
       org.opencontainers.image.licenses="AGPL-3.0-or-later" \
       org.opencontainers.image.description="tresjr backend — payments, organisations, tabs and the API"
